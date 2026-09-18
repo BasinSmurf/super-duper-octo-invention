@@ -1,0 +1,1606 @@
+openapi: 3.1.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ServicePRO REST API — v1
+#
+# This is a SPEC-FIRST contract for the new, externally-consumable surface.
+#
+#   - It is mounted at /api/v1/* and is INDEPENDENT of the legacy /api/* routes
+#     that the PWA uses. The PWA surface is intentionally left untouched.
+#   - Responses are explicit, curated DTOs — NOT raw Prisma row graphs. This is
+#     deliberate: it is the firewall that protects the operational ("OG") data
+#     model from external consumers. Internal schema churn must never break a
+#     v1 consumer, and a bolt-on must never see more than the contract grants.
+#   - Today the only principal is a staff JWT. The contract reserves a scoped
+#     API-key slot (apiKeyAuth + x-scopes) so read-only bolt-ons can be issued
+#     keys later WITHOUT a breaking contract change.
+#
+# Status of this document: SEED. Three resources are specified (Ticket detail,
+# Invoice read+PDF, BlueLion sync management). Everything here is contract only
+# — no server behavior has been changed to match it yet.
+# ─────────────────────────────────────────────────────────────────────────────
+
+info:
+  title: ServicePRO API
+  version: 1.0.0-draft
+  description: |
+    Curated, versioned REST surface for ServicePRO (Basin Safety field-service
+    platform). Built for internal consumers today and external "bolt-on"
+    integrations later, all behind a DTO contract that hides the operational
+    data model.
+
+    ## Conventions
+    - **Base path**: all endpoints live under `/api/v1`.
+    - **Auth**: `Authorization: Bearer <jwt>` today. Scoped API keys are
+      reserved (see `securitySchemes.apiKeyAuth`) and will carry `x-scopes`.
+    - **Errors**: every non-2xx returns the `Error` envelope. Consumers should
+      branch on `error.code` (stable) rather than the HTTP status alone.
+    - **Pagination**: list endpoints are cursor-based (`cursor` + `limit`),
+      returning `{ data: [...], page: { nextCursor, hasMore } }`.
+    - **Caching**: single-resource reads return `ETag` + `Last-Modified`;
+      consumers may send `If-None-Match` for `304`.
+    - **Dates**: `date` fields are `YYYY-MM-DD`; timestamps are RFC 3339 UTC.
+
+servers:
+  - url: https://servicepro.basinsafetyus.com/api/v1
+    description: Production
+  - url: http://localhost:3001/api/v1
+    description: Local dev
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Tickets
+    description: Read access to service tickets.
+  - name: Invoices
+    description: Read access to invoices and their rendered PDFs.
+  - name: BlueLion
+    description: |
+      Management of the one-way outbound sync of training/service records into
+      BlueLion (external brand VaultPRO), the immutable subject-centric record
+      of truth. ServicePRO PUSHES into BlueLion; BlueLion never calls back
+      ("bad divorce" isolation). These endpoints expose the *status and control*
+      of that push — not BlueLion's data, which is reached directly at BlueLion.
+  - name: Equipment
+    description: Read access to serialized equipment (units tracked by serial number).
+  - name: EquipmentInspections
+    description: |
+      Read access to equipment inspection/service records. These are the
+      closest ServicePRO analog to BlueLion's asset "service events" — an
+      append-only record (rows lock; corrections supersede via `correctsId`).
+  - name: Rentals
+    description: Read access to rental agreements and their daily logs.
+  - name: Locations
+    description: |
+      Read access to the location hierarchy — Fields, Pads, Wells, Facilities.
+      Reference data: a Field contains Pads; Pads/Fields contain Wells and
+      Facilities.
+  - name: Companies
+    description: Read access to companies (operators / customers).
+  - name: Trainings
+    description: |
+      Read access to training classes and their rosters. A "training class" is
+      a training-type service ticket; each attendee is a roster record. Roster
+      records carry the BlueLion sync linkage (`bluelion.personId` etc.) — the
+      bridge between ServicePRO's operational record and BlueLion's immutable
+      per-person record of truth.
+
+paths:
+
+  # ── Tickets ────────────────────────────────────────────────────────────────
+  /tickets:
+    get:
+      tags: [Tickets]
+      operationId: listTickets
+      summary: List service tickets
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: status
+          in: query
+          schema: { type: string }
+          description: Filter by ticket status (e.g. `billing_queue`, `closed`).
+        - name: ticketType
+          in: query
+          schema:
+            type: string
+            enum: [field_service, training, shop_service, rental, direct_sale, repair, other]
+        - name: companyId
+          in: query
+          schema: { type: string }
+        - name: updatedSince
+          in: query
+          schema: { type: string, format: date-time }
+          description: Return only tickets modified at/after this timestamp.
+      responses:
+        '200':
+          description: A page of ticket summaries.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, page]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/TicketSummary' }
+                  page: { $ref: '#/components/schemas/PageInfo' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /tickets/{id}:
+    get:
+      tags: [Tickets]
+      operationId: getTicket
+      summary: Get a single ticket (detail)
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+        - $ref: '#/components/parameters/IfNoneMatch'
+      responses:
+        '200':
+          description: The ticket detail DTO.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+            Last-Modified: { $ref: '#/components/headers/LastModified' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TicketDetail' }
+        '304': { description: Not modified (matched `If-None-Match`). }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ── Invoices (read + PDF only; generation stays internal/PWA) ───────────────
+  /invoices:
+    get:
+      tags: [Invoices]
+      operationId: listInvoices
+      summary: List invoices
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: status
+          in: query
+          schema: { type: string }
+        - name: companyId
+          in: query
+          schema: { type: string }
+        - name: updatedSince
+          in: query
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: A page of invoice summaries.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, page]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/InvoiceSummary' }
+                  page: { $ref: '#/components/schemas/PageInfo' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /invoices/{id}:
+    get:
+      tags: [Invoices]
+      operationId: getInvoice
+      summary: Get a single invoice (detail)
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+        - $ref: '#/components/parameters/IfNoneMatch'
+      responses:
+        '200':
+          description: The invoice detail DTO.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+            Last-Modified: { $ref: '#/components/headers/LastModified' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InvoiceDetail' }
+        '304': { description: Not modified. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /invoices/{id}/pdf:
+    get:
+      tags: [Invoices]
+      operationId: getInvoicePdf
+      summary: Download the rendered invoice PDF
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: The invoice PDF.
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ── BlueLion outbound sync (management of the push) ─────────────────────────
+  /bluelion/queue:
+    get:
+      tags: [BlueLion]
+      operationId: listBlueLionQueue
+      summary: List outbound sync queue rows
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, synced, error, needs_attention, ambiguous]
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Queue rows, newest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/BlueLionQueueEntry' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /bluelion/queue/stats:
+    get:
+      tags: [BlueLion]
+      operationId: getBlueLionQueueStats
+      summary: Count of queue rows by status
+      responses:
+        '200':
+          description: A map of status → count.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: { type: integer }
+                example: { pending: 3, synced: 1402, error: 1, ambiguous: 2 }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /bluelion/trainings/sync/{ticketId}:
+    post:
+      tags: [BlueLion]
+      operationId: enqueueTrainingSync
+      summary: Enqueue a training ticket's roster for push to BlueLion
+      parameters:
+        - name: ticketId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                force:
+                  type: boolean
+                  default: false
+                  description: Re-enqueue rows already synced.
+      responses:
+        '200':
+          description: Enqueue result.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  enqueued: { type: integer }
+                  skipped: { type: integer }
+                  needsAttention: { type: integer }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /bluelion/queue/{id}/retry:
+    post:
+      tags: [BlueLion]
+      operationId: retryBlueLionQueueEntry
+      summary: Reset an errored/needs-attention row to pending
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: The reset entry.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  entry: { $ref: '#/components/schemas/BlueLionQueueEntry' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /bluelion/queue/{id}/resolve:
+    post:
+      tags: [BlueLion]
+      operationId: resolveBlueLionAmbiguous
+      summary: Resolve an ambiguous person match with a chosen BlueLion id
+      description: |
+        When a roster push matches multiple existing BlueLion persons by name,
+        the row lands `ambiguous` with `candidates`. A human picks the correct
+        person; this stamps the chosen `blueLionId` on the roster record and
+        re-queues the push.
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [blueLionId]
+              properties:
+                blueLionId:
+                  type: string
+                  description: The BlueLion person slug to bind (e.g. `smith-joe`).
+      responses:
+        '200':
+          description: The re-queued entry.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  entry: { $ref: '#/components/schemas/BlueLionQueueEntry' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ── Equipment (serialized units) ────────────────────────────────────────────
+  /equipment:
+    get:
+      tags: [Equipment]
+      operationId: listEquipment
+      summary: List serialized equipment
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [available, deployed, rented, repair, in_transit, lost, retired, out_of_service, condemned]
+        - name: ownership
+          in: query
+          schema: { type: string, enum: [basin_safety, customer_owned] }
+        - name: productCategory
+          in: query
+          schema:
+            type: string
+            enum: [monitor_personal, monitor_area, supplied_air_component, sensor, calibration_gas, accessory, consumable, assembly, labor, misc]
+        - name: serialNumber
+          in: query
+          schema: { type: string }
+          description: Exact serial-number match.
+        - name: companyId
+          in: query
+          schema: { type: string }
+          description: Filter by current customer (`currentCustomerId`).
+        - name: updatedSince
+          in: query
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: A page of equipment summaries.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, page]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/EquipmentSummary' }
+                  page: { $ref: '#/components/schemas/PageInfo' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /equipment/{id}:
+    get:
+      tags: [Equipment]
+      operationId: getEquipment
+      summary: Get a single equipment unit (detail)
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+        - $ref: '#/components/parameters/IfNoneMatch'
+      responses:
+        '200':
+          description: The equipment detail DTO.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+            Last-Modified: { $ref: '#/components/headers/LastModified' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EquipmentDetail' }
+        '304': { description: Not modified. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ── Equipment inspections (append-only service records) ─────────────────────
+  /equipment-inspections:
+    get:
+      tags: [EquipmentInspections]
+      operationId: listEquipmentInspections
+      summary: List equipment inspection/service records
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: category
+          in: query
+          schema:
+            type: string
+            enum: [fire_extinguisher, gas_detection, scba, fall_arrest, ue_cylinder, breathing_air_system, first_aid_kit, other]
+        - name: outcome
+          in: query
+          schema: { type: string, enum: [pass, fail, condemn, cannot_service, requires_parts] }
+        - name: serialNumber
+          in: query
+          schema: { type: string }
+          description: All inspections for a given unit serial (across reassignments).
+        - name: ticketId
+          in: query
+          schema: { type: string }
+        - name: updatedSince
+          in: query
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: A page of inspection summaries.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, page]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/EquipmentInspectionSummary' }
+                  page: { $ref: '#/components/schemas/PageInfo' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /equipment-inspections/{id}:
+    get:
+      tags: [EquipmentInspections]
+      operationId: getEquipmentInspection
+      summary: Get a single inspection record (detail)
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+        - $ref: '#/components/parameters/IfNoneMatch'
+      responses:
+        '200':
+          description: The inspection detail DTO.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+            Last-Modified: { $ref: '#/components/headers/LastModified' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EquipmentInspectionDetail' }
+        '304': { description: Not modified. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ── Rentals ─────────────────────────────────────────────────────────────────
+  /rentals:
+    get:
+      tags: [Rentals]
+      operationId: listRentals
+      summary: List rental agreements
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: status
+          in: query
+          schema: { type: string, enum: [scheduled, active, completed, cancelled] }
+        - name: companyId
+          in: query
+          schema: { type: string }
+        - name: fieldId
+          in: query
+          schema: { type: string }
+        - name: updatedSince
+          in: query
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: A page of rental summaries.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, page]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/RentalSummary' }
+                  page: { $ref: '#/components/schemas/PageInfo' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /rentals/{id}:
+    get:
+      tags: [Rentals]
+      operationId: getRental
+      summary: Get a single rental agreement (detail)
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+        - $ref: '#/components/parameters/IfNoneMatch'
+      responses:
+        '200':
+          description: The rental detail DTO.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+            Last-Modified: { $ref: '#/components/headers/LastModified' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RentalDetail' }
+        '304': { description: Not modified. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /rentals/{id}/daily-logs:
+    get:
+      tags: [Rentals]
+      operationId: listRentalDailyLogs
+      summary: List daily logs for a rental agreement
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: from
+          in: query
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: A page of daily logs (newest first).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, page]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/RentalDailyLog' }
+                  page: { $ref: '#/components/schemas/PageInfo' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ── Locations: Fields ────────────────────────────────────────────────────────
+  /fields:
+    get:
+      tags: [Locations]
+      operationId: listFields
+      summary: List fields
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/IsActive'
+        - name: updatedSince
+          in: query
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: A page of fields.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, page]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Field' } }
+                  page: { $ref: '#/components/schemas/PageInfo' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /fields/{id}:
+    get:
+      tags: [Locations]
+      operationId: getField
+      summary: Get a field
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+        - $ref: '#/components/parameters/IfNoneMatch'
+      responses:
+        '200':
+          description: The field.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Field' }
+        '304': { description: Not modified. }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ── Locations: Pads ──────────────────────────────────────────────────────────
+  /pads:
+    get:
+      tags: [Locations]
+      operationId: listPads
+      summary: List pads
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/IsActive'
+        - name: fieldId
+          in: query
+          schema: { type: string }
+        - name: operatorId
+          in: query
+          schema: { type: string }
+          description: Filter by current operator (`currentOperatorId`).
+        - name: updatedSince
+          in: query
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: A page of pads.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, page]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/PadSummary' } }
+                  page: { $ref: '#/components/schemas/PageInfo' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /pads/{id}:
+    get:
+      tags: [Locations]
+      operationId: getPad
+      summary: Get a pad
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+        - $ref: '#/components/parameters/IfNoneMatch'
+      responses:
+        '200':
+          description: The pad detail.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PadDetail' }
+        '304': { description: Not modified. }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ── Locations: Wells ─────────────────────────────────────────────────────────
+  /wells:
+    get:
+      tags: [Locations]
+      operationId: listWells
+      summary: List wells
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: fieldId
+          in: query
+          schema: { type: string }
+        - name: padId
+          in: query
+          schema: { type: string }
+        - name: operatorId
+          in: query
+          schema: { type: string }
+        - name: apiNumber
+          in: query
+          schema: { type: string }
+          description: Exact API-number match.
+        - name: updatedSince
+          in: query
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: A page of wells.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, page]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/WellSummary' } }
+                  page: { $ref: '#/components/schemas/PageInfo' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /wells/{id}:
+    get:
+      tags: [Locations]
+      operationId: getWell
+      summary: Get a well
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+        - $ref: '#/components/parameters/IfNoneMatch'
+      responses:
+        '200':
+          description: The well detail.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WellDetail' }
+        '304': { description: Not modified. }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ── Locations: Facilities ────────────────────────────────────────────────────
+  /facilities:
+    get:
+      tags: [Locations]
+      operationId: listFacilities
+      summary: List facilities
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/IsActive'
+        - name: fieldId
+          in: query
+          schema: { type: string }
+        - name: facilityType
+          in: query
+          schema:
+            type: string
+            enum: [remote_battery, tank_battery, compressor_station, swd_facility, gas_plant, office, shop, other]
+        - name: updatedSince
+          in: query
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: A page of facilities.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, page]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/FacilitySummary' } }
+                  page: { $ref: '#/components/schemas/PageInfo' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /facilities/{id}:
+    get:
+      tags: [Locations]
+      operationId: getFacility
+      summary: Get a facility
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+        - $ref: '#/components/parameters/IfNoneMatch'
+      responses:
+        '200':
+          description: The facility detail.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FacilityDetail' }
+        '304': { description: Not modified. }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ── Companies ────────────────────────────────────────────────────────────────
+  /companies:
+    get:
+      tags: [Companies]
+      operationId: listCompanies
+      summary: List companies
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/IsActive'
+        - name: companyType
+          in: query
+          schema: { type: string }
+        - name: updatedSince
+          in: query
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: A page of company summaries.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, page]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/CompanySummary' } }
+                  page: { $ref: '#/components/schemas/PageInfo' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /companies/{id}:
+    get:
+      tags: [Companies]
+      operationId: getCompany
+      summary: Get a company (detail)
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+        - $ref: '#/components/parameters/IfNoneMatch'
+      responses:
+        '200':
+          description: The company detail.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CompanyDetail' }
+        '304': { description: Not modified. }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ── Trainings (classes + rosters) ────────────────────────────────────────────
+  /trainings:
+    get:
+      tags: [Trainings]
+      operationId: listTrainings
+      summary: List training classes
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: companyId
+          in: query
+          schema: { type: string }
+        - name: status
+          in: query
+          schema: { type: string }
+        - name: course
+          in: query
+          schema: { type: string }
+          description: Filter by course name (contains).
+        - name: updatedSince
+          in: query
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: A page of training-class summaries.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, page]
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/TrainingClassSummary' } }
+                  page: { $ref: '#/components/schemas/PageInfo' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /trainings/{id}:
+    get:
+      tags: [Trainings]
+      operationId: getTraining
+      summary: Get a training class with its roster (detail)
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+        - $ref: '#/components/parameters/IfNoneMatch'
+      responses:
+        '200':
+          description: The training-class detail including attendees.
+          headers:
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TrainingClassDetail' }
+        '304': { description: Not modified. }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The OUTBOUND contract to BlueLion is documented here for completeness, but is
+# NOT part of this server's surface — ServicePRO is the CLIENT. BlueLion exposes
+# POST /api/integrations/servicepro/{trainings,assets,services} on a LAN-only
+# vhost, ingest-token auth, { records: [...] } → 202 with per-record results,
+# idempotent on externalId. Full contract: C:\BlueLion\deploy\SERVICEPRO-INTEGRATION.md
+#
+# Build status of the ServicePRO client side:
+#   trainings → BUILT (queue + listener)
+#   assets    → NOT BUILT
+#   services  → NOT BUILT
+# ─────────────────────────────────────────────────────────────────────────────
+x-integrations:
+  bluelion:
+    direction: outbound-push-only
+    baseUrlEnv: BLUELION_URL
+    tokenEnv: BLUELION_TOKEN
+    endpoints:
+      trainings: { path: /api/integrations/servicepro/trainings, clientStatus: built }
+      assets: { path: /api/integrations/servicepro/assets, clientStatus: not_built }
+      services: { path: /api/integrations/servicepro/services, clientStatus: not_built }
+    idempotencyKey: externalId
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Staff JWT issued by `/api/auth`. The only principal today.
+    apiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: |
+        RESERVED — not yet issued. Scoped, read-only keys for external bolt-ons.
+        Each key will carry `x-scopes` (e.g. `tickets:read`, `invoices:read`).
+        Documented now so adding it later is non-breaking.
+
+  parameters:
+    IdPath:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      schema: { type: string }
+      description: Opaque cursor from a prior page's `nextCursor`.
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+    IfNoneMatch:
+      name: If-None-Match
+      in: header
+      required: false
+      schema: { type: string }
+    IsActive:
+      name: isActive
+      in: query
+      required: false
+      schema: { type: boolean }
+      description: Filter by active flag. Omit to return all.
+
+  headers:
+    ETag:
+      description: Entity tag for conditional requests.
+      schema: { type: string }
+    LastModified:
+      description: Last modification timestamp (RFC 7231).
+      schema: { type: string }
+
+  schemas:
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: Stable machine-readable code (branch on this).
+              example: not_found
+            message:
+              type: string
+              description: Human-readable detail. May change; do not parse.
+            details:
+              type: object
+              additionalProperties: true
+              description: Optional structured context (e.g. field errors).
+
+    PageInfo:
+      type: object
+      required: [hasMore]
+      properties:
+        nextCursor:
+          type: [string, 'null']
+          description: Pass as `cursor` to fetch the next page. `null` at end.
+        hasMore: { type: boolean }
+
+    # ── Shared mini-DTOs ──────────────────────────────────────────────────────
+    CompanyRef:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+
+    UserRef:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+
+    LocationSummary:
+      type: object
+      description: Curated, flattened location — hides the field/pad/well/facility graph.
+      properties:
+        display: { type: string, description: Best human label for the location. }
+        fieldName: { type: [string, 'null'] }
+        padName: { type: [string, 'null'] }
+        wellName: { type: [string, 'null'] }
+        apiNumber: { type: [string, 'null'] }
+
+    LineItem:
+      type: object
+      properties:
+        id: { type: string }
+        description: { type: string }
+        partNumber: { type: [string, 'null'] }
+        quantity: { type: number }
+        unitPrice: { type: number }
+        total: { type: number }
+        sortOrder: { type: integer }
+
+    SignatureSummary:
+      type: object
+      properties:
+        status: { type: string }
+        sentToEmail: { type: [string, 'null'] }
+        sentToName: { type: [string, 'null'] }
+        sendCount: { type: integer }
+        firstSentAt: { type: [string, 'null'], format: date-time }
+        lastSentAt: { type: [string, 'null'], format: date-time }
+
+    # ── Tickets ───────────────────────────────────────────────────────────────
+    TicketSummary:
+      type: object
+      properties:
+        id: { type: string }
+        ticketNumber: { type: string }
+        ticketType: { type: string }
+        serviceSubtype: { type: [string, 'null'] }
+        status: { type: string }
+        serviceDate: { type: [string, 'null'], format: date }
+        company: { $ref: '#/components/schemas/CompanyRef' }
+        location: { $ref: '#/components/schemas/LocationSummary' }
+        assignedTech: { $ref: '#/components/schemas/UserRef' }
+        updatedAt: { type: string, format: date-time }
+
+    TicketDetail:
+      allOf:
+        - $ref: '#/components/schemas/TicketSummary'
+        - type: object
+          properties:
+            createdAt: { type: string, format: date-time }
+            createdBy: { $ref: '#/components/schemas/UserRef' }
+            customerContact:
+              type: object
+              properties:
+                name: { type: [string, 'null'] }
+                email: { type: [string, 'null'] }
+                phone: { type: [string, 'null'] }
+            lineItems:
+              type: array
+              items: { $ref: '#/components/schemas/LineItem' }
+            attachments:
+              type: array
+              items:
+                type: object
+                properties:
+                  id: { type: string }
+                  filename: { type: string }
+                  uploadedAt: { type: string, format: date-time }
+                  url: { type: string, description: Authenticated download URL. }
+            signature: { $ref: '#/components/schemas/SignatureSummary' }
+            availableTransitions:
+              type: array
+              items: { type: string }
+              description: Status transitions allowed for the calling principal.
+            recordCounts:
+              type: object
+              description: |
+                Counts of specialized child records (fit-test, air-system,
+                IH, training roster). Full records are intentionally NOT
+                inlined in v1 — fetch via dedicated sub-resources if exposed.
+              properties:
+                fitTest: { type: integer }
+                airSystemInspection: { type: integer }
+                ihTest: { type: integer }
+                trainingRoster: { type: integer }
+
+    # ── Invoices ──────────────────────────────────────────────────────────────
+    InvoiceSummary:
+      type: object
+      properties:
+        id: { type: string }
+        invoiceNumber: { type: [string, 'null'] }
+        status: { type: string }
+        company: { $ref: '#/components/schemas/CompanyRef' }
+        invoiceDate: { type: [string, 'null'], format: date }
+        total: { type: number }
+        updatedAt: { type: string, format: date-time }
+
+    InvoiceDetail:
+      allOf:
+        - $ref: '#/components/schemas/InvoiceSummary'
+        - type: object
+          properties:
+            createdAt: { type: string, format: date-time }
+            subtotal: { type: number }
+            tax: { type: number }
+            locationSummary:
+              type: object
+              properties:
+                locations:
+                  type: array
+                  items: { $ref: '#/components/schemas/LocationSummary' }
+            lineItems:
+              type: array
+              items: { $ref: '#/components/schemas/LineItem' }
+            signature: { $ref: '#/components/schemas/SignatureSummary' }
+            delivery:
+              type: object
+              description: Outbound delivery/sync status (Enverus / QuickBooks).
+              properties:
+                enverusStatus: { type: [string, 'null'] }
+                qbStatus: { type: [string, 'null'] }
+                qbDiffDetected: { type: [boolean, 'null'] }
+            pdfUrl:
+              type: string
+              description: Link to `GET /invoices/{id}/pdf`.
+
+    # ── BlueLion sync ─────────────────────────────────────────────────────────
+    BlueLionQueueEntry:
+      type: object
+      properties:
+        id: { type: string }
+        entityType: { type: string, description: e.g. `training_roster`. }
+        entityId: { type: string }
+        externalId: { type: [string, 'null'], description: Idempotency key sent to BlueLion. }
+        status:
+          type: string
+          enum: [pending, synced, error, needs_attention, ambiguous]
+        resultStatus:
+          type: [string, 'null']
+          description: BlueLion per-record outcome (`added`, `skipped`, `ambiguous`, `invalid`).
+        candidates:
+          type: [array, 'null']
+          description: For `ambiguous` rows — the matching BlueLion persons to choose from.
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              full_name: { type: string }
+              employer: { type: [string, 'null'] }
+              last_trained_on: { type: [string, 'null'], format: date }
+        errorMessage: { type: [string, 'null'] }
+        retryCount: { type: integer }
+        createdAt: { type: string, format: date-time }
+
+    # ── Equipment ─────────────────────────────────────────────────────────────
+    ProductRef:
+      type: object
+      properties:
+        id: { type: string }
+        partNumber: { type: string }
+        name: { type: string }
+        category: { type: string }
+
+    EquipmentLocation:
+      type: object
+      description: |
+        Curated current location — collapses the polymorphic
+        currentPad/currentWell/currentFacility/currentCustomer/currentRental
+        relations. At most one of pad/well/facility is set.
+      properties:
+        pad:
+          type: [object, 'null']
+          properties:
+            id: { type: string }
+            name: { type: string }
+        well:
+          type: [object, 'null']
+          properties:
+            id: { type: string }
+            wellName: { type: [string, 'null'] }
+            apiNumber: { type: [string, 'null'] }
+        facility:
+          type: [object, 'null']
+          properties:
+            id: { type: string }
+            name: { type: string }
+        customer: { $ref: '#/components/schemas/CompanyRef' }
+        rentalId: { type: [string, 'null'] }
+
+    EquipmentSummary:
+      type: object
+      properties:
+        id: { type: string }
+        serialNumber: { type: string }
+        product: { $ref: '#/components/schemas/ProductRef' }
+        ownership: { type: string, enum: [basin_safety, customer_owned] }
+        status:
+          type: string
+          enum: [available, deployed, rented, repair, in_transit, lost, retired, out_of_service, condemned]
+        calibrationDueDate: { type: [string, 'null'], format: date }
+        bumpTestDueDate: { type: [string, 'null'], format: date }
+        updatedAt: { type: string, format: date-time }
+
+    EquipmentDetail:
+      allOf:
+        - $ref: '#/components/schemas/EquipmentSummary'
+        - type: object
+          properties:
+            createdAt: { type: string, format: date-time }
+            lastCalibrationDate: { type: [string, 'null'], format: date }
+            purchaseDate: { type: [string, 'null'], format: date }
+            warrantyExpiry: { type: [string, 'null'], format: date }
+            safeCoreSerial: { type: [string, 'null'] }
+            conditionNotes: { type: [string, 'null'] }
+            parentEquipmentId: { type: [string, 'null'] }
+            currentLocation: { $ref: '#/components/schemas/EquipmentLocation' }
+            latestInspection:
+              oneOf:
+                - { $ref: '#/components/schemas/EquipmentInspectionSummary' }
+                - { type: 'null' }
+              description: Most recent inspection for this unit, if any.
+
+    # ── Equipment inspections ───────────────────────────────────────────────────
+    InspectionSource:
+      type: object
+      description: Which parent this inspection hangs off (exactly one id set).
+      properties:
+        type: { type: string, enum: [ticket, shop_item] }
+        ticketId: { type: [string, 'null'] }
+        shopItemId: { type: [string, 'null'] }
+
+    EquipmentInspectionSummary:
+      type: object
+      properties:
+        id: { type: string }
+        serialNumber: { type: string }
+        serializedEquipmentId: { type: [string, 'null'] }
+        category:
+          type: string
+          enum: [fire_extinguisher, gas_detection, scba, fall_arrest, ue_cylinder, breathing_air_system, first_aid_kit, other]
+        outcome: { type: string, enum: [pass, fail, condemn, cannot_service, requires_parts] }
+        serviceActions:
+          type: array
+          items: { type: string }
+          description: Multi-select actions; vocabulary depends on `category`.
+        inspectedBy: { $ref: '#/components/schemas/UserRef' }
+        inspectedAt: { type: string, format: date-time }
+        lockedAt:
+          type: [string, 'null']
+          format: date-time
+          description: Once set, the record is immutable (corrections supersede via `correctsId`).
+        source: { $ref: '#/components/schemas/InspectionSource' }
+
+    EquipmentInspectionDetail:
+      allOf:
+        - $ref: '#/components/schemas/EquipmentInspectionSummary'
+        - type: object
+          properties:
+            data:
+              type: object
+              additionalProperties: true
+              description: |
+                Category-specific structured payload (opaque to the contract).
+                Shape varies by `category` — e.g. fire_extinguisher:
+                { brand, type, size, location }; scba: { hydroDate, posiCheckDate,
+                maskSize, regulatorSerial, ... }; gas_detection: { make, model,
+                sensors[], lastCalibration, ... }.
+            partsReplaced: { type: [string, 'null'] }
+            notes: { type: [string, 'null'] }
+            customerApproval:
+              type: object
+              description: |
+                Customer sign-off on this inspection. The signature image blob
+                is intentionally NOT exposed in v1 — only the name + timestamp.
+              properties:
+                name: { type: [string, 'null'] }
+                at: { type: [string, 'null'], format: date-time }
+            correctsId:
+              type: [string, 'null']
+              description: If this record corrects a prior (locked) one, its id.
+            createdAt: { type: string, format: date-time }
+            updatedAt: { type: string, format: date-time }
+
+    # ── Location refs ───────────────────────────────────────────────────────────
+    FieldRef:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+    PadRef:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+
+    # ── Rentals ─────────────────────────────────────────────────────────────────
+    RentalSummary:
+      type: object
+      properties:
+        id: { type: string }
+        agreementNumber: { type: string }
+        status: { type: string, enum: [scheduled, active, completed, cancelled] }
+        company: { $ref: '#/components/schemas/CompanyRef' }
+        startDate: { type: string, format: date }
+        endDate: { type: [string, 'null'], format: date }
+        billingRateType: { type: string, enum: [daily, weekly, monthly] }
+        pickupType: { type: string, enum: [dispatch, walk_in] }
+        location: { $ref: '#/components/schemas/LocationSummary' }
+        updatedAt: { type: string, format: date-time }
+
+    RentalDetail:
+      allOf:
+        - $ref: '#/components/schemas/RentalSummary'
+        - type: object
+          properties:
+            createdAt: { type: string, format: date-time }
+            poNumber: { type: [string, 'null'] }
+            afeNumber: { type: [string, 'null'] }
+            isManned: { type: boolean }
+            isRigJob: { type: boolean }
+            monitorsIncluded: { type: boolean }
+            siteContact:
+              type: object
+              description: On-site operational contact. (PII — see DTO-MAPPING open items.)
+              properties:
+                name: { type: [string, 'null'] }
+                phone: { type: [string, 'null'] }
+                email: { type: [string, 'null'] }
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/RentalItem' }
+            dailyLogCount: { type: integer }
+            lastLoggedOn: { type: [string, 'null'], format: date }
+
+    RentalItem:
+      type: object
+      properties:
+        id: { type: string }
+        product: { $ref: '#/components/schemas/ProductRef' }
+        serialNumber: { type: string, description: From the linked serialized unit. }
+        rate: { type: [number, 'null'] }
+        rateType: { type: string, enum: [daily, weekly, monthly] }
+        deployedDate: { type: string, format: date }
+        returnedDate: { type: [string, 'null'], format: date }
+        status: { type: string, enum: [deployed, returned, swapped, lost] }
+
+    RentalDailyLog:
+      type: object
+      properties:
+        id: { type: string }
+        logDate: { type: string, format: date }
+        loggedBy: { $ref: '#/components/schemas/UserRef' }
+        equipmentPresent: { type: boolean }
+        equipmentStatus: { type: string, enum: [operational, issue_minor, issue_major, needs_service] }
+        cascadeStatus: { type: [string, 'null'], enum: [full, partial, empty, n_a, null] }
+        bottlesFullCount: { type: [integer, 'null'] }
+        bottlesTotalCount: { type: [integer, 'null'] }
+        monitorsBumpTested: { type: [boolean, 'null'] }
+        monitorsOperationalCount: { type: [integer, 'null'] }
+        monitorsTotalCount: { type: [integer, 'null'] }
+        notes: { type: [string, 'null'] }
+        entries:
+          type: [array, 'null']
+          description: Timestamped on-site entries (H2S readings / activity notes). Opaque JSON.
+          items: { type: object, additionalProperties: true }
+
+    # ── Locations ─────────────────────────────────────────────────────────────
+    Field:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        county: { type: [string, 'null'] }
+        state: { type: string }
+        notes: { type: [string, 'null'] }
+        isActive: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    PadSummary:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        field: { $ref: '#/components/schemas/FieldRef' }
+        county: { type: [string, 'null'] }
+        currentOperator: { $ref: '#/components/schemas/CompanyRef' }
+        tier1: { type: boolean, description: Native American reservation pad (gates Tier 1 billing). }
+        latitude: { type: [number, 'null'] }
+        longitude: { type: [number, 'null'] }
+        isActive: { type: boolean }
+        updatedAt: { type: string, format: date-time }
+
+    PadDetail:
+      allOf:
+        - $ref: '#/components/schemas/PadSummary'
+        - type: object
+          properties:
+            section: { type: [integer, 'null'] }
+            township: { type: [integer, 'null'] }
+            range: { type: [integer, 'null'] }
+            directions: { type: [string, 'null'] }
+            accessNotes: { type: [string, 'null'] }
+            manuallyVerified: { type: boolean }
+            pendingReview: { type: boolean }
+            createdAt: { type: string, format: date-time }
+
+    WellSummary:
+      type: object
+      properties:
+        id: { type: string }
+        wellName: { type: [string, 'null'] }
+        apiNumber: { type: [string, 'null'] }
+        field: { $ref: '#/components/schemas/FieldRef' }
+        pad:
+          oneOf:
+            - { $ref: '#/components/schemas/PadRef' }
+            - { type: 'null' }
+        currentOperator: { $ref: '#/components/schemas/CompanyRef' }
+        wellType: { type: [string, 'null'], enum: [OG, SWD, WI, GASD, ST, GASC, WS, CO2I, AI, GI, other, null] }
+        wellStatus: { type: [string, 'null'], enum: [A, DRY, PA, PNC, IA, Confidential, AB, LOC, DRL, TA, other, null] }
+        county: { type: [string, 'null'] }
+        updatedAt: { type: string, format: date-time }
+
+    WellDetail:
+      allOf:
+        - $ref: '#/components/schemas/WellSummary'
+        - type: object
+          properties:
+            apiShort: { type: [string, 'null'] }
+            dmrFileNumber: { type: [integer, 'null'] }
+            totalDepth: { type: [integer, 'null'] }
+            spudDate: { type: [string, 'null'], format: date }
+            section: { type: [integer, 'null'] }
+            township: { type: [integer, 'null'] }
+            range: { type: [integer, 'null'] }
+            quarterQuarter: { type: [string, 'null'] }
+            feetNs: { type: [integer, 'null'] }
+            nsLine: { type: [string, 'null'] }
+            feetEw: { type: [integer, 'null'] }
+            ewLine: { type: [string, 'null'] }
+            latitude: { type: [number, 'null'] }
+            longitude: { type: [number, 'null'] }
+            hasSuppliedAir: { type: boolean }
+            hasAreaMonitors: { type: boolean }
+            isHighRisk: { type: boolean }
+            riskNotes: { type: [string, 'null'] }
+            isActiveForService: { type: boolean }
+            serviceNotes: { type: [string, 'null'] }
+            createdAt: { type: string, format: date-time }
+
+    FacilitySummary:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        facilityType:
+          type: string
+          enum: [remote_battery, tank_battery, compressor_station, swd_facility, gas_plant, office, shop, other]
+        field:
+          oneOf:
+            - { $ref: '#/components/schemas/FieldRef' }
+            - { type: 'null' }
+        pad:
+          oneOf:
+            - { $ref: '#/components/schemas/PadRef' }
+            - { type: 'null' }
+        currentOperator: { $ref: '#/components/schemas/CompanyRef' }
+        county: { type: [string, 'null'] }
+        isActive: { type: boolean }
+        updatedAt: { type: string, format: date-time }
+
+    FacilityDetail:
+      allOf:
+        - $ref: '#/components/schemas/FacilitySummary'
+        - type: object
+          properties:
+            latitude: { type: [number, 'null'] }
+            longitude: { type: [number, 'null'] }
+            section: { type: [integer, 'null'] }
+            township: { type: [integer, 'null'] }
+            range: { type: [integer, 'null'] }
+            directions: { type: [string, 'null'] }
+            accessNotes: { type: [string, 'null'] }
+            hasSuppliedAir: { type: boolean }
+            hasAreaMonitors: { type: boolean }
+            serviceNotes: { type: [string, 'null'] }
+            createdAt: { type: string, format: date-time }
+
+    # ── Companies ───────────────────────────────────────────────────────────────
+    CompanySummary:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        legalName: { type: [string, 'null'] }
+        companyType: { type: string }
+        city: { type: [string, 'null'] }
+        state: { type: [string, 'null'] }
+        isActive: { type: boolean }
+        updatedAt: { type: string, format: date-time }
+
+    CompanyDetail:
+      allOf:
+        - $ref: '#/components/schemas/CompanySummary'
+        - type: object
+          properties:
+            parentCompanyId: { type: [string, 'null'] }
+            address: { type: [string, 'null'] }
+            zip: { type: [string, 'null'] }
+            phone: { type: [string, 'null'] }
+            email: { type: [string, 'null'] }
+            website: { type: [string, 'null'] }
+            paymentTerms: { type: [string, 'null'] }
+            createdAt: { type: string, format: date-time }
+
+    # ── Trainings ─────────────────────────────────────────────────────────────
+    TrainingClassSummary:
+      type: object
+      properties:
+        id: { type: string, description: The training ticket id. }
+        ticketNumber: { type: string }
+        courseName: { type: [string, 'null'] }
+        status: { type: string }
+        serviceDate: { type: [string, 'null'], format: date }
+        company: { $ref: '#/components/schemas/CompanyRef' }
+        attendeeCount: { type: integer }
+        updatedAt: { type: string, format: date-time }
+
+    TrainingClassDetail:
+      allOf:
+        - $ref: '#/components/schemas/TrainingClassSummary'
+        - type: object
+          properties:
+            createdAt: { type: string, format: date-time }
+            location: { $ref: '#/components/schemas/LocationSummary' }
+            instructor: { $ref: '#/components/schemas/UserRef' }
+            attendees:
+              type: array
+              items: { $ref: '#/components/schemas/TrainingAttendee' }
+
+    TrainingAttendee:
+      type: object
+      description: A training roster record. Carries the BlueLion person linkage.
+      properties:
+        id: { type: string }
+        employeeName: { type: string }
+        employerName: { type: [string, 'null'] }
+        employerCompanyId: { type: [string, 'null'] }
+        courseName: { type: string }
+        passed: { type: boolean }
+        cardNumber: { type: [string, 'null'] }
+        cardExpiryDate: { type: [string, 'null'], format: date }
+        cardIssuedOnSite: { type: boolean }
+        cardIssuedOfficial: { type: boolean }
+        trainedAt: { type: string, format: date-time }
+        blueLion:
+          type: object
+          description: Sync linkage to BlueLion's immutable per-person record.
+          properties:
+            personId: { type: [string, 'null'] }
+            trainingSeq: { type: [integer, 'null'] }
+            syncedAt: { type: [string, 'null'], format: date-time }
+
+  responses:
+    BadRequest:
+      description: Malformed request.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthorized:
+      description: Missing or invalid credentials.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: Authenticated but not permitted.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Resource not found.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }

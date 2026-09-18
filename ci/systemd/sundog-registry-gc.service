@@ -1,0 +1,20 @@
+[Unit]
+Description=Sundog registry reclaim (tag retention + blob GC)
+Documentation=file:///home/%i/sundog/ci/registry-gc.sh
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# BUILD HOST ONLY — this is where the registry container and its registry-data
+# volume live. Installing it on prod would point at a registry that isn't there.
+#
+# REGISTRY_GC_PIN is the tag prod is CURRENTLY running. ci-deploy.sh rolls back
+# by pulling that tag, so losing it from the registry turns a failed deploy into
+# an outage. The keep-window normally covers it, but a stretch of failed deploys
+# leaves prod many merges behind — exactly when the pin earns its keep. Check it
+# with:  ssh sundog@servpro "docker inspect --format '{{.Config.Image}}' servicepro-api"
+Environment=REGISTRY_GC_KEEP=30
+Environment=REGISTRY_GC_PIN=
+WorkingDirectory=%h/sundog
+ExecStart=%h/sundog/ci/registry-gc.sh

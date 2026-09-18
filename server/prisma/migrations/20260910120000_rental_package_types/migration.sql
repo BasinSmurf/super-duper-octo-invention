@@ -1,0 +1,4 @@
+ALTER TYPE "RentalBomType" ADD VALUE IF NOT EXISTS 'manned';
+ALTER TYPE "RentalBomType" ADD VALUE IF NOT EXISTS 'unmanned';
+ALTER TYPE "RentalBomType" ADD VALUE IF NOT EXISTS 'other';
+ALTER TYPE "RentalBomType" ADD VALUE IF NOT EXISTS 'rig';

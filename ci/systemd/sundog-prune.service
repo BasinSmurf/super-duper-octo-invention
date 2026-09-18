@@ -1,0 +1,12 @@
+[Unit]
+Description=Sundog docker disk reclaim
+Documentation=file:///home/%i/sundog/ci/prune-docker.sh
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# Set PROFILE=build on the CI host, PROFILE=prod on the prod VM.
+Environment=PROFILE=build
+WorkingDirectory=%h/sundog
+ExecStart=%h/sundog/ci/prune-docker.sh ${PROFILE}

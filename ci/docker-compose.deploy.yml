@@ -1,0 +1,24 @@
+# ServicePRO — image-based deploy override (mk2, proposed)
+#
+# Usage on prod (pull-based, no build on the box):
+#   export REGISTRY=registry.<tailnet>.ts.net:5000
+#   export TAG=<git-sha>            # or 'latest'
+#   docker compose -f docker-compose.prod.yml -f ci/docker-compose.deploy.yml pull
+#   docker compose -f docker-compose.prod.yml -f ci/docker-compose.deploy.yml up -d
+#
+# This layers `image:` references onto the prod compose so `pull` fetches the
+# CI-built images and `up -d` runs them WITHOUT compiling anything on the 2-core
+# prod VM. The base file keeps its `build:` blocks, so a hand-build still works
+# as a fallback (deploy/restore-env.sh path is unchanged).
+#
+# Secrets are untouched: images carry NO secrets; runtime env still comes from
+# .env.production on the box. This is what closes the "rebuilds .env → api loses
+# postgres" window — deploys no longer regenerate env or rebuild on the box.
+
+services:
+  api:
+    image: ${REGISTRY}/servicepro-api:${TAG:-latest}
+    pull_policy: always
+  client:
+    image: ${REGISTRY}/servicepro-client:${TAG:-latest}
+    pull_policy: always

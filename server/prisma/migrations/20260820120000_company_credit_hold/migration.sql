@@ -1,0 +1,15 @@
+-- Credit hold: an AR-flipped, manually-managed block on a customer.
+--
+-- While held:
+--   * no new service tickets can be created for them
+--   * no equipment can be RETURNED to them out of a shop work order
+--     (item -> returned, bulk-return, release/pickup)
+--
+-- Deliberately NOT blocked: shop work-order intake. Gear may still come in —
+-- turning a customer away at the counter with equipment in hand solves nothing;
+-- the hold bites when that equipment tries to leave.
+--
+-- Separate from is_active on purpose: a held customer stays visible and
+-- selectable so staff get the "contact Accounts Receivable" banner rather than
+-- watching the customer disappear from the picker with no explanation.
+ALTER TABLE "companies" ADD COLUMN "credit_hold" BOOLEAN NOT NULL DEFAULT false;

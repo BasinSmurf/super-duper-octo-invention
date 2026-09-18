@@ -1,0 +1,16 @@
+[Unit]
+Description=Weekly Sundog registry reclaim
+
+[Timer]
+# Sunday 04:30 — deliberately AFTER sundog-prune (Sun 03:00 + up to 15m jitter)
+# so the two never overlap, and well clear of any weekday merge. The gap matters:
+# a GC racing a push can delete blobs the push has uploaded but not yet linked to
+# a manifest, leaving a corrupt image. For a manual run at a busier time, use
+# `registry-gc.sh --stop-registry` instead of relying on the quiet window.
+OnCalendar=Sun *-*-* 04:30:00
+# The registry only grows, so a skipped week compounds rather than self-corrects.
+Persistent=true
+RandomizedDelaySec=10m
+
+[Install]
+WantedBy=timers.target

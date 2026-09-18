@@ -1,0 +1,57 @@
+# Sandbox stack — a full copy of production data on the dev box, wired to the
+# SANDBOX Enverus and the SANDBOX QuickBooks company file. Isolated from the
+# dev stack (docker-compose.yml) in every way that matters: own compose
+# project, own volumes, own ports.
+#
+#   docker compose -f docker-compose.sandbox.yml up -d      # start
+#   docker compose -f docker-compose.sandbox.yml down        # stop, keep data
+#   docker compose -f docker-compose.sandbox.yml down -v     # nuke data
+#
+# Load it with prod data: sync-prod-to-sandbox.bat
+# Run the app against it:  sandbox.bat
+#
+# Port picks are deliberate — 5433 is redlion-postgres and 5434 is zebra-db on
+# this box, so sandbox Postgres sits at 5435. Check with `docker ps` before
+# changing any of them.
+#   Postgres 5435   Redis 6380   API 3002   Vite 5174
+#
+# An explicit project name keeps `docker compose down` on the dev stack from
+# reaching in here — both files would otherwise default to project "claudius".
+name: claudius-sandbox
+
+services:
+  postgres-sandbox:
+    image: postgres:16-alpine
+    container_name: sundog-postgres-sandbox
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: sandbox
+      POSTGRES_USER: sandbox
+      POSTGRES_PASSWORD: sandbox_dev
+    ports:
+      - '5435:5432'
+    volumes:
+      - sandbox-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U sandbox']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis-sandbox:
+    image: redis:7-alpine
+    container_name: sundog-redis-sandbox
+    restart: unless-stopped
+    ports:
+      - '6380:6379'
+    volumes:
+      - sandbox-redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  sandbox-postgres-data:
+  sandbox-redis-data:

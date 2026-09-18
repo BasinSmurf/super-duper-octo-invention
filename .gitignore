@@ -1,0 +1,95 @@
+# Dependencies
+node_modules/
+
+# Environment
+.env
+.env.local
+.env.*.local
+.env.production
+# …except the client's: Vite VITE_* vars are baked into public JS at build
+# time — they are constants-as-code, never secrets. Server .env.production
+# stays ignored.
+!client/.env.production
+# Hand-rolled backups of a live .env (.env.bak-20260820 and friends). These hold
+# real secrets but did not match any pattern above, so a `git add -A` would have
+# committed one.
+.env.bak*
+*.env.bak*
+.env.*.bak
+
+# Build output
+dist/
+build/
+.next/
+
+# TypeScript incremental build cache (local, machine-specific)
+*.tsbuildinfo
+
+# Prisma
+server/prisma/*.db
+server/prisma/migrations/**/migration_lock.toml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Data files (QB exports, inventory imports, etc.)
+server/data/
+
+# Docker volumes
+postgres-data/
+redis-data/
+
+# SSL certs
+server/certs/
+*.crt
+*.key
+*.pfx
+*.pem
+turdhurdles*server*certs*
+
+# Coverage
+coverage/
+
+# Generated
+server/generated/
+server/src/generated/
+
+# Claude Code
+.claude/
+
+# Legacy CSV imports (large files)
+preload/
+
+# Docs (local reference only — root dir; server/docs IS tracked: integration contracts)
+/docs/
+
+# Deploy secrets
+deploy/
+
+# TSC output files (Windows path artifacts)
+server/C*tsc-err.txt
+server/C*tsc-out.txt
+
+# Windows artifacts
+nul
+
+# Stray photo (not a UI asset)
+client/public/IMG_0526.jpg
+
+# Enverus buyer-rules working dumps (local review data)
+server/scripts/data/enverus-buyer-rules-*
+
+# One-off ops SQL (run locally, not part of the app)
+server/scripts/clean-test-tickets.sql
+server/scripts/set-fbir-tier1.sql

@@ -1,0 +1,13 @@
+-- Payment.cc_fee_amount — how much of `amount` was a card surcharge rather than
+-- value the customer received.
+--
+-- Needed because money taken at the shop counter is now netted off the work
+-- later (a drop-off payment reduces what is due at handoff). The convenience
+-- fee must NOT reduce it: the customer paid that to the card network, not
+-- toward their calibration, and crediting it would hand back the surcharge as
+-- free work on the final invoice.
+--
+-- Nullable, and null means zero. Every payment written before this column
+-- existed charged its fee as an ordinary line (direct sale) or had none at all,
+-- so a backfill would be inventing a split that was never recorded.
+ALTER TABLE "payments" ADD COLUMN IF NOT EXISTS "cc_fee_amount" DECIMAL(12,2);

@@ -1,0 +1,54 @@
+# Dev-only stack: Postgres + Redis for local development.
+#
+# `name:` is load-bearing. Without it, Compose derives the project name from the
+# directory, which on the prod box is `sundog` — the same project the prod stack
+# runs under. A bare `docker compose up -d` anywhere under ~/sundog then matched
+# this file, claimed the prod `postgres`/`redis` service slots, and recreated the
+# servicepro-* containers out from under production. That happened twice on
+# 2026-08-18. Pinning the project name makes that collision impossible.
+#
+# Always run the prod stack explicitly: docker compose -f docker-compose.prod.yml
+name: servicepro-dev
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: sundog-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: sundog
+      POSTGRES_USER: sundog
+      POSTGRES_PASSWORD: sundog_dev
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U sundog']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: sundog-redis
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  # Named explicitly so the `name:` change above doesn't re-scope these and
+  # hand the dev box a blank database. These are the volumes the existing
+  # dev stack already uses (project was derived from the Claudius dir).
+  postgres-data:
+    name: claudius_postgres-data
+  redis-data:
+    name: claudius_redis-data
+

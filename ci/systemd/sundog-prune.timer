@@ -1,0 +1,13 @@
+[Unit]
+Description=Weekly Sundog docker disk reclaim
+
+[Timer]
+# Sunday 03:00 local, well clear of any weekday deploy or backfill.
+OnCalendar=Sun *-*-* 03:00:00
+# Fire on next boot if the box was down at 03:00 — the failure mode this guards
+# against builds up silently, so a skipped week matters.
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target

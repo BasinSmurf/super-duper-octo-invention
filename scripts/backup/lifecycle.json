@@ -1,0 +1,15 @@
+{
+  "Rules": [
+    {
+      "ID": "sundog-backups-tiering",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "prod/daily/" },
+      "Transitions": [
+        { "Days": 30, "StorageClass": "GLACIER_IR" },
+        { "Days": 90, "StorageClass": "DEEP_ARCHIVE" }
+      ],
+      "Expiration": { "Days": 365 },
+      "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 7 }
+    }
+  ]
+}

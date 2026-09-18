@@ -1,0 +1,214 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`qbXML snapshots (regression lock) > InvoiceAdd — no sales tax (untaxed, no tax item) 1`] = `
+"<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="13.0"?>
+<QBXML>
+  <QBXMLMsgsRq onError="stopOnError">
+    <InvoiceAddRq>
+      <InvoiceAdd>
+        <CustomerRef><ListID>80000001-1234567890</ListID></CustomerRef>
+        <ClassRef><FullName>D3</FullName></ClassRef>
+        <TxnDate>2026-06-15</TxnDate>
+        <RefNumber>2026-00042</RefNumber>
+        <PONumber>PO-7788</PONumber>
+      <InvoiceLineAdd>
+        <ItemRef><FullName>Labor</FullName></ItemRef>
+        <Desc>Labor</Desc>
+        <Quantity>1</Quantity>
+        <Rate>100.00</Rate>
+        <SalesTaxCodeRef><FullName>Non</FullName></SalesTaxCodeRef>
+      </InvoiceLineAdd>
+      </InvoiceAdd>
+    </InvoiceAddRq>
+  </QBXMLMsgsRq>
+</QBXML>"
+`;
+
+exports[`qbXML snapshots (regression lock) > InvoiceAdd — typical (class + tax item + mixed taxable lines) 1`] = `
+"<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="13.0"?>
+<QBXML>
+  <QBXMLMsgsRq onError="stopOnError">
+    <InvoiceAddRq>
+      <InvoiceAdd>
+        <CustomerRef><ListID>80000001-1234567890</ListID></CustomerRef>
+        <ClassRef><FullName>D3</FullName></ClassRef>
+        <TxnDate>2026-06-15</TxnDate>
+        <RefNumber>2026-00042</RefNumber>
+        <PONumber>PO-7788</PONumber>
+        <ItemSalesTaxRef><FullName>Williston (8%)</FullName></ItemSalesTaxRef>
+      <InvoiceLineAdd>
+        <ItemRef><ListID>80000010-1</ListID></ItemRef>
+        <Desc>Field labor</Desc>
+        <Quantity>2</Quantity>
+        <Rate>95.00</Rate>
+        <SalesTaxCodeRef><FullName>Non</FullName></SalesTaxCodeRef>
+      </InvoiceLineAdd>
+      <InvoiceLineAdd>
+        <ItemRef><ListID>80000011-1</ListID></ItemRef>
+        <Desc>H2S sensor</Desc>
+        <Quantity>1</Quantity>
+        <Rate>120.00</Rate>
+        <SalesTaxCodeRef><FullName>Tax</FullName></SalesTaxCodeRef>
+      </InvoiceLineAdd>
+      </InvoiceAdd>
+    </InvoiceAddRq>
+  </QBXMLMsgsRq>
+</QBXML>"
+`;
+
+exports[`qbXML snapshots (regression lock) > InvoiceAdd — unmapped item falls back to FullName only (no ListID) 1`] = `
+"<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="13.0"?>
+<QBXML>
+  <QBXMLMsgsRq onError="stopOnError">
+    <InvoiceAddRq>
+      <InvoiceAdd>
+        <CustomerRef><ListID>80000001-1234567890</ListID></CustomerRef>
+        <ClassRef><FullName>D3</FullName></ClassRef>
+        <TxnDate>2026-06-15</TxnDate>
+        <RefNumber>2026-00042</RefNumber>
+        <PONumber>PO-7788</PONumber>
+        <ItemSalesTaxRef><FullName>Williston (8%)</FullName></ItemSalesTaxRef>
+      <InvoiceLineAdd>
+        <ItemRef><FullName>Misc</FullName></ItemRef>
+        <Desc>Catch-all line</Desc>
+        <Quantity>1</Quantity>
+        <Rate>50.00</Rate>
+      </InvoiceLineAdd>
+      </InvoiceAdd>
+    </InvoiceAddRq>
+  </QBXMLMsgsRq>
+</QBXML>"
+`;
+
+exports[`qbXML snapshots (regression lock) > InvoiceAdd — with LOCATION (header <Other>) 1`] = `
+"<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="13.0"?>
+<QBXML>
+  <QBXMLMsgsRq onError="stopOnError">
+    <InvoiceAddRq>
+      <InvoiceAdd>
+        <CustomerRef><ListID>80000001-1234567890</ListID></CustomerRef>
+        <ClassRef><FullName>D3</FullName></ClassRef>
+        <TxnDate>2026-06-15</TxnDate>
+        <RefNumber>2026-00042</RefNumber>
+        <PONumber>PO-7788</PONumber>
+        <ItemSalesTaxRef><FullName>Williston (8%)</FullName></ItemSalesTaxRef>
+        <Other>Pronghorn 44-11PH</Other>
+      <InvoiceLineAdd>
+        <ItemRef><ListID>80000010-1</ListID></ItemRef>
+        <Desc>Field labor</Desc>
+        <Quantity>2</Quantity>
+        <Rate>95.00</Rate>
+        <SalesTaxCodeRef><FullName>Non</FullName></SalesTaxCodeRef>
+      </InvoiceLineAdd>
+      <InvoiceLineAdd>
+        <ItemRef><ListID>80000011-1</ListID></ItemRef>
+        <Desc>H2S sensor</Desc>
+        <Quantity>1</Quantity>
+        <Rate>120.00</Rate>
+        <SalesTaxCodeRef><FullName>Tax</FullName></SalesTaxCodeRef>
+      </InvoiceLineAdd>
+      </InvoiceAdd>
+    </InvoiceAddRq>
+  </QBXMLMsgsRq>
+</QBXML>"
+`;
+
+exports[`qbXML snapshots (regression lock) > InvoiceQueryByRefNumber + ItemQueryRq 1`] = `
+"<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="13.0"?>
+<QBXML>
+  <QBXMLMsgsRq onError="stopOnError">
+    <InvoiceQueryRq>
+      <RefNumber>2026-00042</RefNumber>
+    </InvoiceQueryRq>
+  </QBXMLMsgsRq>
+</QBXML>"
+`;
+
+exports[`qbXML snapshots (regression lock) > InvoiceQueryByRefNumber + ItemQueryRq 2`] = `
+"<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="13.0"?>
+<QBXML>
+  <QBXMLMsgsRq onError="continueOnError">
+    <ItemServiceQueryRq>
+      
+      <ActiveStatus>All</ActiveStatus>
+    </ItemServiceQueryRq>
+    <ItemNonInventoryQueryRq>
+      
+      <ActiveStatus>All</ActiveStatus>
+    </ItemNonInventoryQueryRq>
+    <ItemInventoryQueryRq>
+      
+      <ActiveStatus>All</ActiveStatus>
+    </ItemInventoryQueryRq>
+    <ItemOtherChargeQueryRq>
+      
+      <ActiveStatus>All</ActiveStatus>
+    </ItemOtherChargeQueryRq>
+  </QBXMLMsgsRq>
+</QBXML>"
+`;
+
+exports[`qbXML snapshots (regression lock) > SalesOrderAdd — typical 1`] = `
+"<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="13.0"?>
+<QBXML>
+  <QBXMLMsgsRq onError="stopOnError">
+    <SalesOrderAddRq>
+      <SalesOrderAdd>
+        <CustomerRef><ListID>80000001-1234567890</ListID></CustomerRef>
+        <ClassRef><FullName>D3</FullName></ClassRef>
+        <TxnDate>2026-06-15</TxnDate>
+        <RefNumber>2026-00042</RefNumber>
+        <PONumber>PO-7788</PONumber>
+        <ItemSalesTaxRef><FullName>Williston (8%)</FullName></ItemSalesTaxRef>
+      <SalesOrderLineAdd>
+        <ItemRef><ListID>80000010-1</ListID></ItemRef>
+        <Desc>Field labor</Desc>
+        <Quantity>2</Quantity>
+        <Rate>95.00</Rate>
+        <SalesTaxCodeRef><FullName>Non</FullName></SalesTaxCodeRef>
+      </SalesOrderLineAdd>
+      <SalesOrderLineAdd>
+        <ItemRef><ListID>80000011-1</ListID></ItemRef>
+        <Desc>H2S sensor</Desc>
+        <Quantity>1</Quantity>
+        <Rate>120.00</Rate>
+        <SalesTaxCodeRef><FullName>Tax</FullName></SalesTaxCodeRef>
+      </SalesOrderLineAdd>
+      </SalesOrderAdd>
+    </SalesOrderAddRq>
+  </QBXMLMsgsRq>
+</QBXML>"
+`;
+
+exports[`qbXML snapshots (regression lock) > SalesReceiptAdd — card payment 1`] = `
+"<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="13.0"?>
+<QBXML>
+  <QBXMLMsgsRq onError="stopOnError">
+    <SalesReceiptAddRq>
+      <SalesReceiptAdd>
+        <CustomerRef><FullName>Walk In Purchase</FullName></CustomerRef>
+        <TxnDate>2026-06-15</TxnDate>
+        <RefNumber>SR-2026-000</RefNumber>
+        <CheckNumber>ch_3Pabc123</CheckNumber>
+        <PaymentMethodRef><FullName>Visa</FullName></PaymentMethodRef>
+        <ItemSalesTaxRef><FullName>Williston (8%)</FullName></ItemSalesTaxRef>
+      <SalesReceiptLineAdd>
+        <ItemRef><FullName>Retail:Gloves</FullName></ItemRef>
+        <Desc>Gloves</Desc>
+        <Quantity>3</Quantity>
+        <Rate>12.00</Rate>
+        <SalesTaxCodeRef><FullName>Tax</FullName></SalesTaxCodeRef>
+      </SalesReceiptLineAdd>
+      </SalesReceiptAdd>
+    </SalesReceiptAddRq>
+  </QBXMLMsgsRq>
+</QBXML>"
+`;

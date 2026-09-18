@@ -1,0 +1,25 @@
+Buyer,DUNS,afeNumber_label,costCenter_label,major_label,minor_label,ADE_fields (name#itemID),requiresAFE
+"Bayou Midstream, LLC",101914808,AFE,Cost Center,Major,Minor,,false
+Chord Energy,962884727,AFE,Property Header,Major,Minor,,false
+ConocoPhillips Co,001368265,Facility/Property,Cost Object,Activity Code,Functional Area,Invoice Approver#99872; Line-Item Category#99877,true
+"Continental Resources, Inc.",074292095,Charge To,,Type,GL Acct,Maintenance Work Order’#98390,true
+Denbury Inc,141939244,AFE,Cost Center,Major,Minor,,false
+Devon Energy Corporation,088003756,WBS/Cost Center/Work Order,,GL Account,Material,,true
+EOG Resources Inc.,186830733,AFE,Cost Center,Major,Minor,,false
+Hess E&P,831490623,Chrg Code,,Major,,,false
+Hunt Accounts Payable Department,007353402,Cost Object,,Company Code,GL Account,,false
+"KODA Resources Management, LLC",080637667,AFE,Cost Center,Major,Minor,,false
+Kraken Oil & Gas,078598293,AFE,Cost Center,Major,Minor,,false
+Lime Rock Resources,616733197,AFE,Cost Center,Major,Minor,,false
+Murfin Drilling Company,481043434,AFE,Cost Center,Major,Minor,,false
+Ovintiv Inc.,256774308,AFE,Cost Center,Main Acct.,Category,,false
+"Petro-Hunt, LLC",074450664,AFE,Cost Center,Major,Minor,,false
+"PetroShale (US), Inc.",038731090,AFE,Cost Center,Major,Minor,,false
+Phoenix Operating LLC,921385826,AFE,Cost Center,Major,Minor,,false
+Prima Exploration,840816710,AFE,Cost Center,Major,Minor,,false
+Rockport Energy Solutions LLC,874674493,AFE,Cost Center,Major,Minor,,false
+"SOGC, LLC",785026811,AFE,Cost Center/Property,Account,Billing Cat.,,false
+Stephens Natural Resources,455226160,AFE,Cost Center,Major,Minor,,false
+Summit Midstream,270770380,AFE,Cost Center,Major,Minor,,false
+White Rock Oil & Gas,026362234,AFE,Cost Center,Major,Minor,,false
+XTO and its Subsidiaries,804712347,AFE / WBS / WO,Cost Center,GFCM,MatType,Business Unit#83910; SAP Description#50384,false

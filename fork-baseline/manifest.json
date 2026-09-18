@@ -1,0 +1,3011 @@
+{
+  "sourcePath": "C:\\turdhurdles\\Claudius",
+  "sourceCommit": "45b3d4446e5c08147119f0b3550a07916c2e9f0d",
+  "sourceBranch": "codex/vendor-receive-billing",
+  "copiedAtUtc": "2026-09-18T19:40:17.9837424Z",
+  "sourceStatus": [
+    " M README.md",
+    " M SANDBOX.md",
+    " M ci/SETUP-CI-PIPELINE.md",
+    " M client/README.md",
+    " M client/src/components/EquipmentInspectionEditor.tsx",
+    " M client/src/components/widgets/registry.tsx",
+    " M client/src/lib/db-types.ts",
+    " M client/src/lib/inspectionChecklist.ts",
+    " M client/src/lib/permissions.ts",
+    " M client/src/lib/widgetTypes.ts",
+    " M client/src/pages/BillingPage.tsx",
+    " M client/src/pages/ShopOrderDetailPage.tsx",
+    " M client/src/pages/SiteLogPage.tsx",
+    " M client/src/pages/TicketWizard.tsx",
+    " M server/src/routes/dashboard.ts",
+    " M server/src/routes/invoices.ts",
+    " M server/src/routes/qbwc.ts",
+    " M server/src/routes/sync.ts",
+    " M server/src/services/__tests__/__snapshots__/qbxmlBuilder.golden.test.ts.snap",
+    " M server/src/services/billingReadiness.ts",
+    " M server/src/services/inspectionChecklist.ts",
+    " M server/src/services/permissions.ts",
+    " M server/src/services/shopQaGate.test.ts",
+    " M server/src/services/widgetCatalog.ts",
+    "?? .worktrees/",
+    "?? client/siteTimes.test.mjs",
+    "?? client/src/components/ShopBillingWaiverButton.tsx",
+    "?? client/src/components/widgets/InternalShopValueWidget.tsx",
+    "?? client/src/lib/siteTimes.ts",
+    "?? client/src/pages/V2SurfaceMockupPage.tsx",
+    "?? mk2/SERVICEPRO-WORKABLE-ROLLOUT-PLAN-2026-09-09.md",
+    "?? mk2/adr/ADR-0014-rental-anchored-d4-billing.md",
+    "?? mk2/adr/ADR-0015-catalog-bom-pricing.md",
+    "?? mk2/adr/ADR-0016-v2-clean-db-cutover.md",
+    "?? server/docs/CURRENT-WORKFLOWS.md",
+    "?? server/docs/RUNBOOK.md",
+    "?? server/src/services/internalShopValue.test.ts",
+    "?? server/src/services/internalShopValue.ts",
+    "?? server/src/services/shopBillingQueue.ts",
+    "?? server/src/services/shopBillingWaiver.test.ts",
+    "?? server/src/services/shopBillingWaiver.ts"
+  ],
+  "files": [
+    {
+      "path": ".claude/launch.json",
+      "sha256": "12225EF9EF49BFECB890F528ABD86AAC8310C2BEFCDDF3B0AA64CA7D17C7553E"
+    },
+    {
+      "path": ".env.example",
+      "sha256": "FD6C71FC1DC9E29B7BEA761A06D96550AB355FC5057A2E9BD4CFA193EF526832"
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "sha256": "77097C942A90E41AD094F19EE77C326746D70F5F882242A1FDE7055D3E5C946F"
+    },
+    {
+      "path": ".gitignore",
+      "sha256": "347F9A098755A3E4CEB6F3486A74F035AFCC3BBBE563C37F12F30ED3307CC677"
+    },
+    {
+      "path": "Caddyfile",
+      "sha256": "545B0DCA3EEC196C2E651D01B75B67850DAE1AC0C39EDC14E5A9F4F487048A7E"
+    },
+    {
+      "path": "ci/ci-deploy.sh",
+      "sha256": "E31E2F6945D23605771067B447DD49F6639F2D57EA79E7D75DF045B12CE6FDFF"
+    },
+    {
+      "path": "ci/docker-compose.deploy.yml",
+      "sha256": "46217D76DA76F923A94E7993F1B3FEE982C8DD7FFB5E828AACF25652BD19B248"
+    },
+    {
+      "path": "ci/prune-docker.sh",
+      "sha256": "C75457E594B6F93E5027EB3721F349999E8619C8F8E77DE53F9440B09FD5EAF2"
+    },
+    {
+      "path": "ci/registry-gc.sh",
+      "sha256": "9A0D99E4486E828E79E2BD838FAAAD0FADBB66A7384D74D7D9E0EB07920EA73E"
+    },
+    {
+      "path": "ci/registry/docker-compose.registry.yml",
+      "sha256": "E61D7EFB1EB564AB171336DD166B43B2E5C8D4B316424F6A0401F0AA865DEC47"
+    },
+    {
+      "path": "ci/SETUP-CI-PIPELINE.md",
+      "sha256": "B5F4B4040C46FF209E1BE6FE079F87FAAB224C65C19097E87A681D2DEC9608D6"
+    },
+    {
+      "path": "ci/systemd/sundog-prune.service",
+      "sha256": "521EB3C25C728B6216E3A4AB01C0486413438FC129C64A06B5007F12A5C88C20"
+    },
+    {
+      "path": "ci/systemd/sundog-prune.timer",
+      "sha256": "AC314A65C28EB55DDCD8B27D4202169DD4B53C67D00859A4DA997F7FCC0500F3"
+    },
+    {
+      "path": "ci/systemd/sundog-registry-gc.service",
+      "sha256": "48F3B3B92F0F7EEEFE51DBAAD22F31B4581AE15DDBC9955545EFE1F0FC1405B3"
+    },
+    {
+      "path": "ci/systemd/sundog-registry-gc.timer",
+      "sha256": "5E975F638C8F25D691F9FBD2CB35B2EE2003AB0644435DB2F6DF51C8CC6DAFF6"
+    },
+    {
+      "path": "client/.dockerignore",
+      "sha256": "1D7E82EA85AF9600B4704704232F45C37CFDD49B7B85CD8E4CFFCBDF51928518"
+    },
+    {
+      "path": "client/.env.production",
+      "sha256": "6A2ECFA6A6E964525026FF0EEEE792F7C367E787549E598B0B2E090C5B92A859"
+    },
+    {
+      "path": "client/.gitignore",
+      "sha256": "FE718E7BABB14F3CBAD2D97F08889B9CE5215ED3FE0E43B2B8CFBFB3B9B844E8"
+    },
+    {
+      "path": "client/Dockerfile",
+      "sha256": "D49B2205515DFC845F3FC1929C0567FD5C1F2C7856DF3BFA9D583D4ABE7E4500"
+    },
+    {
+      "path": "client/eslint.config.js",
+      "sha256": "4EFE97B16D1200FAC0EAF07AA00930A8668B1F96A0BE1891ACE8C1E712FF0CCB"
+    },
+    {
+      "path": "client/index.html",
+      "sha256": "3482AC6E4E848EE3150192BE07F8A3B946E687AE62221F4ACE97BEBABC98D708"
+    },
+    {
+      "path": "client/package-lock.json",
+      "sha256": "758A1F3A79C67DB1A66BA005592106F27D87B876E8ECB2E58EB02CD5739300E9"
+    },
+    {
+      "path": "client/package.json",
+      "sha256": "8299A530018075890504B282B7D8448F2F7B242A9B8FA88B0D82A47DB6179711"
+    },
+    {
+      "path": "client/public/apple-touch-icon.png",
+      "sha256": "7E211AC4BEBE950E0B469ADABC2A65568342CC1F6A2E4A8E2CCDFA53E97E9F2E"
+    },
+    {
+      "path": "client/public/favicon-16x16.png",
+      "sha256": "296C2877DFF65E37630B49FB9456A82DD0CBF97EF04B94D4229CDFCE414DE2EC"
+    },
+    {
+      "path": "client/public/favicon-32x32.png",
+      "sha256": "BEDB0B6B29CEF932DC704E76AF9E1924584F7D8D6AF18DDF0A40D38C51D49755"
+    },
+    {
+      "path": "client/public/favicon-48x48.png",
+      "sha256": "034429C46C34877DCF7A2A4269774E3584AB827F0851DEF4C733CB6B931A24D2"
+    },
+    {
+      "path": "client/public/favicon.ico",
+      "sha256": "CC6D70A40D9088A65AE13292F741B2D27A6ED950A7F52C9CAB657CE62D0A3820"
+    },
+    {
+      "path": "client/public/icon-192.png",
+      "sha256": "47D898555EF66D61085BA4B10FF6ACA3079145A5D8ABB2B60A5744F82FC4AA8D"
+    },
+    {
+      "path": "client/public/icon-512.png",
+      "sha256": "BD3B4F6C9F30D3A2B6A298F3A9E51C75BAAF8BB0DD9DE485B919917E4DC24D95"
+    },
+    {
+      "path": "client/public/servicepro-logo.png",
+      "sha256": "A7AA4FFA46C3C5B5B59100A6984F7F4E5D2D189FA19254EE24226863F30C8ED1"
+    },
+    {
+      "path": "client/README.md",
+      "sha256": "319C0429886820493DFBABBCCAD6E1AB41A7868C2AF7ED59654C07D47C042324"
+    },
+    {
+      "path": "client/siteTimes.test.mjs",
+      "sha256": "9D3081FB57A779DD3BDC33B5A641FAEA70D461905D034675619D10B8FF6EA59D"
+    },
+    {
+      "path": "client/src/App.tsx",
+      "sha256": "7B12FEFF5D45959961A6D472B6F08BF4BAECE4A36A799BB5C5CE704C035C1CF4"
+    },
+    {
+      "path": "client/src/components/AddPadModal.tsx",
+      "sha256": "6EF055E41F161AC739DD90DECC2C8A541F397F7D8BC07AF01F5F6F59F354E8B0"
+    },
+    {
+      "path": "client/src/components/AddWellModal.tsx",
+      "sha256": "12CAC7DE75D1F0BC6C48B1B99E7B9D28F0EBA64B9EAC2B4E75998B2F4DA44483"
+    },
+    {
+      "path": "client/src/components/AirSystemInspectionEditor.tsx",
+      "sha256": "A6CD6648D44B4056E1A4BAF7CA02A92EF1B79ECA03B2D230BF3516B820D27799"
+    },
+    {
+      "path": "client/src/components/ApprovalsHost.tsx",
+      "sha256": "0D16956738E0AF1610D10B2D023FAD866517928436DAE4252E7D4A71886C9BF7"
+    },
+    {
+      "path": "client/src/components/ApprovalsTab.tsx",
+      "sha256": "8DCD03F0707D508F34E5BD8EB8AA8F2F530324C405894B9F1C443886060F3A33"
+    },
+    {
+      "path": "client/src/components/AppShell.tsx",
+      "sha256": "0632DF116F983CDA2C815FC50C0A3A4C37A2D44B8374D91064B106BCAE30B4AB"
+    },
+    {
+      "path": "client/src/components/BarcodeScanner.tsx",
+      "sha256": "C8BD9C0FFE0D2F1E4FDC92156F6A27891E0B6C62F07838C3E27EB7F9A6EDB23A"
+    },
+    {
+      "path": "client/src/components/BatchQaPanel.tsx",
+      "sha256": "CB8EC2635BA00F21CEFD806C86016DBF38B5E24F6826B8B4B32BE788523AE347"
+    },
+    {
+      "path": "client/src/components/BillingLineagePanel.tsx",
+      "sha256": "72A8BE91BF8A42509DA55B8A39F3D16E01B678762374DB5C48EE639AED57EEAC"
+    },
+    {
+      "path": "client/src/components/BillingProvenancePill.tsx",
+      "sha256": "8B512A1BEB746AB542A15DBF9B55A58B30FEF4658EA0C3A45C5BA3F98CA1F825"
+    },
+    {
+      "path": "client/src/components/BillingReadinessEditor.tsx",
+      "sha256": "03C114F069677DD3B8A8A6C2EC176C794A740E15BFD4B9DE56D953C20D3CD724"
+    },
+    {
+      "path": "client/src/components/BillingRefsField.tsx",
+      "sha256": "76AA30C22C417E6523CE84A0AB239066A5B4001686F0BEADACA3090C2449009F"
+    },
+    {
+      "path": "client/src/components/BugReportButton.tsx",
+      "sha256": "64BA16EDEA1F69E90477DD5F01168D7E783F4E6CF4A9FCE9AEDAB0FF14AFB7A1"
+    },
+    {
+      "path": "client/src/components/BulkActionBar.tsx",
+      "sha256": "CD09A4EED47FA7F225DFF6B70264CCA092C71ED8D4EE22817FF7EBA5A4A056E4"
+    },
+    {
+      "path": "client/src/components/CompanyMergePanel.tsx",
+      "sha256": "98BA38AB56CE4D46192455F9DE1C4C2214FDDB5E1A4AFE8216BB0DDD8AFA59B9"
+    },
+    {
+      "path": "client/src/components/ConfirmDestructiveDialog.tsx",
+      "sha256": "BC4B26CCDD57076D3778FA0268F70C75138352979F5326AEEF01B676DB3DB967"
+    },
+    {
+      "path": "client/src/components/ContactLogCard.tsx",
+      "sha256": "579AE3D33610A4EB0F3F1A3916602DC7CF5ABA22607EB340CFD37806E98AFC49"
+    },
+    {
+      "path": "client/src/components/ContractPriceBadge.tsx",
+      "sha256": "0FB31CECF24F7918A4F302C34A93E2C00C5C186B026F007413700F47A74BA624"
+    },
+    {
+      "path": "client/src/components/CustomerSearch.tsx",
+      "sha256": "F0DD69023D8E042485C5D26A685AD2E918318CCF59159BAA43AA24C0FB30F63C"
+    },
+    {
+      "path": "client/src/components/DateRangePicker.tsx",
+      "sha256": "752428F8B226E69BBDC44168995EF8FA294ACF64CE8EE938564298109E38E935"
+    },
+    {
+      "path": "client/src/components/DeferredSwUpdater.tsx",
+      "sha256": "6D6E7BF48304B1337E648878384357962FD2B529268FCF5499680B0E042474F7"
+    },
+    {
+      "path": "client/src/components/DeployInspectionModal.tsx",
+      "sha256": "0F1415C065657362389699118C680AE45E3E5ED450B3A3FEF7A3A1153BDB7584"
+    },
+    {
+      "path": "client/src/components/DeploymentsTab.tsx",
+      "sha256": "997E61529FA7AA4D4CE0688503B5C3931D564DFA76CF6AF3FE212C857CF79E85"
+    },
+    {
+      "path": "client/src/components/DispatchRentalDialog.tsx",
+      "sha256": "60A234A13E3149E6CC65D3C991EAD05E381C714946C1F872E99EA16D0052116B"
+    },
+    {
+      "path": "client/src/components/DivisionSelector.tsx",
+      "sha256": "8FB2FE6DFE85C2DED6475F5A1CDE7DB0DEC0C9D55DAE23E9061C06A09000D307"
+    },
+    {
+      "path": "client/src/components/DmrOperatorActivatePanel.tsx",
+      "sha256": "2428FB556014469BC4105424F3251194FB52FCDF0ED86C098B693A7423F8925C"
+    },
+    {
+      "path": "client/src/components/EditWellModal.tsx",
+      "sha256": "1C5C0BAAFCF53D326FE8A7924BE453F78A6F527C4754CCC3BF5ED504E35DB3DD"
+    },
+    {
+      "path": "client/src/components/EquipmentInspectionEditor.tsx",
+      "sha256": "BBE4CDE8204B3232D676DC2AEB76F47C7F889E56D4AE4BF165D0A32074A1AE8F"
+    },
+    {
+      "path": "client/src/components/EquipmentQaLauncherButton.tsx",
+      "sha256": "317F9A3A266BD678F5094BB2E1F2BEF5936CBF3A67F328D22729C949CA724738"
+    },
+    {
+      "path": "client/src/components/EquipmentScanner.tsx",
+      "sha256": "739AFC15B6FBF85FFA5AC3FA07CDEEF0DBCB9D06A4DA2752FB4F040F071E1D04"
+    },
+    {
+      "path": "client/src/components/ErrorBoundary.tsx",
+      "sha256": "C8394919099F517265A291ECA6B6E595004626EFB5927AE56DD0CD26E38910B1"
+    },
+    {
+      "path": "client/src/components/FieldInspectionCapture.tsx",
+      "sha256": "C5F87E7C7BAAA5F9233F7A08A818D80750F8817F23EAC1887CB6B886D3904986"
+    },
+    {
+      "path": "client/src/components/FitTestEditor.tsx",
+      "sha256": "1E06DBC7D23F3299CCC0140E2989C1B410915676D8C4045766C19F9355F55B0F"
+    },
+    {
+      "path": "client/src/components/GasDetectionEditor.tsx",
+      "sha256": "2E153ECD2A65DDF1773BD296602CD89F8189DF9CAB9EE3231940C3F9D47D220B"
+    },
+    {
+      "path": "client/src/components/GenerateTicketsModal.tsx",
+      "sha256": "4FD3D85EE2D60B3EB504D9B41DE8CA2BDE770D4EE2923D2F289C1BEA521A32D6"
+    },
+    {
+      "path": "client/src/components/IhTestingEditor.tsx",
+      "sha256": "7C4C12FFCEE475B5A5CB6E4686CC0F46FB7BD5DF2669E29D171C90A0C9B2B137"
+    },
+    {
+      "path": "client/src/components/InvoiceLineEditor.tsx",
+      "sha256": "DAC213BF2BB034440819FED3F44F74F0ECDBFF003108C29583D8C8735617FF5B"
+    },
+    {
+      "path": "client/src/components/JobTypePills.tsx",
+      "sha256": "8626C33D54AC772BD645E52C0A679C03A2EDF8C9FC348F028BA927DF16057ED4"
+    },
+    {
+      "path": "client/src/components/KioskLock.tsx",
+      "sha256": "53F4F795876ABBE3EA2D412876F56221720B8AC4EFCE2C62E6F953D17D0B7899"
+    },
+    {
+      "path": "client/src/components/LineItemEditor.tsx",
+      "sha256": "ED68A4B547C5E84C75F721A359DEE40DFA6BCA0D967F1A65585429A9144FF73E"
+    },
+    {
+      "path": "client/src/components/LiveClock.tsx",
+      "sha256": "7D4218C406F8F7D4D3A0DBE6C7A5996E9DF0B315C905FDF71E80462C8B5EA172"
+    },
+    {
+      "path": "client/src/components/LocationPicker.tsx",
+      "sha256": "F1659D7070407DB6E4C523AF5422F67FDC12A3822E58CD0236F092E75F2403EE"
+    },
+    {
+      "path": "client/src/components/LocationRequestsTab.tsx",
+      "sha256": "897D770E3E407BB003A78CDE892BA50F2AB50279BD950D33865AF24C47556EB6"
+    },
+    {
+      "path": "client/src/components/LocationWorkPointEditor.tsx",
+      "sha256": "13CA6A58F9E5B13A21FB762647115BB43C7A165D4DD4B92AC550F5EE37879867"
+    },
+    {
+      "path": "client/src/components/MobileAssetPicker.tsx",
+      "sha256": "5A6D5101DAD6B0CBFB886DCEF2A5EADAACE8380231CBC8647B165FBDB0341236"
+    },
+    {
+      "path": "client/src/components/OfflineReadyToast.tsx",
+      "sha256": "B319BD76EAD60C5158BF3666EC4D5C515ED8867565F567D0671D604240A094A7"
+    },
+    {
+      "path": "client/src/components/PayAtDropPanel.tsx",
+      "sha256": "6345775C1335E6B54CD0A8EB2185784E0B08B5689C51AFDB897037833296202F"
+    },
+    {
+      "path": "client/src/components/PaymentForm.tsx",
+      "sha256": "5E91B7D832D6FF67128795886783C82ABA73D07E5625B0F57F75C3C33E6DD4C1"
+    },
+    {
+      "path": "client/src/components/PhotoCapture.tsx",
+      "sha256": "47F77F19CAC0C71047D9ED3933C6BB8BACC81F6B84A68FF58C90BC4C093287CC"
+    },
+    {
+      "path": "client/src/components/PinSetupNag.tsx",
+      "sha256": "D69E3202773A0BBB27D87E42359F8CF76948EC817D41ED9209A4FCD60F2CDB91"
+    },
+    {
+      "path": "client/src/components/ProductSearch.tsx",
+      "sha256": "36A7BB4178C72505145AD0AA09448A6168F46C7CCCE0AA74FCA382D8FC0EFACB"
+    },
+    {
+      "path": "client/src/components/QuantityInput.tsx",
+      "sha256": "7E76CAD77D37982CD8889BC1D32D6BAA7EF77CDF90083B0DBDAE2D91697B8F43"
+    },
+    {
+      "path": "client/src/components/RentalInspectionEditor.tsx",
+      "sha256": "12F659ABA78656F86999E33428A1FF362CE36B7887233574EACA438AE8A71E4D"
+    },
+    {
+      "path": "client/src/components/RequireSyncingRole.tsx",
+      "sha256": "84ABD970A1F043B512AB0B3BC15A3B41E14813DDEF7E4AF980CB35A322168F05"
+    },
+    {
+      "path": "client/src/components/ReviewSignalBadge.tsx",
+      "sha256": "81B6F2CCDB40A35621BED385C401A168BD160AA3349BA0261EBD4EC55A1A0B5B"
+    },
+    {
+      "path": "client/src/components/SerialInput.tsx",
+      "sha256": "26588262D368500327E2DD71CF2BC3C9D3FB41804369CD10545446A8E5E1EEB4"
+    },
+    {
+      "path": "client/src/components/ShopBillingWaiverButton.tsx",
+      "sha256": "15BF323C1D4E39DFDF9B9576566FF4A0C2F01DD4ECE6ABD667A4C37CBEBEC962"
+    },
+    {
+      "path": "client/src/components/ShopChargeBreakdown.tsx",
+      "sha256": "886A737172C7C17033931B6DB5B2A0A73F70901128CB394991CE249BEAF0BB85"
+    },
+    {
+      "path": "client/src/components/ShopLabelPrintDialog.tsx",
+      "sha256": "3BE45B88DAB8F250658DE0920E8921CF251CC8BEA4510DC839FCF0E2FAB838DA"
+    },
+    {
+      "path": "client/src/components/ShopServicePicker.tsx",
+      "sha256": "05851A7E5402927FD7A52064E44972BB833C2F10865E2F8F98537939B03DC44D"
+    },
+    {
+      "path": "client/src/components/ShopUnitEntry.tsx",
+      "sha256": "27BDF6F22F1347319B591A90B21B4C9C99F8A0F43D55FE09B79A06017C77800F"
+    },
+    {
+      "path": "client/src/components/SignaturePad.tsx",
+      "sha256": "26FA37F732C011FE18A01E26F70D698CB571EDB724410994E899227F25F29941"
+    },
+    {
+      "path": "client/src/components/SiteSwitcher.tsx",
+      "sha256": "A728838B7DB9464984F7F98A02B11187B1BF6D93DD1D34889E909BF51D94C09E"
+    },
+    {
+      "path": "client/src/components/SwUpdatePrompt.tsx",
+      "sha256": "7832B23416DD1C2875394A1405E78F7AAF4C7983F5DA8AEF463DF2B48A726A36"
+    },
+    {
+      "path": "client/src/components/SyncStatusBar.tsx",
+      "sha256": "CAECA3845B74DD7F3C9817B192C02C7829507EC459F1F6FC68A93A75EB705C60"
+    },
+    {
+      "path": "client/src/components/TechCombobox.tsx",
+      "sha256": "C68F71696FE1F4050AAC9E22FDEEED39DADEB5364D33A691D72515E29A0586A4"
+    },
+    {
+      "path": "client/src/components/TrainingClassEditor.tsx",
+      "sha256": "7A8E7EA481B316D301B4520A192D7ABAAFB314AE749A2C2FE16489D5518F1653"
+    },
+    {
+      "path": "client/src/components/TrainingLocationPicker.tsx",
+      "sha256": "96F685A5DD9BD5DA9F86AE7B5DA117C90B2CB73BB99E33E9FB561153617553CA"
+    },
+    {
+      "path": "client/src/components/UnitAttachments.tsx",
+      "sha256": "A7CA572523CAD5D190EDBE21F58F2E35B6CBABD855D44D1EEAA58CE7ADAE6E5B"
+    },
+    {
+      "path": "client/src/components/UnitCloseState.tsx",
+      "sha256": "E2CE0BA19640C952EBF9F53461D2972FC1DCCB70E331F5C1B7A2F4CF737612EF"
+    },
+    {
+      "path": "client/src/components/VendorReceiveDialog.tsx",
+      "sha256": "994F89E4832DC98B4DAC52E1E5C589F61F528452E6084EF9CE9E06C43B0D4FD4"
+    },
+    {
+      "path": "client/src/components/WellBackfillPanel.tsx",
+      "sha256": "6A5D7050DA420FE0E0EFF9CEE4C8D96C4EBC5307B6073AA6501D6F614A59B01E"
+    },
+    {
+      "path": "client/src/components/widgets/AddWidgetMenu.tsx",
+      "sha256": "8FF050EB242F7A3973AFAA68DF511C85D2A802341650F774EF769474A8F57875"
+    },
+    {
+      "path": "client/src/components/widgets/InternalShopValueWidget.tsx",
+      "sha256": "C2092FED0873DF67EDA9D85757C24829B407E04191E691FB7BBADDC159D9FFC6"
+    },
+    {
+      "path": "client/src/components/widgets/registry.tsx",
+      "sha256": "699185745A0F74179BC6FC2ABB97E4592EBAA8F920B530EB08D3492F5D268FD9"
+    },
+    {
+      "path": "client/src/components/widgets/WidgetFrame.tsx",
+      "sha256": "0A4064050B9FCB8FAF20FB2B4432A2B71172DBDB24A202A5525DD36DB37C7389"
+    },
+    {
+      "path": "client/src/components/widgets/WidgetGrid.tsx",
+      "sha256": "32E96528574EA5488BA6CCF0F100706D265D3058BBF15DFEBDC419E8F4BA9DE0"
+    },
+    {
+      "path": "client/src/contexts/AuthContext.tsx",
+      "sha256": "E166676637F0AFE877668571B97175AC364D55C56CE1286821A77E90914285EA"
+    },
+    {
+      "path": "client/src/contexts/PermissionsContext.tsx",
+      "sha256": "68A723BFCDCD68AB5E84606DCE93A5EFC159925298D3230C7E145D838A78AC74"
+    },
+    {
+      "path": "client/src/contexts/SyncContext.tsx",
+      "sha256": "4BE1CF0CB11CABD298493902BE5A3261C5380D3A801550E0828BD9AB991BBDC1"
+    },
+    {
+      "path": "client/src/hooks/useDraftPersistence.ts",
+      "sha256": "AB1A82CDFE4AE9A6ABFB018E5124C928451325724C7AA224BA0F1600A7B70484"
+    },
+    {
+      "path": "client/src/hooks/useOnlineStatus.ts",
+      "sha256": "1A9393FA5F284914DF34186B59DEB9BC019E38EE6A4E1B32272B6592A1D10610"
+    },
+    {
+      "path": "client/src/index.css",
+      "sha256": "80E5B0B16D37AE8B19B80EB55E78026F19A57F04D3911566E8F445881E5F34DA"
+    },
+    {
+      "path": "client/src/lib/api.ts",
+      "sha256": "3728DB4018B470F8E13D5119A64D3DB3F4397EC146E75001B118F40E40A8EE13"
+    },
+    {
+      "path": "client/src/lib/attachmentCapture.ts",
+      "sha256": "8452FB0AC63B788FCEEF9ECE632E567774EEB2652C9FE54432245F7B3BF04AF9"
+    },
+    {
+      "path": "client/src/lib/attachments.ts",
+      "sha256": "D1F773EFE911B823D9301185F356053E0B4B9C897E18EC123C9D1EDC38A55FF9"
+    },
+    {
+      "path": "client/src/lib/billingProfile.ts",
+      "sha256": "E4E5A72236F5B22E099C0F458D8DD1A6D73F1C9E6BA5C608A12CCA809997FB5F"
+    },
+    {
+      "path": "client/src/lib/boardTheme.ts",
+      "sha256": "0D7E6F4672BCA61197B9C540B61794BB257E1619330F140B4C8CCF35406A9882"
+    },
+    {
+      "path": "client/src/lib/cn.ts",
+      "sha256": "E46429536F43F5910F5B2B0C50BB2769B510A4558BB4B5D20A3B0A9091DBF7C3"
+    },
+    {
+      "path": "client/src/lib/compressImage.ts",
+      "sha256": "3F85359D99826A676322ABC7043C67F327099C4E45AED31C791AF0646A58837C"
+    },
+    {
+      "path": "client/src/lib/consoleBuffer.ts",
+      "sha256": "1EF063C59F77E76F8082A3569CF07F765F80DCEE017783447EAD95236D4B1B85"
+    },
+    {
+      "path": "client/src/lib/creditHold.ts",
+      "sha256": "A703A351EF03DE9D337161004EE33FC2E715911D40224B087AA47426A556DF3C"
+    },
+    {
+      "path": "client/src/lib/dashboardApi.ts",
+      "sha256": "A046AE3D191E53ED1CA69438EB2BDDBA71529E399E6893ABF6D71B295EE0E9D4"
+    },
+    {
+      "path": "client/src/lib/dates.ts",
+      "sha256": "8D9F4BDD14905A4D4D402472B2BA00E1F698AD87171EE01AC93FE78BB7C9424A"
+    },
+    {
+      "path": "client/src/lib/db-types.ts",
+      "sha256": "DEC0E3ED2C4EB1383B2C861B42B846DCD74C9CF76A6B1A4D7AEB1727426494F7"
+    },
+    {
+      "path": "client/src/lib/db.ts",
+      "sha256": "01634647E4120794A9781FDF2B45BB7DDAB38597F8A180F007A37700A17DCB36"
+    },
+    {
+      "path": "client/src/lib/defaultLineItems.ts",
+      "sha256": "23D4F6E95E8624F535E3A043D3348FBCDB6745B2BD101877C978977759E2038E"
+    },
+    {
+      "path": "client/src/lib/deployChecklist.ts",
+      "sha256": "B1CD5FD2FDD81E1E3C480496C309CCA6536BBE37DB771B9263485316E5D1EBB7"
+    },
+    {
+      "path": "client/src/lib/divisions.ts",
+      "sha256": "134530B150323EC4A6F37760088F073B6C53EF8C7F164A1F1B78402B78D5FA8C"
+    },
+    {
+      "path": "client/src/lib/draftActions.ts",
+      "sha256": "A949566903BA7DE2865700C46CBE00D9D1C7820F907981E0AB8A99F753BDF4E2"
+    },
+    {
+      "path": "client/src/lib/inspectionChecklist.ts",
+      "sha256": "060529C4F81F1BD25432DFF00C37955DFEFC85162760393E12F8AD6CD80541A6"
+    },
+    {
+      "path": "client/src/lib/kioskAuth.ts",
+      "sha256": "FCF51461C76578019C031987967BC7C51C09D3F08B2238236802D82D25061D96"
+    },
+    {
+      "path": "client/src/lib/permissions.ts",
+      "sha256": "99ED1F8605755B68FE5A49D44AAD399C1B2DD20BA615C4D128F2DE67A4BCDBA2"
+    },
+    {
+      "path": "client/src/lib/priceLevels.ts",
+      "sha256": "BBFC9404D5A8BE1D7B932DA17130F2805B1838D9D4D4DFC7250C6B1F568200BC"
+    },
+    {
+      "path": "client/src/lib/qbDivision.ts",
+      "sha256": "FA00995E958C170509F051D249074090BE0B7389D7957900ED0737D6A05C5B42"
+    },
+    {
+      "path": "client/src/lib/rentalBom.ts",
+      "sha256": "92B0DD543858FE906936936BED8560E0D648D2F6A04FA981F232D35597356083"
+    },
+    {
+      "path": "client/src/lib/rentalRates.ts",
+      "sha256": "01DD293D3EE1EB3CEE62E2A2278990DCF7156AAD685F4C27374DEB843756C690"
+    },
+    {
+      "path": "client/src/lib/roleMobility.ts",
+      "sha256": "7B238DC4CAC3AE72B8F507849D1588FC84D3B874EFB7D56D033EA77AFD58DB3C"
+    },
+    {
+      "path": "client/src/lib/site.ts",
+      "sha256": "0FA5F3765B12ECADA6438DD66F0F2EDB15DD79AF74824D752ED1F9E1F7BD78E7"
+    },
+    {
+      "path": "client/src/lib/siteTimes.ts",
+      "sha256": "A7302833F2D7EFD34236AAD175AEBE81B736E043DB1EA0C2C79BA3F00E795F03"
+    },
+    {
+      "path": "client/src/lib/stripe.ts",
+      "sha256": "82C60F8B7C1F532F0F46B89E594FD7DDB688162417DB332DDC9C65425BFA9241"
+    },
+    {
+      "path": "client/src/lib/sw-register.ts",
+      "sha256": "038412660D4225DD3547B0A3994F35FABD56B140FF64C1BD88270F6C6CABD612"
+    },
+    {
+      "path": "client/src/lib/syncEngine.ts",
+      "sha256": "8AA1569DA170F17B31395251380EA2C3996762784CEF2B38BCA5FEB5B9DAF99D"
+    },
+    {
+      "path": "client/src/lib/taxJurisdictions.ts",
+      "sha256": "2F86F04710438656BA19243968D7F725F24E75F48CC896EC937793F4F89FCC6C"
+    },
+    {
+      "path": "client/src/lib/ticketStateMachine.ts",
+      "sha256": "C43EEC8CB2D9D504EF6BB978E3841AE3FA626A3B8F60220B6F5C94E5259BAFA9"
+    },
+    {
+      "path": "client/src/lib/widgetTypes.ts",
+      "sha256": "D50157B9A235CDC3B20B889287D16AD889E8CADDB69B42D9B41E036BB72E46E5"
+    },
+    {
+      "path": "client/src/main.tsx",
+      "sha256": "641403C84B50147F8E9EB551A628B8127074889AF3B305B5EE174E23A4B791C2"
+    },
+    {
+      "path": "client/src/pages/AdminOpsPage.tsx",
+      "sha256": "D69B27E36F9FE6542526E162C2480BFF80AF0736AD6EC810C6FA4CFBFC07686A"
+    },
+    {
+      "path": "client/src/pages/ApiKeysPage.tsx",
+      "sha256": "C20219DCEDD76A748EAE7647F795C26B00C893B32BF5E3A200368332269FA03E"
+    },
+    {
+      "path": "client/src/pages/BillingAttentionListPage.tsx",
+      "sha256": "CE18999E0A639D2858E9758CF34100E93577A5E549F8198FEFD3988DA912B456"
+    },
+    {
+      "path": "client/src/pages/BillingLineageSearchPage.tsx",
+      "sha256": "DD5FCFBC253AEEBF1FB725DC80E6C5018970FB5D49C0D7C72370D3928B3F686E"
+    },
+    {
+      "path": "client/src/pages/BillingPage.tsx",
+      "sha256": "D3EDF73A131D94D0F691D0CE44983EA51724E6FB1C057962E5747332D99E5089"
+    },
+    {
+      "path": "client/src/pages/BoardSettingsPage.tsx",
+      "sha256": "5BC92033693E1D16B99061F8FFF23B4ABC496D8207CDD1D4912C0AD26612755D"
+    },
+    {
+      "path": "client/src/pages/ClaimKioskPage.tsx",
+      "sha256": "1DE0D35F640929021BFD42B8FB767CE1AB21CC5EE72C27DB13F3B290F0766627"
+    },
+    {
+      "path": "client/src/pages/CompaniesPage.tsx",
+      "sha256": "7E919E0D8BB2FF79413DF58172DB987AA820809EDD39F6E57D5357167B3722AE"
+    },
+    {
+      "path": "client/src/pages/CompanyDetailPage.tsx",
+      "sha256": "B718FA32AB46685CE4C619779AC6CCD5BB2629024B5EF8448BD78532DA64BD77"
+    },
+    {
+      "path": "client/src/pages/CoursesPage.tsx",
+      "sha256": "F82DF3E3B7AFD95D895069E66CBBB87B0374369C72414323F5F0652383269310"
+    },
+    {
+      "path": "client/src/pages/CoveragePage.tsx",
+      "sha256": "E6B5985C256EF0FE60B75A8C2B0D3AACC896CBEE73CE7D3375C7B9C1BAD13CB0"
+    },
+    {
+      "path": "client/src/pages/DashboardPage.tsx",
+      "sha256": "9FF4A872E016954EF1E4E97A8F4CAFF20938B0523BE6AA0F144AD1C84559B4D1"
+    },
+    {
+      "path": "client/src/pages/DirectSalePage.tsx",
+      "sha256": "5B498287EC91B9F65600CFA89DE644A21601DF2029B1A52257409C4CDD4EB393"
+    },
+    {
+      "path": "client/src/pages/DispatchPage.tsx",
+      "sha256": "8F0788D6EF71BC3AFE1A7BE7284B8143BD660A9DAD8F028CF44CCD47E24017D4"
+    },
+    {
+      "path": "client/src/pages/DmrBrowserPage.tsx",
+      "sha256": "4E4B6A782C1CA668D21B5B5DD368EB704BBF6AB4793C13CB55BA489C22BB4ED2"
+    },
+    {
+      "path": "client/src/pages/EquipmentDetailPage.tsx",
+      "sha256": "6706C61D192CC92C2F5B8A29C00444BBA60F950287D0DC5D94D5C207169B8C54"
+    },
+    {
+      "path": "client/src/pages/EquipmentPage.tsx",
+      "sha256": "40DA67DC32F82A667B10C84603353555A738DBEF6A2E8106A20251415C758ADD"
+    },
+    {
+      "path": "client/src/pages/FieldDetailPage.tsx",
+      "sha256": "2DCCF453F3EE86288F924B095E0184CD8EF6F22DE3EE0E5B6A29C564339AC2D7"
+    },
+    {
+      "path": "client/src/pages/InvoiceDetailPage.tsx",
+      "sha256": "22E0751D87B2A176ACF24C46C22907E231510853927A79EC7D1E464AAB44E919"
+    },
+    {
+      "path": "client/src/pages/KiosksPage.tsx",
+      "sha256": "B8529659397BC9E20541688B6036123CF6BB797F9D32A2A8887530A34E2CA848"
+    },
+    {
+      "path": "client/src/pages/LocationBuilderPage.tsx",
+      "sha256": "4A7DAB0B69250B8C32009B92CE80E711CBA5CDC69CEAA088EE08FCFEA6AEBA3E"
+    },
+    {
+      "path": "client/src/pages/LocationsPage.tsx",
+      "sha256": "03FE0399F4726EA5DDEEA33A3BD715BEDC23B29EF757C4BE7482ADF341F46186"
+    },
+    {
+      "path": "client/src/pages/LoginPage.tsx",
+      "sha256": "F474C782188DE4DAA647428E06F4748752139732AD55932BCD7CA7813FD296BE"
+    },
+    {
+      "path": "client/src/pages/MyAccountPage.tsx",
+      "sha256": "66407B22AF7903998C9E7957E65858A4454593EC7EDD2D70A086E67E5575A396"
+    },
+    {
+      "path": "client/src/pages/MyJobsPage.tsx",
+      "sha256": "FF2BFBE75AD02CDBE4922C46CA40CD18B634CF13DFBDDF5B002F8571D3D034C2"
+    },
+    {
+      "path": "client/src/pages/NovaraSyncPage.tsx",
+      "sha256": "9FC5731AF0717B84CD3EC958C76D2DF2B996F6EBA9D647DA6A4BD2DCB2EB932C"
+    },
+    {
+      "path": "client/src/pages/PadDetailPage.tsx",
+      "sha256": "F53A87E4502EC9D2264E6238B64DF53962768257EF4035BC769C99506F66E279"
+    },
+    {
+      "path": "client/src/pages/PadMergePage.tsx",
+      "sha256": "BB8F894EF2F935420142216A07EF07CD48302F0011103C8C6E42CE8C8DC2506A"
+    },
+    {
+      "path": "client/src/pages/PermissionsPage.tsx",
+      "sha256": "FAD40735B89C03CE90FAB5994A3F415B8CA94A04A3C84585DCEA96C257E81FC5"
+    },
+    {
+      "path": "client/src/pages/portal/PortalAccountPage.tsx",
+      "sha256": "5D19D74A95A2363647C506BB0DA5E1790F71763FAE9F36045497F95D3A8F3269"
+    },
+    {
+      "path": "client/src/pages/portal/PortalH2sPage.tsx",
+      "sha256": "97B3D8CC561C62A289878769BAC0778F4BA1D820973270D2CF3228914A016C2B"
+    },
+    {
+      "path": "client/src/pages/portal/PortalHomePage.tsx",
+      "sha256": "90D1EC78822BA968F4EA284AEB273A3887821867BF71368EA2A253F943EE7A96"
+    },
+    {
+      "path": "client/src/pages/portal/PortalLayout.tsx",
+      "sha256": "EC66A3DA01CDE55706C50F908003DBCAFCE94F64BC07DBC3F53A9C5514DB7901"
+    },
+    {
+      "path": "client/src/pages/portal/PortalRentalsPage.tsx",
+      "sha256": "FEC887862D38B10967449F49F6608A3A4C31F0E7B467326B448093B0857B679F"
+    },
+    {
+      "path": "client/src/pages/portal/PortalShopPage.tsx",
+      "sha256": "607911E8077AB8EF902F7E30014EF6E66B59BD557A3AF5403C85BA12061EFDBF"
+    },
+    {
+      "path": "client/src/pages/portal/PortalTicketDetailPage.tsx",
+      "sha256": "91EA5CA6EB2213F7220A9071F236BBD408EB3B1D33F768D621D224EA517A9469"
+    },
+    {
+      "path": "client/src/pages/portal/PortalTicketsPage.tsx",
+      "sha256": "283A2F15D0E0AA50C9FA5ABE8E83035A4F418DEAD25E59DAD31D52E528FD4CFD"
+    },
+    {
+      "path": "client/src/pages/portal/portalUtils.ts",
+      "sha256": "0164038936F6A8E3B2D127AD1035094DF87603EB187ADADB0CC7B8939AE98DB8"
+    },
+    {
+      "path": "client/src/pages/PrintersPage.tsx",
+      "sha256": "C707736D07313D2A7C919396F0BF4CDA58A34AEEB54836A0221DAD7D3B50CE47"
+    },
+    {
+      "path": "client/src/pages/ProductsPage.tsx",
+      "sha256": "35785A7804B6FBF280F98811652BB821C16B1F44B8D5B622B5A0A43873B6863C"
+    },
+    {
+      "path": "client/src/pages/RentalDetailPage.tsx",
+      "sha256": "CB3C663E950482B8B4F9A45D5AC049A4873019126D4EDB4FC09CE34399F2F990"
+    },
+    {
+      "path": "client/src/pages/RentalReturnPage.tsx",
+      "sha256": "C1DDF639014F4EA441594ECF4E59D88584BC490A9FC25C39ECFDD8BF24056216"
+    },
+    {
+      "path": "client/src/pages/RentalsBoardPage.tsx",
+      "sha256": "CEFA31E0C5DB0CD599C24FDCBA562F4F9A5DD806142CD75AF04191AF37A79AFD"
+    },
+    {
+      "path": "client/src/pages/RentalsPage.tsx",
+      "sha256": "C1AF9606898DA7A34F46CF28289EACC6BE99EA7D8194FB27D8F6F15020F91261"
+    },
+    {
+      "path": "client/src/pages/RoutesPage.tsx",
+      "sha256": "C8FFC2FFA31092891DABB4C1DF3D1D5B77B597C1CD97530ED7AB870B764036AF"
+    },
+    {
+      "path": "client/src/pages/SettingsPage.tsx",
+      "sha256": "C7CFB28D7EAF61F2099828A4B0B230B72FDD0F5F3450476CE14628A2D131533F"
+    },
+    {
+      "path": "client/src/pages/ShopBoardPage.tsx",
+      "sha256": "CB8C5A00958C6D2E3684EED7A6284E48393FC7ACE7F7F9B9E146B7A667514582"
+    },
+    {
+      "path": "client/src/pages/ShopIntakePage.tsx",
+      "sha256": "11575190BE91150A2E9767F7BA8A75C92D95FC0C83938040920380552BC823C5"
+    },
+    {
+      "path": "client/src/pages/ShopOrderDetailPage.tsx",
+      "sha256": "0515BB3A0AD9C89BD5CA1B09161AFDA8D7818C90B15DA48F86DFE1E2F215451D"
+    },
+    {
+      "path": "client/src/pages/ShopOrdersPage.tsx",
+      "sha256": "56D934901B031000D65E70D6278820026F84780024914FF10EB2CF04A02FD280"
+    },
+    {
+      "path": "client/src/pages/SiteLogPage.tsx",
+      "sha256": "EEF0AE1131EF935AABCBEFDDAA01982DE25F39445E71506A39475FEA8AD8125C"
+    },
+    {
+      "path": "client/src/pages/SitesPage.tsx",
+      "sha256": "748385929BE25F06013C8E0E619A80DE0EC4CB7A97B791AAFD8025CD11B53A20"
+    },
+    {
+      "path": "client/src/pages/StaleTransfersPage.tsx",
+      "sha256": "E09A8CFE54D1C414D62CC0161958265D06DE18971F0827E87021FBCC19B0A602"
+    },
+    {
+      "path": "client/src/pages/TicketDetailPage.tsx",
+      "sha256": "45026264264FE88FC97EB7563F55FC25691935E6B2B9EDED576EDF1C0C123DB8"
+    },
+    {
+      "path": "client/src/pages/TicketsPage.tsx",
+      "sha256": "CB95B7F10BB9F645AB332BEEAF5DC215B7D6D3C6D90D5BE79EFE7F05BC70D213"
+    },
+    {
+      "path": "client/src/pages/TicketWizard.tsx",
+      "sha256": "F49AC2D420A9B0290D86BC7208436791D01F6B74575E11DF09EAA87642E78303"
+    },
+    {
+      "path": "client/src/pages/TrainingCalendarPage.tsx",
+      "sha256": "7E789490E01A8B47CF0A3156C6BE11C936A25FF4033DD53EB3EF14FBB5D68B5C"
+    },
+    {
+      "path": "client/src/pages/TrainingKioskPage.tsx",
+      "sha256": "F406C9F12D617715EA505AAED9225CA3F1B2504ABB5D0B6290B6E613C7AD88B3"
+    },
+    {
+      "path": "client/src/pages/TrainingSetupPage.tsx",
+      "sha256": "ECDC43585A3E29888297BF2FA800AE3EE2A704ECBA246A72D745540767394170"
+    },
+    {
+      "path": "client/src/pages/TrainSignInPage.tsx",
+      "sha256": "71849E08F9F8C73793FD904ACC3B02E3223278ED35541381D0643DEF6BCC87CA"
+    },
+    {
+      "path": "client/src/pages/V2SurfaceMockupPage.tsx",
+      "sha256": "47FEDB3BE2664F3C4C4819DFF4E1B60FCDF2D3FAC7A836323F6AF7273EF6A730"
+    },
+    {
+      "path": "client/src/pages/WellDetailPage.tsx",
+      "sha256": "5CCF7121C90AFD5094652E82CE3235EFC3C00FC5A3C4E326F0B8500C81B9704A"
+    },
+    {
+      "path": "client/src/pages/wizard/divisions.tsx",
+      "sha256": "9C396AEC37EA4890F186F691A00AD9141610806E3996DB76A67369760B8B0F54"
+    },
+    {
+      "path": "client/src/pages/wizard/WizardShell.tsx",
+      "sha256": "A8EC93E86CA9307D68EEBC0D06EFF36FDD872150E5E6635E173EC59FF251AC4D"
+    },
+    {
+      "path": "client/tsconfig.app.json",
+      "sha256": "D52A1FB48B12CFEC2A0CF9B74D7549C9244CE41F65161FC1C760B4F05303770A"
+    },
+    {
+      "path": "client/tsconfig.json",
+      "sha256": "770B4140BBB581E2DFD9EA9946FFC9C75A1D86BA7D2DB5F77C83E37CBDF9D808"
+    },
+    {
+      "path": "client/tsconfig.node.json",
+      "sha256": "C3DD0FB522FEBA3596713F51B95BD53D781D845D24AEDBFA2AC093D8B39C5120"
+    },
+    {
+      "path": "client/vite.config.ts",
+      "sha256": "2A99AD846672B4D44CA80085D78FB0233A283DB0A6B0DAF76BB907E7B1AA0004"
+    },
+    {
+      "path": "deploy.sh",
+      "sha256": "775C50736093A68C313C1C434F1ACC728E31A17B037EDAA214E947C744116519"
+    },
+    {
+      "path": "dev.bat",
+      "sha256": "B33E78E8A7A734D7B6B681549630D1065A2B9916A1D182EE2CB1971428F4E08A"
+    },
+    {
+      "path": "docker-compose.prod.yml",
+      "sha256": "8EA3BD41B12B211150C05BE59179E3296A37965F1F8B88F6C91D0BE7A51CF7EC"
+    },
+    {
+      "path": "docker-compose.sandbox.yml",
+      "sha256": "78E2A86B20F75DFFE0178977E52B9FBF026A515F3829DDB8D2D6D6CD01B0A414"
+    },
+    {
+      "path": "docker-compose.yml",
+      "sha256": "6628882BEA04EFFCDED565DB548D122FAD295AF921A465D545B2B41377C511E6"
+    },
+    {
+      "path": "import-to-prod.bat",
+      "sha256": "47DFF3C7208A1D9193D6A6A7BFF4DD435157DC6D50C6AF8DB644FC8D3156F7CC"
+    },
+    {
+      "path": "mk2/adr/ADR-0001-ci-source-split-and-observability.md",
+      "sha256": "8D3C705CE28652A7792639857F63334AC5794B5E7913DF5437DC4EF456267E49"
+    },
+    {
+      "path": "mk2/adr/ADR-0002-data-layer-postgres.md",
+      "sha256": "69B5A6FB01F6B1B1CE5EF98767E8EA8FBAECBE6E0E4C578C146E4DEB4D750EB1"
+    },
+    {
+      "path": "mk2/adr/ADR-0003-api-framework-express.md",
+      "sha256": "E2B522578124CB8B031BC2EACB3E01BFA8E28A4069F7F4DC2BCCD165FFE8FD7E"
+    },
+    {
+      "path": "mk2/adr/ADR-0004-frontend-build-vite.md",
+      "sha256": "2DF41DD15CB85A8F49D43DFDE3FBB54DCEE00854DF710F1533B6D04E701006B4"
+    },
+    {
+      "path": "mk2/adr/ADR-0005-frontend-architecture.md",
+      "sha256": "4501F204394C7D1665DB532A2766126FABA8188D6C9D7CB8B1BFEA8FA920B7FF"
+    },
+    {
+      "path": "mk2/adr/ADR-0006-container-topology.md",
+      "sha256": "0D601384AEC9929D5A441E21083DA89C5A604E6D52EC7B7FD8553B9BE2365C24"
+    },
+    {
+      "path": "mk2/adr/ADR-0007-auth-session-model.md",
+      "sha256": "32B7069C8B9BB8F9D7D1D5D0F57DFB71992E32646FAA297D9E2F20FE17658FD1"
+    },
+    {
+      "path": "mk2/adr/ADR-0008-quickbooks-boundary.md",
+      "sha256": "20DBDB90A1512CA2C8CBB24EC2BFE3DFC123E5FC3A6F1BFDCA57B2A83922F6CD"
+    },
+    {
+      "path": "mk2/adr/ADR-0009-dev-loop-ergonomics.md",
+      "sha256": "3DE4E44D7452E8CC867A800585A52592CF4BAD12E237A8601C6853F6B3F86D44"
+    },
+    {
+      "path": "mk2/adr/ADR-0010-failure-observability-and-notifications.md",
+      "sha256": "7E82634123245821075005C7060F570AC37A9A3C5FBEF908D557006F861D147D"
+    },
+    {
+      "path": "mk2/adr/ADR-0011-self-service-credentials-sso-failover.md",
+      "sha256": "7896F84A6D93ED4D087CA01441556C04A8303BA51EF7A977D6D1FFB8B03A68D2"
+    },
+    {
+      "path": "mk2/adr/ADR-0012-location-entry-and-well-data-strategy.md",
+      "sha256": "2CC583FC7DA8A717D640E60DDC90C0C70D99137F45DDA25D0558FE09E156D389"
+    },
+    {
+      "path": "mk2/adr/ADR-0013-ticket-wizard-division-first-restructure.md",
+      "sha256": "08B25CE995EA1FEA186F6D04983FC95690ABFCADBF6CD30328E58350709A2B21"
+    },
+    {
+      "path": "mk2/adr/ADR-0014-rental-anchored-d4-billing.md",
+      "sha256": "18C9E62ACCD60C5DBC1C402B619CDE0AD9863C7E946C28D51CD705EA17DBE012"
+    },
+    {
+      "path": "mk2/adr/ADR-0015-catalog-bom-pricing.md",
+      "sha256": "4B72A9365FCC26A0DAEA70720B2A191BEB99F0E6981492A833FEF27A09EED36D"
+    },
+    {
+      "path": "mk2/adr/ADR-0016-v2-clean-db-cutover.md",
+      "sha256": "689309AFF5A97B65519D1276265325D73807837C8F99BA3A832D88CE8A57FBD0"
+    },
+    {
+      "path": "mk2/adr/ADR-0017-division-coding-and-qb-class.md",
+      "sha256": "016AD2F3527429D19840594961F7D0098DE663C0D447B2CCC734218F64EE6591"
+    },
+    {
+      "path": "mk2/CI-IMPLEMENTATION.md",
+      "sha256": "50C0302C0C2DBA9B584AA3221EC73B39781C719F7A196B5E128ADA252D6BF743"
+    },
+    {
+      "path": "mk2/MK2-TARGET-STATE.md",
+      "sha256": "DC4C72E86A680FAE53C27683DBF897F2D665EC7EDE04D63141F88535A1682FC8"
+    },
+    {
+      "path": "mk2/PHASE-1-INVENTORY.md",
+      "sha256": "9ED0370738E33488B0E2DB46986158ED82897D7D4675E8BCC17FD2949888B4EE"
+    },
+    {
+      "path": "mk2/SERVICEPRO-WORKABLE-ROLLOUT-PLAN-2026-09-09.md",
+      "sha256": "D0FB9E35B39FE7FA92059B774A92B1F05E49B923AF22CD818310EEFE0FE41E99"
+    },
+    {
+      "path": "mk2/wizard-decomposition-plan.md",
+      "sha256": "5F9A9E4DBEF4FBF9F9B29D44522A14730093B3D0A35CEAE652CA97CEB8F09341"
+    },
+    {
+      "path": "package.json",
+      "sha256": "7BEF84619CFC9AF192E65638283D39BF7531D37C90182C7A782576C3C0A40782"
+    },
+    {
+      "path": "README.md",
+      "sha256": "7537416CE9646D5F3BE21E2E350A39F24D4E2619CA15DA74AAFC3182C2B7CFE5"
+    },
+    {
+      "path": "restart.bat",
+      "sha256": "12D5374E9ACF30AFFDA804AC03683CF5DBC408A10B372826205EA7F312495218"
+    },
+    {
+      "path": "SANDBOX.md",
+      "sha256": "9F7AB0994B2686383D9815B5179838027C8799073EFFB20E84D749A316D2C7A2"
+    },
+    {
+      "path": "scripts/backup/backup-prod.sh",
+      "sha256": "3C51B9C28D0813043C7F03D391F31C575AC0D464EEA6F779DA5E31EFC752AAD4"
+    },
+    {
+      "path": "scripts/backup/lifecycle.json",
+      "sha256": "52F777A8C0B7C8461CED788BBE8A11A4EC5703A4A0A5AE773340C79476D45568"
+    },
+    {
+      "path": "scripts/backup/restore-prod.sh",
+      "sha256": "45D7F3C9BBCE97A9DAE1B30B88A4E72AE2F6F6CA0E720294C51E1A53953E7942"
+    },
+    {
+      "path": "scripts/bz1-rental-upsert.sql",
+      "sha256": "F976E13989858C2954E5887CDA9A060CDB58BAE9E78902E94B99DF199484C4A7"
+    },
+    {
+      "path": "scripts/equipment-reset.sql",
+      "sha256": "6057B42AC3928130A711A3A8AF131334B837719011B2A7E447CE9A3CCBA03E17"
+    },
+    {
+      "path": "scripts/gen-checklist.mjs",
+      "sha256": "14BFEA85250EC7BA3D41E0061DC76B8DC55C5774B3D2C97957ADE2475B0025FC"
+    },
+    {
+      "path": "scripts/generate-icons.js",
+      "sha256": "E358C5BC57FC0D8AA6DBD4BA265A0A27F07BB48AF5553EB92738FB7CB44D9F13"
+    },
+    {
+      "path": "scripts/promote-pad-shaped-wells.sql",
+      "sha256": "258D14B84B059F8CE347AAF1EB049F062D99B302E36F9964A2818EAF55F063E3"
+    },
+    {
+      "path": "scripts/sandbox-sanitize.sql",
+      "sha256": "BDF651FCB4DA9EC8B96D1F0411B933BBA0C1B0D01A1A680632555CECE4966FB8"
+    },
+    {
+      "path": "scripts/scba-monitors-reset.sql",
+      "sha256": "CBA01A565B69E0BB7D44B40406D7223681A6C77286F9D0DAA3D40032D6B44C05"
+    },
+    {
+      "path": "scripts/well-name-drift-report.sql",
+      "sha256": "843E79424B4E70B8B52B2319A77480610F3B83D9341739C8DA8D4F08F77218B7"
+    },
+    {
+      "path": "scripts/xto-fbir-to-chord-upsert.sql",
+      "sha256": "0A5DDD5F67E70D75D95A2B169D96BE4661EED7DD2DA2D1EB25E725DA1420CAFE"
+    },
+    {
+      "path": "server/.dockerignore",
+      "sha256": "34CA6F383C320444E76F87F32158E5DD8B7FD06166B8DF565FE7E1F98D79BD0B"
+    },
+    {
+      "path": "server/assets/logo.png",
+      "sha256": "AD1B85722CAF145FADF069A39440FDB4FE945C8F29B9C18455BF81290D8FC238"
+    },
+    {
+      "path": "server/backfill-sales-tax-prod.cjs",
+      "sha256": "B2863D6EA28C5F9D9E787705972F360050A8BAE109B18433CC71B8DD063582EC"
+    },
+    {
+      "path": "server/docker-entrypoint.sh",
+      "sha256": "3C5057A8B16C7F86E5F2993176044BA9A9A8858DDBC2056EE429FEE3158B41FA"
+    },
+    {
+      "path": "server/Dockerfile",
+      "sha256": "E7360FBDFD8B2883968A32D7A7EE407CCD7A131D7227AE3C6D55C64D484A8D4C"
+    },
+    {
+      "path": "server/docs/bluelion/BLUELION-API-REQUESTS-DIV6.md",
+      "sha256": "C59603BCE89FDF29F4E623CB402009EF704C4B15828A40EB272039120C5802CA"
+    },
+    {
+      "path": "server/docs/bluelion/BLUELION-ASSET-MODEL.md",
+      "sha256": "73FE36482DEAE348D56FA1043BA40679A0B64F5A54D57FB47E932650AE95CCD8"
+    },
+    {
+      "path": "server/docs/bluelion/SERVICEPRO-CARD-FLAG.md",
+      "sha256": "8DC6E01BD805429428A7395548B925B842926993E49D197BCEAF656F3D175D11"
+    },
+    {
+      "path": "server/docs/bluelion/SERVICEPRO-HANDOFF.md",
+      "sha256": "ED5E4877A3D2F1A735030CEE63CF5AC77835380B0CAA1F9EB9EF20A0ECDCE465"
+    },
+    {
+      "path": "server/docs/bluelion/SERVICEPRO-INTEGRATION.md",
+      "sha256": "0F6EA1F34C6CDE9CE56D8B8D3C98C8367834862E8B7F30EE4298D22919702FC4"
+    },
+    {
+      "path": "server/docs/CURRENT-WORKFLOWS.md",
+      "sha256": "89221F0963578F9810EB46F471417BB810735F09E8AF4E80EE3FDBBDFD2F25D8"
+    },
+    {
+      "path": "server/docs/PCI-SCOPE.md",
+      "sha256": "81809F147B0FC5C3BC3CC8118FB97B9B585AD5A5C138A0AB42CEEDEAC663F992"
+    },
+    {
+      "path": "server/docs/RUNBOOK.md",
+      "sha256": "B7125043D2F5A1A47F41F5BB221F10D5369E6773DA3974E1EA697FD107DC3F3E"
+    },
+    {
+      "path": "server/openapi/DTO-MAPPING.md",
+      "sha256": "EF23510FDD59A2D5A360E33510F753EAB09DB38B4A799C67ABFD5B25497EB5DC"
+    },
+    {
+      "path": "server/openapi/servicepro-v1.yaml",
+      "sha256": "BF3E1D56E887974D04BC76C25E0279540848C616C327F79C4E96AD9FF3955236"
+    },
+    {
+      "path": "server/package-lock.json",
+      "sha256": "6806D35899B28AA3CE2222BE5AE48EF863906F26001D6733146C78CA6D5A2A2F"
+    },
+    {
+      "path": "server/package.json",
+      "sha256": "833DA816289A14B50B50C161BFEBC2C5553E0E1D7CC9887186A2DFF2BC82240C"
+    },
+    {
+      "path": "server/prisma.config.ts",
+      "sha256": "BE4AEDB296EFA49100BA3FDDC46423A0AA27190ED5161F961CC99F769AB1CC41"
+    },
+    {
+      "path": "server/prisma/custom_indexes.sql",
+      "sha256": "7585A2B017C259DB118AA4921A67506FA8D45DF2F396C0D016A7DDBC048DDF30"
+    },
+    {
+      "path": "server/prisma/import-doforms-tickets.ts",
+      "sha256": "2A2F4542CE08E4E6B71D9BAD7A92B58D2C5B808474CD3B2E3B9447A9EA43C28F"
+    },
+    {
+      "path": "server/prisma/import-qb-customers.ts",
+      "sha256": "B6512C42B09982C02D9C562E22FC803C9B4C2D2F409369292DF5DF35DDFD0B57"
+    },
+    {
+      "path": "server/prisma/import-qb-products.ts",
+      "sha256": "372250CBF631C10FBE15F0ACBD0751FE1A13E5BDD08A9CCE4375830F84AD4070"
+    },
+    {
+      "path": "server/prisma/migrations/00000000000000_init_extensions/migration.sql",
+      "sha256": "58D2676DC8B62DAB25674135C7F9DCAEAD4AA592B6471BA80A39E47C012F59A0"
+    },
+    {
+      "path": "server/prisma/migrations/20260212192336_sundog/migration.sql",
+      "sha256": "BEABF92EF23C2B4B6D0E1AD53894E81967E50FA6D7B3C15589F46E36FC9D436B"
+    },
+    {
+      "path": "server/prisma/migrations/20260216195541_add_training_ticket_type/migration.sql",
+      "sha256": "015AF629CE1FAE7D707151DE7AA262EEE40766BF0944B872C104B8E3EE2DD044"
+    },
+    {
+      "path": "server/prisma/migrations/20260218000000_add_fit_test_disclosure_fields/migration.sql",
+      "sha256": "A3087633BDCA566083A621AB9E43BAAF358CEBC5FE7F8ED6B94218FD973D334B"
+    },
+    {
+      "path": "server/prisma/migrations/20260219221338_add_routes_billing_workpoint_fields/migration.sql",
+      "sha256": "5CB5063DD389457D2A60CE7AAF3078A0CA521A04E72F09829BDFEB70B4407C75"
+    },
+    {
+      "path": "server/prisma/migrations/20260219224249_add_air_system_inspections/migration.sql",
+      "sha256": "BEBAD7C6F0127650B5A29A55F88C334CEDFD301EFE71F2964F6FC2A6791C8C18"
+    },
+    {
+      "path": "server/prisma/migrations/20260220143226_add_replacement_serial_tracking/migration.sql",
+      "sha256": "DA78702ACF72349D49EE6A8EF2D2080AA7F4C7C21BC38E690FFA4D79C40086C7"
+    },
+    {
+      "path": "server/prisma/migrations/20260220154333_cylinders_jsonb_cascade_psi/migration.sql",
+      "sha256": "4E79BDACA180C4EB6D3A4FC250544B530F174E30C95D7B8F429FEBE60BF56DAE"
+    },
+    {
+      "path": "server/prisma/migrations/20260220182930_add_ih_test_records/migration.sql",
+      "sha256": "8E7CD882CB9944386FDA47AE3891B2210DD846C8B15535ED38296EF849569C9E"
+    },
+    {
+      "path": "server/prisma/migrations/20260220200947_add_training_roster_records/migration.sql",
+      "sha256": "FE1DDFF51103CCB9DA6127256E8751E2166A38E5DAACA293D989AD2D3C4272D0"
+    },
+    {
+      "path": "server/prisma/migrations/20260220222342_add_site_log_entries/migration.sql",
+      "sha256": "C90D2DF59E58D8BBA8A026D131CB43C5C538E1688D59D228216C32253AA4B8AE"
+    },
+    {
+      "path": "server/prisma/migrations/20260221034456_add_rental_liability_fields/migration.sql",
+      "sha256": "47C5A63C75A6E3F231448B4565538A7214EDEE9130F46A67124AF2DB4E4D8B6D"
+    },
+    {
+      "path": "server/prisma/migrations/20260221035243_add_shop_work_orders/migration.sql",
+      "sha256": "DE177BF54B710231DB7858D5165A42BD5C2C11AE82E4B4C90121D8FD4F52735F"
+    },
+    {
+      "path": "server/prisma/migrations/20260221045607_add_fex_fields/migration.sql",
+      "sha256": "A37FF2BC6F5BBFFF53F8551411637854B06A6A031E44D55D820082E39D4B79A2"
+    },
+    {
+      "path": "server/prisma/migrations/20260221155631_add_pickup_signature_fields/migration.sql",
+      "sha256": "6F81FB8B569FB12A83F5D1FE7A0990C6AFC52EEEC2DAA870BC0E46D62044F07F"
+    },
+    {
+      "path": "server/prisma/migrations/20260221210253_add_invoice_model/migration.sql",
+      "sha256": "0CC34A068BBCB76AA2D7702D5A351181739E0C5E2D0880CA0B8048E17C0BB9B0"
+    },
+    {
+      "path": "server/prisma/migrations/20260225000000_add_trailer_and_linked_rental/migration.sql",
+      "sha256": "9DF1413102346A81523FEBAAD9B08637DB486611AEC5BF4645498AF94FEA0C71"
+    },
+    {
+      "path": "server/prisma/migrations/20260304202740_add_google_role_mappings/migration.sql",
+      "sha256": "41C30E4EE487AAB46550C97DD7F16881D0F2A57B8B0F1EED267EE295506A13C5"
+    },
+    {
+      "path": "server/prisma/migrations/20260313180000_add_cycle_months_to_service_route/migration.sql",
+      "sha256": "C7E422753169B500E33A8B686C5ACCBDD8E1D10EFAD39099470CDF7C6DA9A65E"
+    },
+    {
+      "path": "server/prisma/migrations/20260316150000_add_route_assignments/migration.sql",
+      "sha256": "20E46481A545F0C530C0DBA033714B65AB85891CD78BB1751F957C55E75C5C68"
+    },
+    {
+      "path": "server/prisma/migrations/20260318152522_add_payment_model/migration.sql",
+      "sha256": "BC9DA98F99A942D436426AF94F4E3C9EF29FC88F55417798AEB3F89669DE4DFD"
+    },
+    {
+      "path": "server/prisma/migrations/20260318212646_add_payment_company_signature/migration.sql",
+      "sha256": "843EDD2D7646E34A5DCB73F4D265F3505F800FF07809F139ECA33E31F637D429"
+    },
+    {
+      "path": "server/prisma/migrations/20260324144630_add_open_ticket_billing_fields/migration.sql",
+      "sha256": "B004B90DFA2703F43AF2E6E8DC0A460C24D085856C9E09C99FA682B8A598257C"
+    },
+    {
+      "path": "server/prisma/migrations/20260325192516_add_signature_requests/migration.sql",
+      "sha256": "5778B495F81A243336C8A90DBF0822712D7076359BC9648291711BA95463F665"
+    },
+    {
+      "path": "server/prisma/migrations/20260326191956_remove_adobe_sign_fields/migration.sql",
+      "sha256": "EB803B7908AFAD0FF101CEE42A7542A483B99EA7B6A25F56A31C58164487DA55"
+    },
+    {
+      "path": "server/prisma/migrations/20260326193000_add_signature_fields_to_billing_profile/migration.sql",
+      "sha256": "5D7B27D6037857195384D6CA9629C4635334285C637CB65869CE9BDBC5113D60"
+    },
+    {
+      "path": "server/prisma/migrations/20260326194500_add_additional_data_fields_to_billing_profile/migration.sql",
+      "sha256": "80B62D2A133491AEE9F662E8AC9A36EBD1BA1E61B113C930086FB69B8B859239"
+    },
+    {
+      "path": "server/prisma/migrations/20260330120000_rename_saccharin_to_isoamyl_acetate/migration.sql",
+      "sha256": "C17339BD70390460D5195E2083DC9290407E8CA0E26578111A500D9A8F7CD847"
+    },
+    {
+      "path": "server/prisma/migrations/20260330130000_add_enverus_customer_uuid_and_buyer_field_rules/migration.sql",
+      "sha256": "D8DB61C81A26E59073010B439A37CEBC9FA0A31243EC1E7C60807FA869721A88"
+    },
+    {
+      "path": "server/prisma/migrations/20260331120000_add_rental_billing_toggles/migration.sql",
+      "sha256": "A5625DB6E3F875702A8494083049407FAEA7F1488CFFC16EB3FD84516F040ED5"
+    },
+    {
+      "path": "server/prisma/migrations/20260403120000_add_safe_core_serial/migration.sql",
+      "sha256": "5659AD911A4E6BF205F008198C9E671A91D6333F5FEB4354671F5A952F7D2968"
+    },
+    {
+      "path": "server/prisma/migrations/20260417120000_add_dashboard_widgets/migration.sql",
+      "sha256": "AF030BA740A82E4CEE8178F4A63631E02B8CC82ADB91A219455CFC97CD7B14E4"
+    },
+    {
+      "path": "server/prisma/migrations/20260423120000_add_ticket_division_class/migration.sql",
+      "sha256": "8FEEEEFB104F05B8C514D1D826FA5D178103FEDFD618B31DC5633AFC4F47951E"
+    },
+    {
+      "path": "server/prisma/migrations/20260424120000_catchup_supervisor_review_and_travel_linetype/migration.sql",
+      "sha256": "35279FC96E8B3CA1A296DF8066DE5936CD89FDFA1BBD9A65C64762747773AFB4"
+    },
+    {
+      "path": "server/prisma/migrations/20260424130000_catchup_awaiting_signature_enum/migration.sql",
+      "sha256": "B2BF6157F747A670922E4838C2C18725743536EE22BA1C765B29CA90310645E3"
+    },
+    {
+      "path": "server/prisma/migrations/20260424140000_catchup_fit_test_method_enum/migration.sql",
+      "sha256": "4E94EA70FADC748B4A79C6547A3C2138DFACD8720752F17F4CFF34272ADF9D36"
+    },
+    {
+      "path": "server/prisma/migrations/20260427120000_add_phase_b_service_subtypes/migration.sql",
+      "sha256": "4FA6CD67F92953AAA1C398C7084EA88D9D706637735F398828DCC95214228883"
+    },
+    {
+      "path": "server/prisma/migrations/20260427130000_add_gas_detection_records/migration.sql",
+      "sha256": "C9C53AF7F3EFA66EA7323F08CA00C0550AE9D1710D859508E31E5B6E69F30027"
+    },
+    {
+      "path": "server/prisma/migrations/20260428120000_add_scheduled_rental_status/migration.sql",
+      "sha256": "20B2F1AE4EF0702398C955B9C1A62B837D4080C0AB4719CEFE46B3A8B3578AC7"
+    },
+    {
+      "path": "server/prisma/migrations/20260506120000_add_pad_tier1/migration.sql",
+      "sha256": "AAFE65D0371450D0B89F6A876DAFDF54132F914069A6B2ABE6020D52A67EA61E"
+    },
+    {
+      "path": "server/prisma/migrations/20260506130000_drop_company_is_tier1/migration.sql",
+      "sha256": "D8AA09A23D9031E53C9833F8DC8D9ABBD02A9787A0EAE183615F63BA2314D7F5"
+    },
+    {
+      "path": "server/prisma/migrations/20260506140000_add_job_runs/migration.sql",
+      "sha256": "65ADFB9566794F7BEB4029368D63812F001CE7E4ABCD453C693A35470EC75A60"
+    },
+    {
+      "path": "server/prisma/migrations/20260506150000_enverus_lifecycle_tracking/migration.sql",
+      "sha256": "1D382323908AC3BA04DF11F18BB5FF8E41D1C943DD8E315AE8210E89B19F7AE7"
+    },
+    {
+      "path": "server/prisma/migrations/20260506160000_invoice_qb_diff_fields/migration.sql",
+      "sha256": "EBF127BF08F25125B1B2FCBA251F6F7A11FC3FC3D28F53C2CDB079ACA14DD4FD"
+    },
+    {
+      "path": "server/prisma/migrations/20260506170000_billing_rules_5a/migration.sql",
+      "sha256": "A6783B05C39E0965785ED4882BA89BFBD6B261765E5B268CE79F0813B3CA3FEE"
+    },
+    {
+      "path": "server/prisma/migrations/20260506180000_price_levels/migration.sql",
+      "sha256": "D1F0150C2EC39DF543219ED8AC4B4465FD9A3BA74C9F8B6EC7EC7454C29F0788"
+    },
+    {
+      "path": "server/prisma/migrations/20260506190000_ticket_source_shop_wo/migration.sql",
+      "sha256": "C89393D11DFB4B2D78D5BE291DC1CCE54A552A4F2F4CF7EFE0EC1C3381E2D9AD"
+    },
+    {
+      "path": "server/prisma/migrations/20260507100000_company_qb_price_level/migration.sql",
+      "sha256": "FB882E809949D552EEC0357F5D5E75FFCC71F27AEDA0BDD2060C6D09836011D8"
+    },
+    {
+      "path": "server/prisma/migrations/20260507120000_shop_wo_contact_persons/migration.sql",
+      "sha256": "20EE23DC899269A15765C93BF8ABDC583876F9D685767FC7FD099ED02F43181F"
+    },
+    {
+      "path": "server/prisma/migrations/20260507150000_rental_pickup_type/migration.sql",
+      "sha256": "C0F0196DE19CB35D003B516760613E1E94BEAD526026B808502642A0C66BF24D"
+    },
+    {
+      "path": "server/prisma/migrations/20260508190100_equipment_inspection/migration.sql",
+      "sha256": "26D06D5EE14B90DF5368E457AA6104C253F6CC71223C4850FABABABD4224362C"
+    },
+    {
+      "path": "server/prisma/migrations/20260508210000_shop_origin_and_transfers/migration.sql",
+      "sha256": "B2A1CAF41B8C6B16912D1C61D5B1048F0C48D1C834ABBF7FBF512879A0A78965"
+    },
+    {
+      "path": "server/prisma/migrations/20260515120000_add_customer_portal_role/migration.sql",
+      "sha256": "2C39079E1ECB9F058BA22F99BBD8947F1D331CEBC58A3F31296BFD25C25EFB7C"
+    },
+    {
+      "path": "server/prisma/migrations/20260518120000_sites_foundation/migration.sql",
+      "sha256": "AA0E1356A6064699C06B190CE93A687E9B4EA186759A5E37FE4C2EB601421D32"
+    },
+    {
+      "path": "server/prisma/migrations/20260518130000_label_printing/migration.sql",
+      "sha256": "0BED9C98FAFBD51E674B4F90799A9BEDFCC139B549EA3203962EA4CDC084A9A9"
+    },
+    {
+      "path": "server/prisma/migrations/20260518140000_kiosks_board_config/migration.sql",
+      "sha256": "C757C5A06910AAFB94AB0799090997EBA5B3CBFABD10F4AF2D1559B69A8884E6"
+    },
+    {
+      "path": "server/prisma/migrations/20260518150000_unify_shop_site/migration.sql",
+      "sha256": "AC9AED1BD08DC873AD05BE6411CC1E7A14E25F0CF9AE4CAEB33EE248041554F3"
+    },
+    {
+      "path": "server/prisma/migrations/20260519100000_shop_transfer_two_phase/migration.sql",
+      "sha256": "EB96359CA796A6E8692D3738F90E92D18A43BF12C7F50B98412260D04DC72202"
+    },
+    {
+      "path": "server/prisma/migrations/20260519120000_label_template_2x2/migration.sql",
+      "sha256": "61AD6B1A8D60B903096F022058B163B5004DC3FC03A518D430621659B82AED7E"
+    },
+    {
+      "path": "server/prisma/migrations/20260522120000_add_bluelion_training_sync/migration.sql",
+      "sha256": "6804615A6774FA4921E0F9A0F899BAEADEA6AFBD298BB0BB965E8BFF2CB124AE"
+    },
+    {
+      "path": "server/prisma/migrations/20260526120000_add_bug_reports/migration.sql",
+      "sha256": "3FA695DA1BD1535EA2675766EC7272F30BACA1A7D66ACA251101491BA20BD5E2"
+    },
+    {
+      "path": "server/prisma/migrations/20260528120000_shop_transfer_per_item/migration.sql",
+      "sha256": "5E9F54884894165606A62F6B55C6EC107FFC6CEA47BD72CE5132B1F9AA1C0A25"
+    },
+    {
+      "path": "server/prisma/migrations/20260529120000_label_template_fields/migration.sql",
+      "sha256": "F7F619D4C1D8C6BA21D3DA1B761817C08C90DF9EC435C7B9F162E592A5369C37"
+    },
+    {
+      "path": "server/prisma/migrations/20260601120000_rental_pics/migration.sql",
+      "sha256": "4742A6B76742F00BA1B74AC7291D834AC88CC4F9F6E55C7EB25FECDB13DC1F32"
+    },
+    {
+      "path": "server/prisma/migrations/20260601120100_add_ticket_billing_refs/migration.sql",
+      "sha256": "C0AAC5A8621110C42899E2936B46BEDD137668A59E683A7B932083D873A0FD4F"
+    },
+    {
+      "path": "server/prisma/migrations/20260601120200_add_profile_jobtype_scope/migration.sql",
+      "sha256": "87F029DDB7D1817DA93414F3FDDF5DAE6C8BF7E278B42F8457DE6C0E72EEFA24"
+    },
+    {
+      "path": "server/prisma/migrations/20260602120000_label_fill_service_contact/migration.sql",
+      "sha256": "A930A75A461F9CFC32E0FD1397B6975FEE7A51F53423566CA1D8EB9F5669CA3C"
+    },
+    {
+      "path": "server/prisma/migrations/20260602120100_rental_composition/migration.sql",
+      "sha256": "04FF02F0F5F61B8ACCA8DC2C21804EB20B059E797E6C9F721C62AB10813C0AAB"
+    },
+    {
+      "path": "server/prisma/migrations/20260602120200_shop_contact_log/migration.sql",
+      "sha256": "0578F69B550D1C17FE44902B3E2AD14AA45AC679CE75E1B9673AE74383C1DCAD"
+    },
+    {
+      "path": "server/prisma/migrations/20260602120300_retire_warranty_out_status/migration.sql",
+      "sha256": "A75FB40F5B380D1E8F75F75CF0FB712253BED54DFD2B9B4FAEE0814BA0BC9734"
+    },
+    {
+      "path": "server/prisma/migrations/20260602130000_equipment_condemn_fields/migration.sql",
+      "sha256": "7466C30674054C8BFC11C67223014B810052977912CAB1E241235C4190120B49"
+    },
+    {
+      "path": "server/prisma/migrations/20260603120000_add_board_column_colors/migration.sql",
+      "sha256": "70E28BFBA85E3D32CE01428CBC23F4317AD88B2664B9FF16AA1A5DDF274C83EC"
+    },
+    {
+      "path": "server/prisma/migrations/20260603160000_dmr_norm_name_indexes/migration.sql",
+      "sha256": "41A744F841DA3C635027F3F84A16B35A4A10FBC0753232DC20ECBA4F055813A3"
+    },
+    {
+      "path": "server/prisma/migrations/20260605120000_label_zd411_300dpi/migration.sql",
+      "sha256": "807DD88A7203AE9CF896EC3213DDD76F187B4AC8455C168E11A329348A61CA99"
+    },
+    {
+      "path": "server/prisma/migrations/20260610090000_fit_test_class_meq_mask/migration.sql",
+      "sha256": "E3B05E824AB3393C109404B4CD452729AB5DD16FCF6A3C1EE7EF89133CC215CE"
+    },
+    {
+      "path": "server/prisma/migrations/20260610120000_rental_item_deploy_inspection/migration.sql",
+      "sha256": "30A949639E55F199C5A79AAF82DB30BF60B5EB278441617574476448C4017A04"
+    },
+    {
+      "path": "server/prisma/migrations/20260610150000_occ_health/migration.sql",
+      "sha256": "3E03D10CDB00F120A3E5EFD051C13FE8DDE76FE55433EB98D0EA1ECD750E6289"
+    },
+    {
+      "path": "server/prisma/migrations/20260610170000_training_signin/migration.sql",
+      "sha256": "46059E07F0F7AF7EBE54620D4B62CEF935E6C3FC743ED125BD076782D09A1092"
+    },
+    {
+      "path": "server/prisma/migrations/20260611120000_bluelion_occ_health_sync/migration.sql",
+      "sha256": "11F22CBDAFFC9D25660F00941440FBD3406FB80393A20546DD5A1CE3265502FA"
+    },
+    {
+      "path": "server/prisma/migrations/20260611130000_add_facility_code/migration.sql",
+      "sha256": "7075E32FF62779A90A6B2A68B58C5213D20A43453107322554B69D4253C8A378"
+    },
+    {
+      "path": "server/prisma/migrations/20260612120000_invoice_sales_tax/migration.sql",
+      "sha256": "3448D89E2573B12F496F7BCF8704A3B4549468F038A6C7AAC5C7F175FE49FF8E"
+    },
+    {
+      "path": "server/prisma/migrations/20260612140000_site_sales_tax_jurisdiction/migration.sql",
+      "sha256": "973F6641ED716CFE3511FD55365E90BECAF68494FE6C3F17D3A3C30A98386274"
+    },
+    {
+      "path": "server/prisma/migrations/20260612160000_add_company_cash_cc_only/migration.sql",
+      "sha256": "8BCA37DD2777DF0BE14E0FB2AD9D0EDA6D72015BDE66092846C682A2B0D6DF01"
+    },
+    {
+      "path": "server/prisma/migrations/20260612170000_add_condemned_shop_item_status/migration.sql",
+      "sha256": "42CDF6EED99986A4373B28EF35A22B21F1185C323BD4F63A7B2685E22D45E854"
+    },
+    {
+      "path": "server/prisma/migrations/20260615120000_shop_item_billing_ledger/migration.sql",
+      "sha256": "0E0513DA004AC18CB6F5DC7A8BF53023D0F7FEF5B022C212CE102D6AC4BB6E09"
+    },
+    {
+      "path": "server/prisma/migrations/20260615130000_bluelion_inspection_entity/migration.sql",
+      "sha256": "61469E90A36C3F971B8BE7DB6AE5BBDDDE24A2D896F6919CC9BA4C956872C089"
+    },
+    {
+      "path": "server/prisma/migrations/20260615170000_billing_profile_relabeled_line_fields/migration.sql",
+      "sha256": "90EF1CCF60976C5469D5FBA4305B5A84545D9D23A3D8F85AB6AAB8AD0F32C90F"
+    },
+    {
+      "path": "server/prisma/migrations/20260617190000_add_payment_direct_sale_tax/migration.sql",
+      "sha256": "69194EFAC98EDE97BA6755EFC88F8EA10FCA9223062DFE216C0577039A456D70"
+    },
+    {
+      "path": "server/prisma/migrations/20260618120000_shop_transfer_transported_by/migration.sql",
+      "sha256": "DB19741FC13DB94EB2A8B6735551C4F7A69A9A0B633FC0B4939E9AA9EC937A58"
+    },
+    {
+      "path": "server/prisma/migrations/20260618120100_equipment_inspection_attachments/migration.sql",
+      "sha256": "F481A5F4064089A08D6E54FFECCC82FEC1CAAB1358CA33D92A45168FF7BFA66F"
+    },
+    {
+      "path": "server/prisma/migrations/20260618120200_rental_well_ids/migration.sql",
+      "sha256": "FD19032C42CC35DFF2D7C079C47BCC7E1D497DCD4B514749EBB4C9D9571642C8"
+    },
+    {
+      "path": "server/prisma/migrations/20260618130000_ticket_void_status/migration.sql",
+      "sha256": "3FEDCA87FAFBA322DCD66FC708FAE40D2B8A5351876C04198B2692D69947BF68"
+    },
+    {
+      "path": "server/prisma/migrations/20260619120000_add_field_inspection_subtype/migration.sql",
+      "sha256": "2046D73AD95F156E79632786C4FD8348E193F33E6ADDE0D919F1BA9CF4BB0E13"
+    },
+    {
+      "path": "server/prisma/migrations/20260622120000_add_d6_division/migration.sql",
+      "sha256": "00F1680C07F3D63E5A5A9AF8BAE3C95D36E78518F5FCEB0F69692BE9C5FB2E2B"
+    },
+    {
+      "path": "server/prisma/migrations/20260624120000_add_permission_config/migration.sql",
+      "sha256": "4EFCF3DF211E1C73406CA8D9127FF5A1A7D760E6F7023BBD615773D676A7880C"
+    },
+    {
+      "path": "server/prisma/migrations/20260624130000_add_company_qb_uses_sales_order/migration.sql",
+      "sha256": "2641D6B50D10A06D628E0FFAE4BB4AEE289B4677EF8C6FC01CD4E424DD234683"
+    },
+    {
+      "path": "server/prisma/migrations/20260629120000_add_qb_sales_tax_sync/migration.sql",
+      "sha256": "7F111B729F0598BBD673334CD8476BB69BA367517F7EDDCE317DE2708B7F409B"
+    },
+    {
+      "path": "server/prisma/migrations/20260701120000_shop_billing_chunk/migration.sql",
+      "sha256": "9878CB4FAE8B6F1F6AF6139E5E9DA5FFB12F7E9A99FC5903F2DA5893F3B91F98"
+    },
+    {
+      "path": "server/prisma/migrations/20260701120000_shop_wo_tier1/migration.sql",
+      "sha256": "F1C46F4DFED4B3981B5F9C0BBC045E30BA171A3A5AE450B125961FBD108A9071"
+    },
+    {
+      "path": "server/prisma/migrations/20260702120000_customer_rental_bom/migration.sql",
+      "sha256": "84E6ABFD0924A7DAB5603F7D5693CA4BD9579333C4B572155E00107DC7653743"
+    },
+    {
+      "path": "server/prisma/migrations/20260707120000_kiosk_idle_logout/migration.sql",
+      "sha256": "B8EE96B969968D5F73447615F117C8E0018DF3C5499AE55467EFF4022CDEAE99"
+    },
+    {
+      "path": "server/prisma/migrations/20260708120000_bluelion_cards_assets_api_keys/migration.sql",
+      "sha256": "5270FD8ADDC1894F2C9A0E76CCFF19E9FF29C4C8506CC0B5B56E4BAF8517E5A8"
+    },
+    {
+      "path": "server/prisma/migrations/20260709090000_fit_test_student_no/migration.sql",
+      "sha256": "0CE11E6F5E6EC93A3E4D90E7223F4FEC40E65C6940053E0C19B9B0F1C855BC42"
+    },
+    {
+      "path": "server/prisma/migrations/20260709120000_label_item_serial_parentline/migration.sql",
+      "sha256": "B966F93906F855FEBF6A4137407CF31B70125EC00A2FDD494AFF855655578D53"
+    },
+    {
+      "path": "server/prisma/migrations/20260709130000_classpro_course_catalog/migration.sql",
+      "sha256": "A82E6EC69268BCB09B2219DBACAC467C2F89706C50DA2BCA0A1B63295828A43B"
+    },
+    {
+      "path": "server/prisma/migrations/20260709160000_classpro_locations_trainers/migration.sql",
+      "sha256": "8627B6B8ED8C9B8B0F626A21B468CD0439914F5D9B4A1F64C5B517A17F9A671B"
+    },
+    {
+      "path": "server/prisma/migrations/20260709170000_add_training_roles/migration.sql",
+      "sha256": "DE91F66D9E87904B00AC44104F527AAE0E7380BE3802737947112DA7BED217D0"
+    },
+    {
+      "path": "server/prisma/migrations/20260709170100_seed_training_role_mappings/migration.sql",
+      "sha256": "B59915864C0F07B9588683639A1C774B0966B87E102BFE7EA60ECB6CB6E99C1B"
+    },
+    {
+      "path": "server/prisma/migrations/20260710120000_classpro_sessions/migration.sql",
+      "sha256": "47F3FFD94EAD72B11B23F180A6D019D07BB60EF4838291F4248FD5C9EF1D370D"
+    },
+    {
+      "path": "server/prisma/migrations/20260710130000_classpro_gcal_event_id/migration.sql",
+      "sha256": "DBAEB4AB321BD321C46DF49FEF00A7DA686A8065019557F46CB42566848ECCCC"
+    },
+    {
+      "path": "server/prisma/migrations/20260710150000_classpro_wave4_roster_push/migration.sql",
+      "sha256": "6155615B34AA4B31E9BAF0C55239AE125B9AAB3EED664B15DE1F1E2A8C1DC97D"
+    },
+    {
+      "path": "server/prisma/migrations/20260713120000_product_division_facets/migration.sql",
+      "sha256": "6565BB80205F1EBA9E2FA3CA66342694C2BA97F1335FCF4AA2E3513057F36DED"
+    },
+    {
+      "path": "server/prisma/migrations/20260714120000_kiosk_training_role/migration.sql",
+      "sha256": "F13D8AA033D1708210B4AF0250A61F96102FB5562802C5340209DE6DED3C9CC6"
+    },
+    {
+      "path": "server/prisma/migrations/20260722130000_user_notification_prefs/migration.sql",
+      "sha256": "CBC81A44CFB7B92C68D185F321AC8EEE96CA2CD6077B868532A36B96FD6DD1FC"
+    },
+    {
+      "path": "server/prisma/migrations/20260723120000_well_pad_field_optional/migration.sql",
+      "sha256": "228C1A45A9CBE82846D0111738E8118ABB1F93138EA5F2FECC76E770086547FB"
+    },
+    {
+      "path": "server/prisma/migrations/20260723140000_rental_billing_cadence/migration.sql",
+      "sha256": "DA8CA7EB48FA05D39A80D7916FF1C700D853F5B0A4C807AE92701D3D4614924A"
+    },
+    {
+      "path": "server/prisma/migrations/20260727120000_pad_asset_category/migration.sql",
+      "sha256": "97EE494762370C3D274A78E99133E72E3A3011EF3535C975FFEAB220D59DB9AF"
+    },
+    {
+      "path": "server/prisma/migrations/20260727130000_pad_facility_categories/migration.sql",
+      "sha256": "461DE8937F0AD057B44AEC2DAB133E9E2D281D71979E33179A82DEFF57B058B6"
+    },
+    {
+      "path": "server/prisma/migrations/20260727140000_well_asset_category/migration.sql",
+      "sha256": "23A8B18F2587D18683A9D4EA559D639CAF580C721E618E6249C7893FE1819A7B"
+    },
+    {
+      "path": "server/prisma/migrations/20260729100000_mobile_assets_thin_rig_air_trailer/migration.sql",
+      "sha256": "C3E1FF525C9C952D3FC6467715B1966F6EFFD17C93FFB82CF8FEB99825D862E5"
+    },
+    {
+      "path": "server/prisma/migrations/20260806120000_billing_lineage_schema/migration.sql",
+      "sha256": "549DB6D600FFCF9C1A1F82F3AEA2D4D5D228E33000BF64C755620B16444D1681"
+    },
+    {
+      "path": "server/prisma/migrations/20260814190000_equipment_assigned_serial_seq/migration.sql",
+      "sha256": "A85CE0E4B32AED5502E139EE5A59D241683A7A339284808F8D00C42D0CE85182"
+    },
+    {
+      "path": "server/prisma/migrations/20260814200000_equipment_documents/migration.sql",
+      "sha256": "ED100D5AF94652590345C36D5BCD412E183AD2694EA79FE35924EE622FEB758C"
+    },
+    {
+      "path": "server/prisma/migrations/20260820120000_company_credit_hold/migration.sql",
+      "sha256": "A1AAF5F5B311888C08AFCD6B75CCA7BC1F722FB876E8B2B507D90E85866D4823"
+    },
+    {
+      "path": "server/prisma/migrations/20260825160000_service_division_full_qb_class_list/migration.sql",
+      "sha256": "93ADD89C079C97A81205CEA515DF44E6CB631EBBD934A19D74369629F9BC753B"
+    },
+    {
+      "path": "server/prisma/migrations/20260826120000_rental_bom_product_binding/migration.sql",
+      "sha256": "DF20908F9EC4E512F10370888678EB9F655F6DD6CE2559683C983E2843CB74A7"
+    },
+    {
+      "path": "server/prisma/migrations/20260828120000_shop_on_hold_reason/migration.sql",
+      "sha256": "4C69AD60182AC070CA7B908F347CD26458CE477882A21212BDDB4FF909D6E070"
+    },
+    {
+      "path": "server/prisma/migrations/20260828140000_unified_attachments/migration.sql",
+      "sha256": "FC8BAF59F1FC7436A342D67E7008FFFADFF45EA6FBCB9F704901B7851307F00D"
+    },
+    {
+      "path": "server/prisma/migrations/20260828160000_attachment_vault_push/migration.sql",
+      "sha256": "A7A05F1F4E24141A410BF1D0F8A48CBD7F27ACD799709C53B6A846DC94AD7919"
+    },
+    {
+      "path": "server/prisma/migrations/20260828180000_novara_equipment_sync/migration.sql",
+      "sha256": "C94C799BBBCE4CAE3A73A86808F5E0670F5515EFD034E85D7C1C0C693AF7DA7B"
+    },
+    {
+      "path": "server/prisma/migrations/20260828180000_shop_unit_soft_close/migration.sql",
+      "sha256": "DC5FA7DF4DA6B77AE9587ECEE5AF0E3FBA79B29ABDB568B0511B5CDB0029DC63"
+    },
+    {
+      "path": "server/prisma/migrations/20260831120000_shop_batch_qa/migration.sql",
+      "sha256": "6E47A6509A9E53DF03863D8E15B101C038E7BA3F8E3A3B32E9FAE85AA406E57F"
+    },
+    {
+      "path": "server/prisma/migrations/20260831160000_shop_vendor_receive/migration.sql",
+      "sha256": "C5FD1DF16D31D93CE5357D6D38B38F7B9DFF53CCE394266DB8C9D30BCF4F972B"
+    },
+    {
+      "path": "server/prisma/migrations/20260831190000_shop_contact_log/migration.sql",
+      "sha256": "72434AAB049DD0577A685B4D70F86F08B2A9A5E5FE6B9BE510BDE2B8A52F0AF9"
+    },
+    {
+      "path": "server/prisma/migrations/20260831210000_paid_at_drop/migration.sql",
+      "sha256": "1750B7FA030D9C70B471AEE70F25D30D65A99E2CDB882F80B1B0790614235220"
+    },
+    {
+      "path": "server/prisma/migrations/20260901120000_kiosk_inhouse_role/migration.sql",
+      "sha256": "B8906F96878B6E10BBB70BF5F99F7764760EA8DFC100AD5496F2304CD7F2D06E"
+    },
+    {
+      "path": "server/prisma/migrations/20260902120000_shop_transit_failure_visibility/migration.sql",
+      "sha256": "664ADB45AE8096EC33687E690F150BFE3117CC75E7A58906574F80C5A2958B68"
+    },
+    {
+      "path": "server/prisma/migrations/20260903120000_backfill_ticket_assigned_tech/migration.sql",
+      "sha256": "17F2229D0A7460D95BBD444776BA278D5C4FF70EAB885C30B34C678D3E5B0318"
+    },
+    {
+      "path": "server/prisma/migrations/20260908120000_well_tier1/migration.sql",
+      "sha256": "28A6F8D1D2BB9CBFCC70713A2F5DFD7C014C1F0BD730C6EB541C1D46837E3CE1"
+    },
+    {
+      "path": "server/prisma/migrations/20260908150000_fbir_well_names_from_dmr/migration.sql",
+      "sha256": "85321195E341EBCB4467A6F2B0346FF2B2C1C802123C17A973AD062C7E2AADA6"
+    },
+    {
+      "path": "server/prisma/migrations/20260908180000_rentals_board_kiosk/migration.sql",
+      "sha256": "EB4EBF354CCDCAAAF1E3583D78BC82A33BF9EEB301605EDC730B0205054E2B77"
+    },
+    {
+      "path": "server/prisma/migrations/20260909120000_payment_cc_fee_amount/migration.sql",
+      "sha256": "139D65096772B87967AC590ECB6C499D6BF9264944BD04BB9FCA4F5E674A0D42"
+    },
+    {
+      "path": "server/prisma/migrations/20260910120000_rental_package_types/migration.sql",
+      "sha256": "FA756B023D3861EE0EBE36CF7BBECA3B81A4F89E5C5086E788BF7CB2996B6278"
+    },
+    {
+      "path": "server/prisma/migrations/20260916120000_vendor_return_documents/migration.sql",
+      "sha256": "2602C8906CE5BCA2BC664DD21E5C38CFF37C8E850183D80868ABA1803F08B40A"
+    },
+    {
+      "path": "server/prisma/nuke-transactional.ts",
+      "sha256": "4A6FB5ABF5575D60E38D55F0C0BDB095D0D3A15D57808FFBE062729DB2C13FFE"
+    },
+    {
+      "path": "server/prisma/schema.prisma",
+      "sha256": "35AC84BFD18945CE5EB8F60BAAAA620835C35822DD137AD73300D29060E7970E"
+    },
+    {
+      "path": "server/prisma/seed-billing-profiles.sql",
+      "sha256": "2F2940203F2394820CDC4C7FCA0C696EF93D09A1AE523D6DBFC2C1C0F9404E07"
+    },
+    {
+      "path": "server/prisma/seed.ts",
+      "sha256": "646D8E8C23B939D64AD3A876902A2A5240C6B99D94993A95308B9657851511C4"
+    },
+    {
+      "path": "server/scripts/_archive/auto-clean-pads.ts",
+      "sha256": "DF58EC76050DD95D9163595AFA253F858EF171BA5464FAC6527BBB88685D949A"
+    },
+    {
+      "path": "server/scripts/_archive/check-air-systems.ts",
+      "sha256": "FA5E9FAA994C882CDE363BF0EDEA658A0AADDE681D6339D0F47559EAFB664024"
+    },
+    {
+      "path": "server/scripts/_archive/check-air-wells.ts",
+      "sha256": "A156446348FE4082D402644688D37903142FDEAC3B51523D91DE54FF22D0B333"
+    },
+    {
+      "path": "server/scripts/_archive/check-company-match.ts",
+      "sha256": "FD2667CA79C9A0E25D61CEB943B98C39715179C4F0014BC1AF5C3BF8A4E2CC9C"
+    },
+    {
+      "path": "server/scripts/_archive/check-conoco-dupes.ts",
+      "sha256": "9D5022CCF1BCC4EBE3F3CFE6F3E97FBC94F1A08EA7B35E880A9BC22AD6325134"
+    },
+    {
+      "path": "server/scripts/_archive/check-dmr.ts",
+      "sha256": "06F91AAE7E39D0E425EB3B98D2623001DC3680063254F46D3CA2600FC64771D6"
+    },
+    {
+      "path": "server/scripts/_archive/check-invoice-xml.ts",
+      "sha256": "FFC67C73F6BB35A3FD7318DEA8D2BD5EB6EC7A1FE501080E305CB762F893591A"
+    },
+    {
+      "path": "server/scripts/_archive/check-invoice.ts",
+      "sha256": "D68EF4907B97A189DAF64804F20F0A97010681355E3401008337C9C611F9F53A"
+    },
+    {
+      "path": "server/scripts/_archive/check-locations.ts",
+      "sha256": "8797DBB428E75F83DD69571A5D587398A4E54B442A6A6565454D3E961EAF38E0"
+    },
+    {
+      "path": "server/scripts/_archive/check-orphans.ts",
+      "sha256": "840BA3374146CCF03E2B4609D6CAD17A0825F8403BB0947F68340D135DB5A1C6"
+    },
+    {
+      "path": "server/scripts/_archive/check-pad-operators.ts",
+      "sha256": "452F304BC5450FF2EC30879875980FCCD5AAC83C0EB2505FA863CBCAF149A814"
+    },
+    {
+      "path": "server/scripts/_archive/check-pad-quality.ts",
+      "sha256": "02521896CEE7C7A3B7EF10A42D17153329405D9A3022F7786466F235F6D7D624"
+    },
+    {
+      "path": "server/scripts/_archive/check-pad2.ts",
+      "sha256": "2FB34DC12200F4A7CE393BCBFC1AB196AEF65EF0A43447FDA934AEAC7C233C17"
+    },
+    {
+      "path": "server/scripts/_archive/check-qb-mappings.ts",
+      "sha256": "344D6031D9C6DB2EBC5D90C05C27E93AD754B9541CD09E32BF8D864A92708580"
+    },
+    {
+      "path": "server/scripts/_archive/check-qb-queue.ts",
+      "sha256": "CA82F2A9ABEE996D2105286A1E86C2AB8A65C31E919E0FFA3FAF41C29A318580"
+    },
+    {
+      "path": "server/scripts/_archive/check-qb-state.ts",
+      "sha256": "5FD5B19F2776D1C556EE3CFEB337B00279C08C27752EBBE4FBBF060D1F705D4C"
+    },
+    {
+      "path": "server/scripts/_archive/check-rental-products.ts",
+      "sha256": "CA5FF417F92B28EF55201ECEB7C79C19E5EE84DB31AB8707C59EA9292FB90D22"
+    },
+    {
+      "path": "server/scripts/_archive/check-wp-only-pads.ts",
+      "sha256": "0B5E02728E0855C77A74FA125C3F0CD93181F6A34F18BD3447FBA35ACB3BFF9F"
+    },
+    {
+      "path": "server/scripts/_archive/cleanup-final.ts",
+      "sha256": "0785E6EE585805C8B4CE2F59A8E3CC27727A23B92C6643F517A1531741B217DF"
+    },
+    {
+      "path": "server/scripts/_archive/cleanup-orphans.ts",
+      "sha256": "D790A83497E35A72334AEF76578F07541162FFA9D4A4D1C4290862F187451187"
+    },
+    {
+      "path": "server/scripts/_archive/clear-qb-errors.ts",
+      "sha256": "34BA5AB5FA1BA5356E151D9094DB2380B0B4444137D939A3C1E9A9BA8BC0BE32"
+    },
+    {
+      "path": "server/scripts/_archive/clear-qb-loop.ts",
+      "sha256": "CE6DB44372A5BA09B7BDDB99CBD2472DE639C0BAF5CBB38B580759295AA591A4"
+    },
+    {
+      "path": "server/scripts/_archive/clear-seeds.ts",
+      "sha256": "F24EF0CB145D35B2BBBB1B921C8FFDFED1605A86C82FEDE7FA45FFA58B0A1536"
+    },
+    {
+      "path": "server/scripts/_archive/clear-user-data.ts",
+      "sha256": "A2C665FB84528DEBE9F01CD1A483D691EAF47BCEECBB60413C7BCA5ABC6D6D61"
+    },
+    {
+      "path": "server/scripts/_archive/count-all.ts",
+      "sha256": "DB5E6911DA1BB1D1D4792B2EF91DE1CC255EBBEEA7965BD3EA716181A6F269AB"
+    },
+    {
+      "path": "server/scripts/_archive/create-test-so.ts",
+      "sha256": "D63FE5E27F1E80568D0BE204132E230BCD3AE9637486CE32F955F1A94DD23BBB"
+    },
+    {
+      "path": "server/scripts/_archive/debug-all-invoices.ts",
+      "sha256": "3DFEF7AE0686923DF8D33769A44FEBC691C55639DBE825E8D5327DC455A6ADF4"
+    },
+    {
+      "path": "server/scripts/_archive/debug-inv-003.ts",
+      "sha256": "1F520CE302CC8B411D75BA6714A056207BC827CBF4AEFD628E4224B3918AAAFC"
+    },
+    {
+      "path": "server/scripts/_archive/debug-invoice-lines.ts",
+      "sha256": "1DFC7AFF52C109CF9DDE4C157BB6D069A9609C47424F9957F94A668D737EEB3C"
+    },
+    {
+      "path": "server/scripts/_archive/dedup-conoco-pads.ts",
+      "sha256": "E3D87FA4459508813C23EE8DFAD9303F08F0D951872C0B04DAFA21B019427629"
+    },
+    {
+      "path": "server/scripts/_archive/dump-enverus-all.ts",
+      "sha256": "EC726E2E99605DDF78D740E3E86B86DF2E536E7F6E840F1A22A03F4C95863F44"
+    },
+    {
+      "path": "server/scripts/_archive/dump-enverus-log.ts",
+      "sha256": "E64059E5D046792A4F2A12DB588B37B6299FA1624C7A5BF59CD8F8281CA46FF8"
+    },
+    {
+      "path": "server/scripts/_archive/dump-queue-entry.ts",
+      "sha256": "D4D330CD93AA3EFAD9D69DFC16A47C491CE753455AFBEDCD3B51A8B3283C633A"
+    },
+    {
+      "path": "server/scripts/_archive/find-companies.ts",
+      "sha256": "ECED8ADF95BAFB242CD3EC6B8214851C9F63FAE566B8235018A7940014834004"
+    },
+    {
+      "path": "server/scripts/_archive/find-conoco-chord.ts",
+      "sha256": "DD7D1AD4FD98B183A175C092C7A2B6A0ADAB014585A3AC76408FD269E8527104"
+    },
+    {
+      "path": "server/scripts/_archive/find-demo-wells.ts",
+      "sha256": "65BF8A3FE6B6F3C80408969144D5133F7B34782CD4CD7A52DE1AD0AA8B4096BD"
+    },
+    {
+      "path": "server/scripts/_archive/find-fit-test-qb.ts",
+      "sha256": "2E4191AE3015C962A037DBFDA225F21956A241620C3D0521E06601E27B5D25A0"
+    },
+    {
+      "path": "server/scripts/_archive/find-rich-wells.ts",
+      "sha256": "C49251F5378534534ECE370B42FB7E68315E020C0C12D7AEA8CB00689E0DEE1A"
+    },
+    {
+      "path": "server/scripts/_archive/fix-company-matching.ts",
+      "sha256": "1822DA056D765468AFFE23A2F4CB9FABD437BB3D94BC8E5C3DF45E2D017B2B6C"
+    },
+    {
+      "path": "server/scripts/_archive/fix-conoco-qb.ts",
+      "sha256": "755971BF4CAFBB2317952F3B8729E9ADCF1669A4DB20C76CAEF9A226ACA5815C"
+    },
+    {
+      "path": "server/scripts/_archive/fix-orphan-inspections.ts",
+      "sha256": "4F49334C344C82097B5288546CD77A914C3D8ABF1D31C43DD561EF3D427D2AD5"
+    },
+    {
+      "path": "server/scripts/_archive/fix-submitted-entry.ts",
+      "sha256": "972478964F576877FF5E196A49DC806A51BA3663D9BC2497AC0812F83E9346C9"
+    },
+    {
+      "path": "server/scripts/_archive/gen-test-xml.ts",
+      "sha256": "F5F813F1FD3682C7C3DE15967AB851E67972BE71CF02745FF0BD5DFB046E3C57"
+    },
+    {
+      "path": "server/scripts/_archive/link-fit-test-qb.ts",
+      "sha256": "0A8E6B76494D5207C3DB0BECB60EFEDF7C17DD06494CDD20E43AC0AD62834065"
+    },
+    {
+      "path": "server/scripts/_archive/list-seed-companies.ts",
+      "sha256": "83A15346948D70667A416785DE4856296477397A54E48DEE7183F3A40A8C35C3"
+    },
+    {
+      "path": "server/scripts/_archive/measure-pad-dupes.ts",
+      "sha256": "C98B63305564BE19AD246ED4D8B45CE3133553CEFF5D8A487BEC8E47A963452B"
+    },
+    {
+      "path": "server/scripts/_archive/reset-enverus-invoice.ts",
+      "sha256": "763A2D3F1414C16578D8BF4FC528F49DBE3053CD5C8AB08B5A555E022BF6433E"
+    },
+    {
+      "path": "server/scripts/_archive/reset-invoice-query.ts",
+      "sha256": "1D758A2577666210F365BF16C9CEB8A067C33319328017FEED341363A085AA1D"
+    },
+    {
+      "path": "server/scripts/_archive/reset-qb-errors.ts",
+      "sha256": "7529188C7901AA1F7B1316C9005A2895A8324903614092EB39D817BAED3AB165"
+    },
+    {
+      "path": "server/scripts/_archive/seed-grayson-pads.ts",
+      "sha256": "D6701264A6D3E8F11F29535DD8067589E8E9EC0808E2C1395563AA590052587B"
+    },
+    {
+      "path": "server/scripts/_archive/set-ordered-by.ts",
+      "sha256": "D0C6E47E4B5F2BC8D80E46537BB6DF7540551A856A9EC2BC5F1901B712C228C5"
+    },
+    {
+      "path": "server/scripts/_archive/set-qb-customer.ts",
+      "sha256": "0CDD51E11787D079B824259A693141FF5CD2FE9D84723A20FA03DB53739B8F78"
+    },
+    {
+      "path": "server/scripts/_archive/test-wp-api.ts",
+      "sha256": "735F8969121BECA1EBA71CBBC384F812ADA9CD61566717721368ED9CE3A35863"
+    },
+    {
+      "path": "server/scripts/_archive/verify-grayson.ts",
+      "sha256": "4E44E82C1717F56977FECD6A04E19ABDB5396AD42339D1267B5288186B8048C4"
+    },
+    {
+      "path": "server/scripts/_archive/verify-import.ts",
+      "sha256": "2F019C88923D6AFD4475AD7F96BE2E581B1D31D38C386C8DBAC00EC0C4238ACD"
+    },
+    {
+      "path": "server/scripts/apply-custom-indexes.ts",
+      "sha256": "51DD30EA0BA230FCAFCDEE36863EDFC89389CA101DC012B915FFA831D3344E72"
+    },
+    {
+      "path": "server/scripts/apply-enverus-buyer-rules-standalone.cjs",
+      "sha256": "652B21E8C6D0F67835B4E5FF9A0DCFC5A41BEB1AB258CC57A4B6ADA3A0A1073B"
+    },
+    {
+      "path": "server/scripts/apply-enverus-buyer-rules.ts",
+      "sha256": "89B760EF8789B53FE0B8C4D4EF97DD60155F1EACCAB08F772BE2F48A3E2F50BC"
+    },
+    {
+      "path": "server/scripts/audit-serials.ts",
+      "sha256": "322B92C9A62A8C2777BA77DBDAEA786B5757716FC4B72ACFB28A0C3A00EDD5CF"
+    },
+    {
+      "path": "server/scripts/backfill-billing-doc-refs.ts",
+      "sha256": "131BAEE3D6F290C12A4532BB48CEC303D5FB61FECAE2B2811CE8C106437519EB"
+    },
+    {
+      "path": "server/scripts/backfill-bluelion-inspection-locks.ts",
+      "sha256": "42D3D1C84A9F176D3A4543CF64F4E9CBDBE1929831037E1A7FD7EF7DD89B8804"
+    },
+    {
+      "path": "server/scripts/backfill-invoice-sales-tax.ts",
+      "sha256": "FED94661C011BF9A71762FA483F422B9D4AC72C6DBAAC75CDC8B771B2A1CC01D"
+    },
+    {
+      "path": "server/scripts/backfill-qb-mappings.sql",
+      "sha256": "DAA399CCE99E889930EFDA2F2A05FF1C314D3773C11E3B80A30AA0E019D05495"
+    },
+    {
+      "path": "server/scripts/backfill-rental-ticket-disposition.ts",
+      "sha256": "A039B28F644EC82C3D85409AB153881A2AFF2D7BD85BF703F4C817B47B12DC6B"
+    },
+    {
+      "path": "server/scripts/bluelion-inspect-payloads.ts",
+      "sha256": "60AA5355EBC41331403706B44AE069CF0C787D28E404028D54E0690EFFE4EBEF"
+    },
+    {
+      "path": "server/scripts/build-enverus-review-xlsx.py",
+      "sha256": "9FA4B4B7A4C44338EA1AB03A9254AB60042CA1CC61F75FD15F3EBDAF62D8E881"
+    },
+    {
+      "path": "server/scripts/bulk-activate-dmr.ts",
+      "sha256": "974C25B2BB3BC01C25CB23D90E2802ABBB202DF6C329FC787AF96E8EE390A8FB"
+    },
+    {
+      "path": "server/scripts/compare-enverus-buyer-rules.ts",
+      "sha256": "261EE63EA2250FABCE60560BF05AAA665B1A1B0B8A9AAD18CBBCBA0973D8C41D"
+    },
+    {
+      "path": "server/scripts/convert-dbf.ts",
+      "sha256": "99F1B05EBF510599506FD194D0D18F4ED6B3D4DBC626E6E4ABB34281CBEB0041"
+    },
+    {
+      "path": "server/scripts/create-portal-user.ts",
+      "sha256": "0C775566C37EA21CBF3798DEB8AD4E9CEB389D6FC2FF1252863A9B0435CEEEE1"
+    },
+    {
+      "path": "server/scripts/data/enverus-buyer-field-labels-map.csv",
+      "sha256": "9696F43DC64C42D0BE2FDA5069C32C94A33BF90009A0233056B9F17144A98EF1"
+    },
+    {
+      "path": "server/scripts/data/import-trailers.sql",
+      "sha256": "F1CA252A3DA47E283882C2673FD81EB110645D4EE8B7D3D03730DCF1FE0450D2"
+    },
+    {
+      "path": "server/scripts/decode-html-entities.ts",
+      "sha256": "726C81CDC4C7BF12A7D158387F62AFAB383FAF35773C8EFD23DDE8DCBB0C0C56"
+    },
+    {
+      "path": "server/scripts/dedupe-dmr.ts",
+      "sha256": "3FDDBB743A70D3CD46539EA4F309DE9494A7E300C097A4C24F2872BFC9038624"
+    },
+    {
+      "path": "server/scripts/dump-enverus-buyer-rules.ts",
+      "sha256": "CB95DD3ABE99E68A499392938EF61E1C1CCAD7F6B0B340290A8B407B4BC377C5"
+    },
+    {
+      "path": "server/scripts/extract-legacy-notes.ts",
+      "sha256": "7DE22E1853CAF8944CE44554C5848EDA6AB3C94DF74931F83878FAA7D624F306"
+    },
+    {
+      "path": "server/scripts/hard-clear.ts",
+      "sha256": "9942944BBF36B8F4EAEAE978D5FC09E286F29881ECAF284171906B45EF0FB4E0"
+    },
+    {
+      "path": "server/scripts/import-air-systems.ts",
+      "sha256": "E54DC4044037DFED7612E91690FA83E2B07B1457E38BC681471CB6591E283AD2"
+    },
+    {
+      "path": "server/scripts/import-dmr.ts",
+      "sha256": "DC9938F811994F6BE97073F152C1057AC821196EF79EFD8D6602D41D5091FDCF"
+    },
+    {
+      "path": "server/scripts/import-doforms-tickets.ts",
+      "sha256": "1F981A9F4D1E3D9EA3229FF0C4D389A739905CDA5AAEC0E76A4F214C4B153AFF"
+    },
+    {
+      "path": "server/scripts/import-field-tickets.ts",
+      "sha256": "47B47BBC945BBDD00211023B7AA1B533E27FEE04D2E82EF4EAB0709BA212EB26"
+    },
+    {
+      "path": "server/scripts/import-locations.ts",
+      "sha256": "922C412D9C99EC8C90C9ACEEF3F77CEDEE3E576F58F467192E566EB5E316D150"
+    },
+    {
+      "path": "server/scripts/import-qb-csv.js",
+      "sha256": "6FFE9C188AC3C58077AA0840DBB90B07D15BFDACD68055755652231D8FA137FD"
+    },
+    {
+      "path": "server/scripts/ogd-to-csv.ts",
+      "sha256": "4B2DA2CD75746B2D8791707671463C5F58B86E368C807072ABA695304F89F541"
+    },
+    {
+      "path": "server/scripts/preview-qb-invoice.ts",
+      "sha256": "307B191BB9A5F94D659F54EFC30E95D959DF5F942A6EAD98CE225EAEC30F3FA4"
+    },
+    {
+      "path": "server/scripts/prod-seed.ts",
+      "sha256": "D13DBDEFB974DA7DA5F7C2EA8AE0BDC653491DF310F006ACB50877A971922AB2"
+    },
+    {
+      "path": "server/scripts/promote-pads.ts",
+      "sha256": "7784770761999EAE9D18C46280D85C426BA8596FA8AEBFF72F88F589E9E59F60"
+    },
+    {
+      "path": "server/scripts/reconcile-dead-wells.ts",
+      "sha256": "60C64DDB51533DFF5EFF4F08BC05DD92134AAB829999DEBFC7F3A27FCD56F154"
+    },
+    {
+      "path": "server/scripts/release-stranded-invoiced-tickets.sql",
+      "sha256": "5FF7458D945F5A85646C5329BBD0DC3C0ED5FB3D124C1F0370FCD206FF9B4446"
+    },
+    {
+      "path": "server/scripts/strip-pads.sql",
+      "sha256": "CAFF3F35AEAFAD3C6D87BA715A6743F3BFD241A8AF729BDD63DFB7B5B876E34E"
+    },
+    {
+      "path": "server/scripts/strip-pads.ts",
+      "sha256": "BA19EE07E7E74B3C27FD609E8898B38BA59C918CF6751A230CCE8C48AE51E780"
+    },
+    {
+      "path": "server/scripts/v1-issue-key.ts",
+      "sha256": "5E93FD3D492388C335E9614DA672C374FA7E8F2A03E667DE8E3455B33CE5C7D2"
+    },
+    {
+      "path": "server/src/db.ts",
+      "sha256": "A5A82C2F48B496B551AA53BE0E3CA37339BF7F729D199E74E7E4859384BED7E6"
+    },
+    {
+      "path": "server/src/index.ts",
+      "sha256": "ACCC69758AC770F64F53E56E337D4342BE5C21F62C4553DCC34EF656B4282052"
+    },
+    {
+      "path": "server/src/middleware/auth.ts",
+      "sha256": "3F5D5F8AAB82CC1329064C04576301690FBFD135EA92B9F97659D9BC944196AD"
+    },
+    {
+      "path": "server/src/middleware/errorHandler.ts",
+      "sha256": "DBE2825A3DE240D47CBB8385C7EE9B596F8FBD96BDDC80AAA6C44FEDDDFCA26D"
+    },
+    {
+      "path": "server/src/middleware/kioskAuth.ts",
+      "sha256": "A701B5EF80311EECADA888D41A3E4E905D263426019510EB1F91B5B4855EBC26"
+    },
+    {
+      "path": "server/src/middleware/rbac.ts",
+      "sha256": "C7DB7F843843D64F6F54D6B1F41A26146ED4B8BEE70CDD63872606F72599D2BD"
+    },
+    {
+      "path": "server/src/routes/admin.ts",
+      "sha256": "A7C31DEB61180C7EFA3C09FC0C296419221565001BCB96FBDF6DD1E3B88ED3E5"
+    },
+    {
+      "path": "server/src/routes/attachments.ts",
+      "sha256": "FA829717EE0AF9FBCE91EBE13172F69960EC609FED799B79208B5CD494413273"
+    },
+    {
+      "path": "server/src/routes/auth.ts",
+      "sha256": "5618B9DE22C4052B0FEC20C903300DAF56408B19EF61AC9AC22E9913248DF45E"
+    },
+    {
+      "path": "server/src/routes/billing.ts",
+      "sha256": "4679C66384E26B33F2EA3B2BB35A7FA9AD99C3BEC529BACCC70E7002471B5398"
+    },
+    {
+      "path": "server/src/routes/blueLion.ts",
+      "sha256": "B6D788CFB9E02656FFD11253EB7D64F4DDFF1623BBE11A535EAA233AC981410A"
+    },
+    {
+      "path": "server/src/routes/boards.ts",
+      "sha256": "0C392643991DC12A83C8DEF4657CC9AD7C486D70D03267DE8C0E248972CA3E49"
+    },
+    {
+      "path": "server/src/routes/bugReport.ts",
+      "sha256": "236947E7BDECD3D2BDAA8DD9C6117390897C8EE5D5179A9A48D15E1D84E7D13C"
+    },
+    {
+      "path": "server/src/routes/claim.ts",
+      "sha256": "1E6F5C486E7AAE2688D6DAB2404D9C90CA9CA1E0F6DBC95D30EC3B3B9DD091A7"
+    },
+    {
+      "path": "server/src/routes/classpro.ts",
+      "sha256": "D9C04FC66713B3C2B5A29A1C02C1F47E04F7DDE5BA96AA9BA45129A0B24D9370"
+    },
+    {
+      "path": "server/src/routes/companies.ts",
+      "sha256": "C4F27FF2A83568F034B35C66ED3DF96246A7B0AC9D2DE0C8FB98B3E5759E73F2"
+    },
+    {
+      "path": "server/src/routes/companyMerge.ts",
+      "sha256": "90871A311E1B487D7E013B1ADCF7B2CD27E7F14C55D2FFC6CB7C9AA332ABA5C3"
+    },
+    {
+      "path": "server/src/routes/coverage.ts",
+      "sha256": "E960B0818D3D3E8909FF93E20B3EB22CF326145A044AFFFB579BCB6FB8733C20"
+    },
+    {
+      "path": "server/src/routes/dashboard.ts",
+      "sha256": "54E181D37154DC58DCC39C5933BDDA4327033E611686E6C19031B9634CCC05A1"
+    },
+    {
+      "path": "server/src/routes/dmr-import.ts",
+      "sha256": "10024A049FF471569CECBB61A31A971DD6BC1E017C758526EA32BD644BFEFC38"
+    },
+    {
+      "path": "server/src/routes/dmr-match.ts",
+      "sha256": "2B6BF389079C2D3512F1E9A2261DA0ECFC8A7F60AFA442F4C57C58C7E455D151"
+    },
+    {
+      "path": "server/src/routes/enverus.ts",
+      "sha256": "3A7B861464976C69A2484FF7B7493F6C929BDEC0E92594430E85C0ED5C1933F6"
+    },
+    {
+      "path": "server/src/routes/equipment.ts",
+      "sha256": "B334BE05C3428BD1B6F5F2BBCF074B6F1806DEF0CBE35323385CF863AFC1A55B"
+    },
+    {
+      "path": "server/src/routes/equipmentInspections.ts",
+      "sha256": "558086F525BE7DEBD13B94B6C4BC9E6565BCDD961BA276799A58FCD32A119C0F"
+    },
+    {
+      "path": "server/src/routes/files.ts",
+      "sha256": "22CBBC95BD0C805908C16323322DB155A799144645D436362C9F2BB1E2AFA124"
+    },
+    {
+      "path": "server/src/routes/invoices.ts",
+      "sha256": "78E54DB3133C6EED79F3C5F6BC3A6CA3B042C2ADA009B145573CBE66144C39AA"
+    },
+    {
+      "path": "server/src/routes/kiosks.ts",
+      "sha256": "45A00BEDE6AC07565D4302B187BC5948E59F090ADB2CEAF8AF53EBBCED5B977C"
+    },
+    {
+      "path": "server/src/routes/locations.ts",
+      "sha256": "41E7282F2DB2D13D7603064EDB4742F41B67BC7BB3E12C856AEB24A9B9E51392"
+    },
+    {
+      "path": "server/src/routes/mobileAssets.ts",
+      "sha256": "50232504F3CD6EFFCBED0B5F8F569E2C63970DCD401A5634DD8A542509ED0781"
+    },
+    {
+      "path": "server/src/routes/novara.ts",
+      "sha256": "16E8F8A5BCB90B5437CA709DC64DD093BC76C29B8017AA0AB38BE0364F0F4336"
+    },
+    {
+      "path": "server/src/routes/payments.ts",
+      "sha256": "594EAC84B43764A10B117778D623310ACC5BF0DBC5744965C0CFAB392ED5675A"
+    },
+    {
+      "path": "server/src/routes/permissions.ts",
+      "sha256": "8F5B9E1358A0482630F7F345702E6FEEB2DB83CA40A2D47A32A618D2A38DAD76"
+    },
+    {
+      "path": "server/src/routes/portal.ts",
+      "sha256": "61D85EFFD2148C9A6454E14596B421111728E03FCB9DC06C801CD431B50BFC3A"
+    },
+    {
+      "path": "server/src/routes/printers.ts",
+      "sha256": "B3E97AF2677513B6B4EBA1CA6CD22BFF76878B1379BFF2479458F7C8D47BBCE2"
+    },
+    {
+      "path": "server/src/routes/printJobs.ts",
+      "sha256": "8ED8BF65D0592259A52F4035C9B3E81C13D7700F55098A3BE99559F05E9F091A"
+    },
+    {
+      "path": "server/src/routes/products.ts",
+      "sha256": "3CFC02F709253622D07E323F4ACB59BB0663FB2417AC316086CFA8F6FB87304C"
+    },
+    {
+      "path": "server/src/routes/proximity.ts",
+      "sha256": "24A75DF99C467725F3A4C2F03547753F8913ADBCB6882B04BCC2E68658E535C8"
+    },
+    {
+      "path": "server/src/routes/qbwc.ts",
+      "sha256": "ECCCDA6B5A164619605B59A6695AD335675EFEC14AB5235AFB4AD0A40C4F006E"
+    },
+    {
+      "path": "server/src/routes/rentals.ts",
+      "sha256": "98EE210AE77B975BAEA4CC8A36CB13FBCBE4226DC3D2F5AF0F2ABC8DB017446B"
+    },
+    {
+      "path": "server/src/routes/rentalsBoardPublic.ts",
+      "sha256": "519191B23440EBD782DC1BCFBF9B5901F4E1DC983C65CB3C7962009C11C99FDE"
+    },
+    {
+      "path": "server/src/routes/roleMappings.ts",
+      "sha256": "DAB5217F5E3746DD0E897957F2ADAE17A932BD3C060386CE209D5034D77B23EE"
+    },
+    {
+      "path": "server/src/routes/routes.ts",
+      "sha256": "7B84A8D683ECACA2AB97F99CFF08B323B92453355152C91835B627AEBAEAA533"
+    },
+    {
+      "path": "server/src/routes/salesTaxRates.ts",
+      "sha256": "0C15428B791E36FBCC0EEF9E31C2DC4CECEFB00D4A832CA7284343C76EC886E1"
+    },
+    {
+      "path": "server/src/routes/shopBoardPublic.ts",
+      "sha256": "5E0690AD9223424F0608DB8275D755D50C99BC21D6692C5BD90D964F42EEF1AF"
+    },
+    {
+      "path": "server/src/routes/shopOrders.ts",
+      "sha256": "3535D6B71925C3142CB1A9167C9E7E58EA21179F57A0A6F2D0C848AFBF073621"
+    },
+    {
+      "path": "server/src/routes/shopTransfers.ts",
+      "sha256": "A3DBFADCA7969E573356573BA717A3AED64FBC73D26602A1A79F9F9793F67D6D"
+    },
+    {
+      "path": "server/src/routes/signatureRequests.ts",
+      "sha256": "3B69074078AE1D21180DA30C0685775E3B34CC8B184D1A3101EF2DD23504BC50"
+    },
+    {
+      "path": "server/src/routes/sites.ts",
+      "sha256": "D5F139EAF6FDC752E3A58A718A2E020620F4A0DC696A322DBC247BE621204A1B"
+    },
+    {
+      "path": "server/src/routes/stripeWebhook.ts",
+      "sha256": "5FDC2C34F52CF87028041962C9A1D1D8FB29989DF20079FB5A870F2E64004092"
+    },
+    {
+      "path": "server/src/routes/sync.ts",
+      "sha256": "3BC637282E5B29C1B5614E364CBED0B5A7CD0BE51D4AF3BC1448272337CBCEAC"
+    },
+    {
+      "path": "server/src/routes/tickets.ts",
+      "sha256": "3E558F1FFFADAFF621F19D6D69453C0471E920FAFA7871C9C56A17FBE1616ADD"
+    },
+    {
+      "path": "server/src/routes/trainingEmployers.ts",
+      "sha256": "7CC3AC49C7632610A53FF93BC1494B34B65183362C020185C1450BF887F81D3C"
+    },
+    {
+      "path": "server/src/routes/trainingKiosk.ts",
+      "sha256": "997805EC052F9F4543680FFFB8E4713A26C1444959A73904014C433B791E1A1D"
+    },
+    {
+      "path": "server/src/routes/trainingSignin.ts",
+      "sha256": "FA54C3D84AA7E4BB6338EFC9D34526B9FBDC0DB51F02B8F349C8637C78EC9018"
+    },
+    {
+      "path": "server/src/routes/users.ts",
+      "sha256": "23F208223EF725858924B2B80DA38FD97E042997D6B4562598EC08BF991359C7"
+    },
+    {
+      "path": "server/src/services/__tests__/__snapshots__/qbxmlBuilder.golden.test.ts.snap",
+      "sha256": "5D6D878FD5A3192D716FDF2ABCAE660A5959B62EFF8D23A6604EC6CCFD9F4DCB"
+    },
+    {
+      "path": "server/src/services/__tests__/qbItemMapping.test.ts",
+      "sha256": "683742AF00F595A5FBD899A2131511B7628A3C9C064C804F613199F6D7F63DF8"
+    },
+    {
+      "path": "server/src/services/__tests__/qbxmlBuilder.golden.test.ts",
+      "sha256": "5A5289D7DCCFAEA3CEAB0933BCB7A88D08B18F20934C5F48E52AD24074EEA633"
+    },
+    {
+      "path": "server/src/services/__tests__/supervisor.test.ts",
+      "sha256": "D32AD6D992DD6454E8BD58793E03A1B4F8752A7CC1247E9C70045BC0C50389BB"
+    },
+    {
+      "path": "server/src/services/approvalAutoProcessor.ts",
+      "sha256": "2E572679202A100BE22262B48277AB4FD126968303F879F786AD400430416D48"
+    },
+    {
+      "path": "server/src/services/attachmentStore.test.ts",
+      "sha256": "032334E94B0E785C0884B237E95272B1324A8630F39D3DA7F1E34CE768BC94ED"
+    },
+    {
+      "path": "server/src/services/attachmentStore.ts",
+      "sha256": "8CAED028CDC5D1696EAB373358545FCF36D6456B5037B52A659F8C53F57B5FDB"
+    },
+    {
+      "path": "server/src/services/attachmentUploader.ts",
+      "sha256": "110AE85BACBCBE38BD79C0199976D3C98FFE7463852CE0825B98409D8AD0FDAD"
+    },
+    {
+      "path": "server/src/services/billingLineage.ts",
+      "sha256": "1C002BE8C7CD6433F7D83DE7A8A2508AFA41446491463720147F46AF519E6A52"
+    },
+    {
+      "path": "server/src/services/billingObservations.ts",
+      "sha256": "45ED986BF3B944C25510E6BACE932CC2078873C9AD3C5E4B13CDAE8B23F01FEA"
+    },
+    {
+      "path": "server/src/services/billingProfileSelector.ts",
+      "sha256": "949890586143ACF24AA402B56E5087BEB9A1B681EFB07F95B786A288CAA21412"
+    },
+    {
+      "path": "server/src/services/billingReadiness.ts",
+      "sha256": "35C2DF3F0C28E151B6467AAF02B07E06063F8D3E271B3FD9DDE8588209288BC8"
+    },
+    {
+      "path": "server/src/services/billingRefs.ts",
+      "sha256": "BDD4829DCB86948AB877E4BA454BCD429BD91D251096390C6D7F5BE724E016BD"
+    },
+    {
+      "path": "server/src/services/billingRules.test.ts",
+      "sha256": "43081BA1D5170DB7984E4D941FF15126453541B25BC13849BAF0227B914E4A10"
+    },
+    {
+      "path": "server/src/services/billingRules.ts",
+      "sha256": "57E5AA225DCCBD4EF21867CF4BC0B0D9B4445673582A9123B96DB954BCF15D05"
+    },
+    {
+      "path": "server/src/services/blueLionChecklist.test.ts",
+      "sha256": "B402BE70F294EA769D8E4004A4CB0578CCF905B684E259D51E80405F9F6D5DD2"
+    },
+    {
+      "path": "server/src/services/blueLionChecklist.ts",
+      "sha256": "A4935A6D5EDB7F6E1D04A058649D19C4A9C96C7577A03F9034EF3D462EC36760"
+    },
+    {
+      "path": "server/src/services/blueLionClassMap.ts",
+      "sha256": "7330B87700B2022F97A42F10336D4B0FA255566B6829C880359CACD106094524"
+    },
+    {
+      "path": "server/src/services/blueLionClient.ts",
+      "sha256": "09E605BD07A3C708812FFAB8DEDC95C790321A9DE19C2DEA97415436C1736DBE"
+    },
+    {
+      "path": "server/src/services/blueLionEnqueue.ts",
+      "sha256": "CD2429706D7688C0BCB7BCB3F37FF475947A97E678A6B3CEA0DEF9F33E112323"
+    },
+    {
+      "path": "server/src/services/blueLionQueueProcessor.ts",
+      "sha256": "B523E76DEF36DA4BB6B9A5D69F6D5A923ADA00814CE3A162AA026490CA9FF89A"
+    },
+    {
+      "path": "server/src/services/blueLionTrainingListener.ts",
+      "sha256": "A7F5413AD28C4FF3F70C8E3532E2E91D6D4CB75F9DA3770F81A12F0CA397312B"
+    },
+    {
+      "path": "server/src/services/claimService.ts",
+      "sha256": "69C206C5BF76B8BBFD405C8063B21BEF8CC0A9C3D45583A84EA202B75EAF7749"
+    },
+    {
+      "path": "server/src/services/classproTicketPush.ts",
+      "sha256": "E8079D995CB3B0EE4142808F40E5AECB9562B08000D17FF7D5D8BFCA9DB10DF4"
+    },
+    {
+      "path": "server/src/services/classproTravel.ts",
+      "sha256": "A95CBCEA7ECA124344641CDBD0DA72B7762DA1A8E4F754861CFBB462361D6B20"
+    },
+    {
+      "path": "server/src/services/companyMerge.ts",
+      "sha256": "86938239C149D9A9ABFA880F1289B5CDEFE5F4AEC8D2D7E5D64815DBB71B2285"
+    },
+    {
+      "path": "server/src/services/condemnEvidence.test.ts",
+      "sha256": "7E71714BFB1A917679483187B166314630741D052C89440233EB14B22D6A16B4"
+    },
+    {
+      "path": "server/src/services/condemnEvidence.ts",
+      "sha256": "763CBE26337C8353545BFBDC5BF8AEB56F79B6FEE5AA3B4AC8E98F93116BBDE1"
+    },
+    {
+      "path": "server/src/services/courseCatalog.ts",
+      "sha256": "5427F4F55F6A44402C5B5A1C23FE29183BEDD770775D104881F437F8A45C37AB"
+    },
+    {
+      "path": "server/src/services/deploymentGate.ts",
+      "sha256": "BD527189E8C13994134B3EAAA0C88DDCD83D30F93B535507C60AD9B901D2C611"
+    },
+    {
+      "path": "server/src/services/dmrBulkUpsert.test.ts",
+      "sha256": "69207CF4EFE62F7D62D223D48361D478657A420848EB4699E1EDE4451A2ECE2B"
+    },
+    {
+      "path": "server/src/services/dmrBulkUpsert.ts",
+      "sha256": "E7090A31CEFD2D1DA60A279812B02147BB488FB95ECBB278A8C97D9F43DE5727"
+    },
+    {
+      "path": "server/src/services/dmrDedupe.ts",
+      "sha256": "C4F22BE550023CC8AC2B31DD869A5CCB3DADFB205C79D85C85BF4444C8888BC1"
+    },
+    {
+      "path": "server/src/services/employerMatch.ts",
+      "sha256": "AE1A84000C53930F1B81AAA2A13D75E4766312A78B965A771EC5C73BE41B250C"
+    },
+    {
+      "path": "server/src/services/enverusClient.ts",
+      "sha256": "4ECAAA071C75D7C0197647182FEFE57048964559A8B64AE000ACD5CA8BDB6FC2"
+    },
+    {
+      "path": "server/src/services/enverusMasterDataCache.ts",
+      "sha256": "59347542AF9C0F21B99CEB6883429BD116D241E47A50C97F399B205708E81FCF"
+    },
+    {
+      "path": "server/src/services/enverusPayloadBuilder.ts",
+      "sha256": "633F8C9F4F6C75FA6B1BDAA9D05855F3431B890766D15E1398C552AE73269531"
+    },
+    {
+      "path": "server/src/services/enverusQueueProcessor.ts",
+      "sha256": "B41CC76A2A4FEDCEAEF0A3184A6F5F5B26D438C6237602D39B03314AA8EC6A70"
+    },
+    {
+      "path": "server/src/services/equipmentDocuments.test.ts",
+      "sha256": "2B5B2F994488A9D8C46069AB702C5C584775BDD181672453B44379FECD8F2EC6"
+    },
+    {
+      "path": "server/src/services/equipmentDocuments.ts",
+      "sha256": "2E8BBA4E62DDA7CA63E87870479279311293F7C76E85E6E4837D4EB283071753"
+    },
+    {
+      "path": "server/src/services/equipmentInspectionPdfGenerator.ts",
+      "sha256": "68767EE40CCB884383A1FD1FB49C0F383EC65543E1C90176A8F408733C05924A"
+    },
+    {
+      "path": "server/src/services/equipmentLabel.ts",
+      "sha256": "4D3C6D7188AB03267FF221DB74F97E14F23C78520194F497813CB229269AEFBB"
+    },
+    {
+      "path": "server/src/services/equipmentLifecycle.ts",
+      "sha256": "55232FE6C6B552C95C86DFAD6E1BF8983FD92D205559FEF99AEDDD6E9DA82E48"
+    },
+    {
+      "path": "server/src/services/eventBus.ts",
+      "sha256": "E4245343D4224E07044980EA234C2265B78681D9EFD9AADAB9A77532BEFFCE6C"
+    },
+    {
+      "path": "server/src/services/fileStore.ts",
+      "sha256": "DB7B0EB47FF08D3CF4463E213817C9E46F76083C325C5CA7492661C3AA25565C"
+    },
+    {
+      "path": "server/src/services/gcalSync.ts",
+      "sha256": "752D2AC2C45934A757510E3D648E5C22D532243E729714DD73730DE5C1AD41E1"
+    },
+    {
+      "path": "server/src/services/googleGroups.ts",
+      "sha256": "911A63237315D6BF05CCC0E4F93060B23A9705A1741B74D6E763751F906C64FB"
+    },
+    {
+      "path": "server/src/services/h2sAnalytics.test.ts",
+      "sha256": "D7EC699E1BD3EBF54CFBA3C3CAE2CCB4E668E06114A3C33E9951410A7E2DA1C6"
+    },
+    {
+      "path": "server/src/services/h2sAnalytics.ts",
+      "sha256": "61724784A09EC510DF57A720745EDFD89752038F88C5E9A2EAB6974BE5E23CBD"
+    },
+    {
+      "path": "server/src/services/inspectionChecklist.ts",
+      "sha256": "356B525B92F8486D7BE387BAFFC0AC7BF2F4FA0C15F5406DD165FB86CB43585B"
+    },
+    {
+      "path": "server/src/services/inspectionLock.ts",
+      "sha256": "AD21FA58E168E88622A0DECBF4E26A5BCE5F7203CAB5D0EE0273B3B18ED8D7E6"
+    },
+    {
+      "path": "server/src/services/inspectionRouting.test.ts",
+      "sha256": "C2288966B2BA1CA593105B73913EA864FA761733CE020EE1B975C252A9C3ACFE"
+    },
+    {
+      "path": "server/src/services/inspectionRouting.ts",
+      "sha256": "1C0DFA2165755C7F9A7E09B4C0A0CC1C1C52846C3D4EF97C63EAB2F532A36291"
+    },
+    {
+      "path": "server/src/services/internalShopValue.test.ts",
+      "sha256": "72E9925A21A0E766919CDA4A1215137BADE69A01819C7BA772B8150EDFE0D25C"
+    },
+    {
+      "path": "server/src/services/internalShopValue.ts",
+      "sha256": "69F5AEBCF7E7F0E46CE3381C7D384402E62CF62CFA6EFF6F9F2282112632AC0D"
+    },
+    {
+      "path": "server/src/services/invoicePdfGenerator.ts",
+      "sha256": "564C3CB6FDD3AE247ADBB63A7EE3743DD570F21789ABEDB88F1BA3C528CDFC64"
+    },
+    {
+      "path": "server/src/services/jobLocks.ts",
+      "sha256": "5F70EC8DCE0AFBAFA3AE9DFFC07FBD46BA7AD56DA59B4029C90EABB8087CC289"
+    },
+    {
+      "path": "server/src/services/jobs.ts",
+      "sha256": "8296FEDEA49E1D394A6A6FC54C43AB1FADD51D733382AF0FA21DD8B66FC178C1"
+    },
+    {
+      "path": "server/src/services/labelFields.ts",
+      "sha256": "377E87F248023C26249ACF2535B2C5B81D5AF1FCDFAFFDFE6C600D27005A213A"
+    },
+    {
+      "path": "server/src/services/locationRescoreListener.ts",
+      "sha256": "BF92C33072A926794093E548C1B506F80ABC406B0D2478327A7237C8B870B390"
+    },
+    {
+      "path": "server/src/services/mailer.ts",
+      "sha256": "59B6934D4BE1351BF53EA0436B947860C5ACFA0E219BC91E7D3342E13F7F5510"
+    },
+    {
+      "path": "server/src/services/novaraClient.ts",
+      "sha256": "22E283DA2F54FAC0C19AA588670E22DB982E03A2C4F85E56E56C824DE1AF6C58"
+    },
+    {
+      "path": "server/src/services/novaraEquipmentSync.ts",
+      "sha256": "EFFA6FEC04DAFCF11D58E19A5B825E4F781088D92109C91705403634EB9024F1"
+    },
+    {
+      "path": "server/src/services/occHealthPdfGenerator.ts",
+      "sha256": "F342493194C5CF777230AEC025249060CB7342A5B5216E1B7C955546BEDE933E"
+    },
+    {
+      "path": "server/src/services/opsStats.ts",
+      "sha256": "6A2E2B61900E7B1C061D7269612E2880E16829EF6B728B2B405E850AD2C9AAEA"
+    },
+    {
+      "path": "server/src/services/paidAtDrop.test.ts",
+      "sha256": "7142D7C270B1B5B558AD835AFA3773C4DFD4684DF0663C330A93E9FA27107505"
+    },
+    {
+      "path": "server/src/services/paidAtDrop.ts",
+      "sha256": "3947488AECA54ABB247180A27235F135B41DF5CF1686AC5EE69BC74D8DC19CDD"
+    },
+    {
+      "path": "server/src/services/paymentReceiptNote.ts",
+      "sha256": "DD94B0B34C1199E0663AEF3F9D2EB124B1A997F4FBE3FC8648FC53C4E59F3207"
+    },
+    {
+      "path": "server/src/services/permissions.ts",
+      "sha256": "4784793A3285C0784A737014A54EEE248CDA10374F664006595AFA6C908A91A8"
+    },
+    {
+      "path": "server/src/services/printerHealthCheck.ts",
+      "sha256": "1C576DCACC02B0BE3FC58814493DF1FE42F47A11A4DCD711C3758E2185C00E16"
+    },
+    {
+      "path": "server/src/services/printing.ts",
+      "sha256": "5D784F615FF5F27913EF5300BEEF8F8F1BCA522629A785F1D5C60A942BFBEB7E"
+    },
+    {
+      "path": "server/src/services/printQueue.ts",
+      "sha256": "76F9C92380042F3E99BCFA4F585D1BF28EF950912FDA06311999F60C5610C976"
+    },
+    {
+      "path": "server/src/services/printService.ts",
+      "sha256": "4E01E049FDAEA28B69E1ED56842A7D29D63EDB69395E6B9656AC11F7C21104A4"
+    },
+    {
+      "path": "server/src/services/qbInvoiceDiffWatcher.ts",
+      "sha256": "20275F56224722A127D29C56883965CF8CFB14447C362E28C54DEF376C9B6873"
+    },
+    {
+      "path": "server/src/services/qbItemMapping.ts",
+      "sha256": "12E7DD698CBE0A99FD06731D459D73A25DB4686686174142465633ECC639A980"
+    },
+    {
+      "path": "server/src/services/qbwc.wsdl",
+      "sha256": "49538064B41FCFB779A809A9E7CC076254CB22F0F703E06349CF59CA015FED9D"
+    },
+    {
+      "path": "server/src/services/qbxmlBuilder.ts",
+      "sha256": "CF09F6910374D9D5DACD8EA52476BF9476E808AD38BEB49C58175ECB12DF474A"
+    },
+    {
+      "path": "server/src/services/redis.ts",
+      "sha256": "B5F1786198815909B7FD0EE3F1EEA179A763641050A3ADED6F69CB314CE2BC49"
+    },
+    {
+      "path": "server/src/services/rentalAgreementPdfGenerator.ts",
+      "sha256": "367C6746B8575F2A8E9A6D245AA51403A1200741C879EA99352B456EC4578A4C"
+    },
+    {
+      "path": "server/src/services/rentalBilling.test.ts",
+      "sha256": "7ACE0795E0BD86BD0C4566CDA2087FC13C0444598C36F305FDE3A821EE545532"
+    },
+    {
+      "path": "server/src/services/rentalBilling.ts",
+      "sha256": "4C57AA6F79842EC72D75B8B521AA21A885A95EC27F3E82301D9118A650EAE53E"
+    },
+    {
+      "path": "server/src/services/rentalBillReadyWatcher.ts",
+      "sha256": "CA5ABE52590DA6860494C6D017D9DDF3E117CE8720A4C7A3817731103E671CC6"
+    },
+    {
+      "path": "server/src/services/rentalComposition.ts",
+      "sha256": "A89A0411D4D0ECA79F10B3F1A470B3A0084C106632F472361C89044CA82CF04C"
+    },
+    {
+      "path": "server/src/services/rentalsBoard.test.ts",
+      "sha256": "80B7BBE927228319AED4DD978832F812CDF84271A4734925436F2DCACE2578A1"
+    },
+    {
+      "path": "server/src/services/rentalsBoard.ts",
+      "sha256": "54195C8CE4232332FC3FE61F1EE5F8F4C1AE6434CC33410D82735F726E5193E2"
+    },
+    {
+      "path": "server/src/services/rentalTicketRecord.test.ts",
+      "sha256": "EBE9DD996694406DEA0AC2E79EF1D2DB0773B470F83FCD26C2A5C4FB7EA4517B"
+    },
+    {
+      "path": "server/src/services/rentalTicketRecord.ts",
+      "sha256": "A96ACBCD9BF1648EF2745839425EB91C0846DBBFC7F169BB7FE846189BDEC7E2"
+    },
+    {
+      "path": "server/src/services/ringcentralListener.ts",
+      "sha256": "CB84BAA4435B37F0986CBE8BE4F58E3038EF1D9815CCB4ADC844FBF80F76FD43"
+    },
+    {
+      "path": "server/src/services/ringcentralNotify.ts",
+      "sha256": "1B029EAAB8D8A06AA922286BC14FF79DD68961A65D011E6D351B83852C0F9AC4"
+    },
+    {
+      "path": "server/src/services/salesTax.ts",
+      "sha256": "B068EF16C885BC584A7376D03162BA6CE3C325DDFD3AF18BF6874BC0210BC5B4"
+    },
+    {
+      "path": "server/src/services/sendForSigning.ts",
+      "sha256": "E106D0269E9927D6877EA3E8201D4F5E6EBC6703506BFC39E8CBC42F7296A787"
+    },
+    {
+      "path": "server/src/services/serialQuality.ts",
+      "sha256": "A99A259954E3F8ED82672853FFF0FF8742074915DC40D2B7D4F6B5D28F4F248D"
+    },
+    {
+      "path": "server/src/services/shopAging.test.ts",
+      "sha256": "046417BF748A35A2F220B7C77FFB3C8CE899D2B2B382FB67A9DD1BB2DE6DA08D"
+    },
+    {
+      "path": "server/src/services/shopAging.ts",
+      "sha256": "64BB584F8F9B586C6F45F78C57A6180FA5C4A01E9C6B71277404D4C55CEA312D"
+    },
+    {
+      "path": "server/src/services/shopBatchQa.test.ts",
+      "sha256": "5474BECB455AD9CF6AE4E57849D676833A0E1A634C579672CA37696896EA92ED"
+    },
+    {
+      "path": "server/src/services/shopBatchQa.ts",
+      "sha256": "1F6C39E3B79E56BC13AF244CC5AC6B9DDBAE9DF618C8C697BD114108D9D20155"
+    },
+    {
+      "path": "server/src/services/shopBillingLines.test.ts",
+      "sha256": "4A7715EE0421FDEE81518B7B2473C361BB550C2B31FFB0C6454575566C30D690"
+    },
+    {
+      "path": "server/src/services/shopBillingLines.ts",
+      "sha256": "1C2AD552D01831CAA79C2BA59F887E5DD073428FA33B4B6A3E0419159AA37ACC"
+    },
+    {
+      "path": "server/src/services/shopBillingQueue.ts",
+      "sha256": "ED59DF8DFAC13FE5B21C88C79E0C91FC955279598D1E5E3BC0A8B3FF836BDD73"
+    },
+    {
+      "path": "server/src/services/shopBillingWaiver.test.ts",
+      "sha256": "F6C7C6D6BC1258C98F4468138E562F6E23408C1BBF5E82203AD0C1B965EA4CEA"
+    },
+    {
+      "path": "server/src/services/shopBillingWaiver.ts",
+      "sha256": "7885BFD4A3C547C383C74833BE32B51FF4D9CBDD3B99801AEF3BB4CFC74BAC9C"
+    },
+    {
+      "path": "server/src/services/shopBoard.ts",
+      "sha256": "5F2F28827CD86C8772A9311CE3676336D4DFA63FCDF5B2D6024E44858B6EC5EA"
+    },
+    {
+      "path": "server/src/services/shopChargePreview.test.ts",
+      "sha256": "41D02742594690C0A7B97E75E7918A4C7676DE9F643E9BCE283E22774E5E96BF"
+    },
+    {
+      "path": "server/src/services/shopChargePreview.ts",
+      "sha256": "E8C1FF95C2537C3C18271A7CC5B5818A39BE3CEB61C09038024970C3315B81E3"
+    },
+    {
+      "path": "server/src/services/shopContactLog.test.ts",
+      "sha256": "0E40A70A05F2C0126C8E7A131C8C9E859AC37DFBE98E41D38C6D1A0CEF0C0E6F"
+    },
+    {
+      "path": "server/src/services/shopContactLog.ts",
+      "sha256": "A113CF5E7BF4AFD7744C35A8FDA85A56E1790ECB9B16B4410406802239E21642"
+    },
+    {
+      "path": "server/src/services/shopHardCloseSweep.ts",
+      "sha256": "EFF177517162C9884CA38D2AEA81C19D2FE6FA515BE0BAFEAB5A2CE7D186542F"
+    },
+    {
+      "path": "server/src/services/shopHoldReason.test.ts",
+      "sha256": "9B319781CB0816AA99A2C0C205211421E3F44B99A7C1E692131C2EC77F81E470"
+    },
+    {
+      "path": "server/src/services/shopHoldReason.ts",
+      "sha256": "F4157326811E04AAF6263AEB461BD462030171BD09F53845D75DD1D0F6753229"
+    },
+    {
+      "path": "server/src/services/shopQaGate.test.ts",
+      "sha256": "8528F6540D13FC98FD64A0F3214B4A108F5F27074A4B6F9D49792520C2C4CB64"
+    },
+    {
+      "path": "server/src/services/shopQaGate.ts",
+      "sha256": "AE6BD194AAE47B197696EF9EABDF35EE4F7175BD32E3C9C521CF6857F72FCDE6"
+    },
+    {
+      "path": "server/src/services/shopQaMaterialize.ts",
+      "sha256": "5B33BB5F1F84CF984215CBC08929DC66B9AD220E41DCC2523A81928867658177"
+    },
+    {
+      "path": "server/src/services/shopServiceCharges.test.ts",
+      "sha256": "9DB32355566378E4EA5F35507F49BAFA06AA4246370D944974678240A9846BCF"
+    },
+    {
+      "path": "server/src/services/shopServiceCharges.ts",
+      "sha256": "DD7F7F77FEE32BAE8F966797C1971AF3B5D7998598AAB023994C62D69CC3513E"
+    },
+    {
+      "path": "server/src/services/shopSoftClose.test.ts",
+      "sha256": "053A2FEB7403136167857B28CE731631A013191C6D0A323E69390F7108D59C72"
+    },
+    {
+      "path": "server/src/services/shopSoftClose.ts",
+      "sha256": "85DB4FD3FF29ABAF990EEC931745587757FD2E476354A1F3E4FD679AFD1063A8"
+    },
+    {
+      "path": "server/src/services/shopStateMachine.ts",
+      "sha256": "499C8984FEFB11A0AC848846C62BCA5613A6A895C0E8445B871B649E014A5A74"
+    },
+    {
+      "path": "server/src/services/shopVendorReceive.test.ts",
+      "sha256": "90981E49BD1C1A9CC522A02F16C151364944E2529501FE3A3CB78065F90490B7"
+    },
+    {
+      "path": "server/src/services/shopVendorReceive.ts",
+      "sha256": "160E018498022F2EED6F2548B1F7C89E2B7924F1F27E4D2A042DCC1E4157003D"
+    },
+    {
+      "path": "server/src/services/shopVendorReceiveBilling.test.ts",
+      "sha256": "A6E0D9B1BD51DD6DC8FB57509900CB67082987C30ECA93A8593440A888DD2AC8"
+    },
+    {
+      "path": "server/src/services/shopVendorReceiveBilling.ts",
+      "sha256": "DDC02C012E599B1F4242541EB91FE59F9FCB6E6299E0CE6EBB7AC61D5222D2F2"
+    },
+    {
+      "path": "server/src/services/shopWoCreate.ts",
+      "sha256": "B71C1540AC2AE2EE8657425146D670E5E9E70E95A6BB120DEC5D501DFC36495A"
+    },
+    {
+      "path": "server/src/services/shopWorkOrderPdfGenerator.ts",
+      "sha256": "6F368ABC822354E0F62B6AE1CF5CB5EA44B165B9FD74CD2F2A84DDC315D04FC8"
+    },
+    {
+      "path": "server/src/services/shopWoTransit.test.ts",
+      "sha256": "5995B543F2465ACAD5230357671EE37636670960EECA7D6B082BE272C940CA8E"
+    },
+    {
+      "path": "server/src/services/stripeClient.ts",
+      "sha256": "D8F77C6FE9BA68B23E4FEFF5A0E10EC984AFB733C6856B0018F1959C6DCB5C3D"
+    },
+    {
+      "path": "server/src/services/stripeWebhook.ts",
+      "sha256": "E0C14CA203031025C7573A8357DF51FE7163E90280105A3455C6CB911BD6A774"
+    },
+    {
+      "path": "server/src/services/supervisor.ts",
+      "sha256": "3198DA603885ED49723918A437276AD69A3AFE821F1758DBBC0B332A59C5C562"
+    },
+    {
+      "path": "server/src/services/ticketPdfGenerator.ts",
+      "sha256": "D1D41251B4A2E258437E9DC9860BA23C88676CA3FA24225ACDC875B2FFCBE335"
+    },
+    {
+      "path": "server/src/services/ticketReviewRules.ts",
+      "sha256": "EF7B0CFF2355F76BD4E0F622ED042591EF22E8EC6F2867E006393117D8AFA55D"
+    },
+    {
+      "path": "server/src/services/ticketStateMachine.ts",
+      "sha256": "45032FCC77D9AA32882A8688E183DA3E694B405ABB4B3299B1EAE424801462E8"
+    },
+    {
+      "path": "server/src/services/unitIdentity.ts",
+      "sha256": "4937391DCF9ECF953117B0E411C4F4B3B18B6C7BF2828CF6060ED3EE5B70A815"
+    },
+    {
+      "path": "server/src/services/wellDmrMatch.test.ts",
+      "sha256": "BE07C76FF5053689447A749F46F4B8950F65B607F9205C8AA28FF8DFF3956922"
+    },
+    {
+      "path": "server/src/services/wellDmrMatch.ts",
+      "sha256": "40E9892EB740189028B05FDDBC056F5FFF30EAE473AFAE19F9DC1B8EFFCAF807"
+    },
+    {
+      "path": "server/src/services/wellProximity.ts",
+      "sha256": "8A06F2A98A4A5B7655853A542F7D16E06A8E6A55AE7F0EA94E8AD55FFEF43CE1"
+    },
+    {
+      "path": "server/src/services/widgetCatalog.ts",
+      "sha256": "A8B3166F8622C9A052D27D64C3FAAD2CB129ECDB650DD9BEFA436FA84890941C"
+    },
+    {
+      "path": "server/src/utils/__tests__/htmlEntities.test.ts",
+      "sha256": "E1C3F048B57CD8D6B1C08DCA8CF111CA76D0AA2E2D39725C8324348509C328C7"
+    },
+    {
+      "path": "server/src/utils/__tests__/qbClassLocation.test.ts",
+      "sha256": "EFA9B633D684B0F3373115EFD3F1E9FF3E9A7C2C9AD219B213B34A3636F821FD"
+    },
+    {
+      "path": "server/src/utils/auditLog.ts",
+      "sha256": "E550B9EC90DFCEE112328643B6D9D8934A2A470FBBCD1237E6B189724B6A0A6D"
+    },
+    {
+      "path": "server/src/utils/billingGroupKey.ts",
+      "sha256": "1554A402ADC8F920B63CCFB01080C3523822445566E35A02155D43F30840F16B"
+    },
+    {
+      "path": "server/src/utils/companyGuards.ts",
+      "sha256": "69DD4D85F0C766221E53B44A0AE5F74308306239E458858F52E665F8BD2476B1"
+    },
+    {
+      "path": "server/src/utils/courseProductMap.ts",
+      "sha256": "0BF56565A2D95DEB1CAAE8F16F1972698812A3003B3E46485F41547D050446DC"
+    },
+    {
+      "path": "server/src/utils/envCheck.ts",
+      "sha256": "9222FEA4D9493865AF8181F0389B1430BB75349E9347F9E33809E2746633AB3F"
+    },
+    {
+      "path": "server/src/utils/htmlEntities.ts",
+      "sha256": "590B50117CB04DC3032FF8399A2C58075BB983940D8F8F9F7F1D4ED273820D77"
+    },
+    {
+      "path": "server/src/utils/locationDisplay.ts",
+      "sha256": "E1DC8E31B07877A74C9BDC61861C5E2D25883C4ED49CEFDB0246AE3648F00FD6"
+    },
+    {
+      "path": "server/src/utils/notesExtraction.ts",
+      "sha256": "F08CDD879EE68D0187C431CB79142E82E8478672DC896BBE2CFC41812CB71E06"
+    },
+    {
+      "path": "server/src/utils/partNumber.ts",
+      "sha256": "04676556451487A4349F33617412B6FDABEE9D566E7F1A40C46E9CFFF7FC1A85"
+    },
+    {
+      "path": "server/src/utils/pdfToBuffer.ts",
+      "sha256": "E6693DBE314201B186262CF36223CCF0A0A049F892695E170380F976929D9A06"
+    },
+    {
+      "path": "server/src/utils/qbClass.ts",
+      "sha256": "484C3930E12E57B579890E513B618E09D7C78E098FBCCD0B77EE496706D7FC3C"
+    },
+    {
+      "path": "server/src/utils/qbLocation.ts",
+      "sha256": "A70398230DE62BC48D92A6B59FA50E781730E7333106A64B8E87B287D22B3619"
+    },
+    {
+      "path": "server/src/utils/servicePartMap.ts",
+      "sha256": "7AB8370F1BB4D974E9A5771FDAAE4F84BED4D889A1192782F7DEC18590EA96E2"
+    },
+    {
+      "path": "server/src/utils/ticketNumber.ts",
+      "sha256": "9DC5F702FA3E189536A82EFB4F3AE46775DCD0642ED7636F9D19694FC6F71184"
+    },
+    {
+      "path": "server/src/utils/ticketPdfBuffer.ts",
+      "sha256": "2F346BA7BFA03B2360F8BEAEB4A58C1F91458B024AE46A49C60FBCFA16B6A01A"
+    },
+    {
+      "path": "server/src/v1/apiKeyStore.ts",
+      "sha256": "C47796E24029F849BBE2996DA5A52297D9E28F565CC89528EB45174EF0E46500"
+    },
+    {
+      "path": "server/src/v1/auth.ts",
+      "sha256": "D2DD17D6C818218A980CF9692A383866777189D13C21A1018B3B7918C52B6116"
+    },
+    {
+      "path": "server/src/v1/index.ts",
+      "sha256": "F9C3EB55EE8E7A4FE2E4E4454D5CFD488D9ECCDCA595ACFDEA6EF5253D84EFC4"
+    },
+    {
+      "path": "server/src/v1/mappers.ts",
+      "sha256": "37955E2D9ED41B1D14C30B70017E9F4703989F439CBE353E3B7B61A5EB25A441"
+    },
+    {
+      "path": "server/src/v1/respond.ts",
+      "sha256": "C35AA8513359741192B9B0B6F2523F8020D607CE728A9C191833202C941B6B7C"
+    },
+    {
+      "path": "server/tsconfig.json",
+      "sha256": "35BFDD172AC6C2857416EABF09B61BCE5DEB89CAB2F727B530E55F4C52324515"
+    },
+    {
+      "path": "sync-prod-to-dev.bat",
+      "sha256": "7CFB7F42E676D4B8191B9E6C0938678606FFDEFE03F1A953CF414C5D19E54D29"
+    },
+    {
+      "path": "sync-prod-to-sandbox.bat",
+      "sha256": "8B7B76965D4B40AFFAA64A742C07F4A51AC66CF6443B6AA0F54D9C279EDFB45B"
+    }
+  ]
+}

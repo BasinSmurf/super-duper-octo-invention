@@ -1,0 +1,50 @@
+# ──────────────────────────────────────────────
+# Sundog — Caddy reverse proxy + static PWA host
+# ──────────────────────────────────────────────
+# Prod (servpro) serves PLAIN HTTP on :80 — there is NO `tls` block and 443 is
+# not published, so Caddy does not terminate TLS. If the app is reachable beyond
+# the LAN, TLS is expected upstream (gateway). Reconciled to match what runs on
+# servpro as of 2026-06-17. See deploy/PROD-TOPOLOGY.md.
+http://:80 {
+
+    # ── API → Express backend ────────────────
+    handle /api/* {
+        reverse_proxy api:3001
+    }
+
+    # ── PWA static files ─────────────────────
+    handle {
+        root * /srv/www
+        encode gzip zstd
+
+        # Cache static assets aggressively (hashed filenames)
+        @static path /assets/*
+        header @static Cache-Control "public, max-age=31536000, immutable"
+
+        # Service worker must NEVER be cached by the browser
+        @sw path /sw.js /workbox-*
+        header @sw Cache-Control "no-cache, no-store, must-revalidate"
+
+        # Manifest + icons — short cache
+        @pwa path /manifest.webmanifest /icon-* /favicon.ico
+        header @pwa Cache-Control "public, max-age=3600"
+
+        # SPA fallback: any non-file route → index.html
+        try_files {path} /index.html
+        file_server
+    }
+
+    # ── Security headers ─────────────────────
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy strict-origin-when-cross-origin
+        -Server
+    }
+
+    # ── Logging ──────────────────────────────
+    log {
+        output stdout
+        format console
+    }
+}

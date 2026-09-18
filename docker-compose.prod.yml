@@ -1,0 +1,238 @@
+# ──────────────────────────────────────────────
+# Sundog — Production Docker Compose
+#
+# Usage:
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# First run:
+#   docker compose -f docker-compose.prod.yml exec api npx prisma migrate deploy
+#   docker compose -f docker-compose.prod.yml exec api npx prisma db seed
+# ──────────────────────────────────────────────
+
+# Container logs were unbounded — the api logs every request, so its json log
+# grows without limit until the disk runs out. 50MB × 3 files caps each service
+# at 150MB; `docker logs` still holds weeks of history at prod's volume.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: '50m'
+    max-file: '3'
+
+services:
+
+  # ── Postgres 16 ──────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: servicepro-postgres
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-sundog}
+      POSTGRES_USER: ${POSTGRES_USER:-sundog}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.production}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-sundog}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis 7 ──────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: servicepro-redis
+    restart: unless-stopped
+    logging: *default-logging
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Express API ──────────────────────────
+  api:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: servicepro-api
+    restart: unless-stopped
+    logging: *default-logging
+    ports:
+      - '3001:3001'   # QBWC connects from Windows VM via localhost2:3001
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_URL: postgresql://${POSTGRES_USER:-sundog}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-sundog}?schema=public
+      REDIS_URL: redis://redis:6379
+      # ── Auth ──
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env.production}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-86400}
+      PIN_SALT_ROUNDS: ${PIN_SALT_ROUNDS:-10}
+      # ── File uploads ──
+      UPLOAD_DIR: /app/uploads
+      MAX_FILE_SIZE_MB: ${MAX_FILE_SIZE_MB:-10}
+      # ── File store (screenshots, equipment docs, ticket PDFs) ──
+      # Unset STORAGE_DRIVER = local disk at STORAGE_DIR (the api-storage volume).
+      # Set it to s3 once a bucket exists; the S3_* vars below are read only then.
+      STORAGE_DRIVER: ${STORAGE_DRIVER:-local}
+      STORAGE_DIR: ${STORAGE_DIR:-/app/data/storage}
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_REGION: ${S3_REGION:-}
+      S3_ENDPOINT: ${S3_ENDPOINT:-}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+      S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-}
+      # ── Google Workspace SSO ──
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_ALLOWED_DOMAIN: ${GOOGLE_ALLOWED_DOMAIN:-basinsafetyus.com}
+      GOOGLE_SA_KEY_PATH: ${GOOGLE_SA_KEY_PATH:-}
+      GOOGLE_ADMIN_EMAIL: ${GOOGLE_ADMIN_EMAIL:-}
+      # ── ClassPRO (training) — geocode/drive-time + Google Calendar push ──
+      # Unset = features degrade to manual entry / no gcal sync (bad-divorce).
+      GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY:-}
+      CLASSPRO_SHOP_ORIGIN: ${CLASSPRO_SHOP_ORIGIN:-}
+      CLASSPRO_GCAL_CALENDAR_ID: ${CLASSPRO_GCAL_CALENDAR_ID:-}
+      CLASSPRO_GCAL_ORGANIZER: ${CLASSPRO_GCAL_ORGANIZER:-}
+      # ── BlueLion (VaultPRO) cert push — self-skips while URL/token unset ──
+      BLUELION_URL: ${BLUELION_URL:-}
+      BLUELION_TOKEN: ${BLUELION_TOKEN:-}
+      BLUELION_TIMEOUT_MS: ${BLUELION_TIMEOUT_MS:-}
+      BLUELION_TLS_INSECURE: ${BLUELION_TLS_INSECURE:-}
+      BLUELION_SUBMIT_INTERVAL_MS: ${BLUELION_SUBMIT_INTERVAL_MS:-}
+      BLUELION_MAX_RETRIES: ${BLUELION_MAX_RETRIES:-}
+      BLUELION_BATCH_SIZE: ${BLUELION_BATCH_SIZE:-}
+      NOVARA_API_TOKEN: ${NOVARA_API_TOKEN:-}
+      NOVARA_API_URL: ${NOVARA_API_URL:-}
+      NOVARA_TIMEOUT_MS: ${NOVARA_TIMEOUT_MS:-}
+      NOVARA_MAX_RETRIES: ${NOVARA_MAX_RETRIES:-}
+      NOVARA_MIN_REQUEST_INTERVAL_MS: ${NOVARA_MIN_REQUEST_INTERVAL_MS:-}
+      NOVARA_SYNC_INTERVAL_MS: ${NOVARA_SYNC_INTERVAL_MS:-}
+      NOVARA_SYNC_ENABLED: ${NOVARA_SYNC_ENABLED:-}
+      # ── Outbound mail (digest/signature emails silently skip while unset) ──
+      # Sends via the Gmail API using GOOGLE_SA_KEY_PATH above (domain-wide
+      # delegation, gmail.send scope) impersonating this real Workspace mailbox.
+      GOOGLE_MAIL_FROM: ${GOOGLE_MAIL_FROM:-}
+      # ── Enverus OpenInvoice ──
+      ENVERUS_BASE_URL: ${ENVERUS_BASE_URL:-}
+      ENVERUS_PFX_PATH: ${ENVERUS_PFX_PATH:-/app/certs/enverus/envkeys.pfx}
+      ENVERUS_PFX_PASSPHRASE: ${ENVERUS_PFX_PASSPHRASE:-}
+      ENVERUS_CERT_PATH: ${ENVERUS_CERT_PATH:-/app/certs/enverus/BasinSafety_Public.pem}
+      ENVERUS_SUPPLIER_DUNS: ${ENVERUS_SUPPLIER_DUNS:-}
+      ENVERUS_HMAC_SECRET: ${ENVERUS_HMAC_SECRET:-}
+      ENVERUS_TIMEOUT_MS: ${ENVERUS_TIMEOUT_MS:-30000}
+      ENVERUS_MAX_RETRIES: ${ENVERUS_MAX_RETRIES:-3}
+      ENVERUS_SUBMIT_INTERVAL_MS: ${ENVERUS_SUBMIT_INTERVAL_MS:-60000}
+      ENVERUS_POLL_INTERVAL_MS: ${ENVERUS_POLL_INTERVAL_MS:-300000}
+      # ── QuickBooks Web Connector ──
+      # Set QBWC_ENABLED=false to stop answering polls with work (QB unlaunchable).
+      QBWC_ENABLED: ${QBWC_ENABLED:-true}
+      QBWC_USERNAME: ${QBWC_USERNAME:-sundog}
+      QBWC_PASSWORD: ${QBWC_PASSWORD:-}
+      QBWC_FILE_ID: ${QBWC_FILE_ID:-}
+      QBWC_OWNER_ID: ${QBWC_OWNER_ID:-}
+      QBWC_APP_NAME: ${QBWC_APP_NAME:-Service Pro - Basin Safety}
+      # Empty = use whichever company file QB has open. Prod's QBWC host only
+      # ever opens the live books, so it stays empty here; the sandbox on the
+      # dev box sets it to pin itself to the sandbox .QBW instead.
+      QBWC_COMPANY_FILE: ${QBWC_COMPANY_FILE:-}
+      # 0 = no <Scheduler> in the .qwc, i.e. manual pulls only.
+      QBWC_RUN_EVERY_N_MINUTES: ${QBWC_RUN_EVERY_N_MINUTES:-5}
+      QB_FALLBACK_ITEM: ${QB_FALLBACK_ITEM:-Misc}
+      QB_WALKIN_CUSTOMER: ${QB_WALKIN_CUSTOMER:-Walk In Purchase}
+      # ── Stripe ──
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_PUBLISHABLE_KEY: ${STRIPE_PUBLISHABLE_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      # ── RingCentral Team Messaging (dispatch/intake auto-post) — self-skips per-channel while unset ──
+      RINGCENTRAL_WEBHOOK_URL: ${RINGCENTRAL_WEBHOOK_URL:-}
+      RINGCENTRAL_RENTALS_WEBHOOK_URL: ${RINGCENTRAL_RENTALS_WEBHOOK_URL:-}
+      RINGCENTRAL_INTAKE_WEBHOOK_URL: ${RINGCENTRAL_INTAKE_WEBHOOK_URL:-}
+      RINGCENTRAL_TIMEOUT_MS: ${RINGCENTRAL_TIMEOUT_MS:-}
+      RINGCENTRAL_ICON_URL: ${RINGCENTRAL_ICON_URL:-}
+    volumes:
+      - api-uploads:/app/uploads
+      - api-storage:/app/data/storage
+      - api-logs:/app/logs
+      - ./server/certs:/app/certs:ro
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://localhost:3001/api/health']
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      # Cold boot does DB connect + prisma migrate + spins up ~7 queue/worker
+      # processors before it serves /api/health. 15s was too tight, so caddy
+      # (depends_on: api healthy) raced it and bailed. 60s gives ample grace.
+      start_period: 60s
+
+  # ── PWA static build ─────────────────────
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    container_name: servicepro-client-build
+    # This container just builds static files.
+    # It exits after build — Caddy mounts the volume.
+    #
+    # IMPORTANT: nuke /output before copying. The client-dist volume persists
+    # across `down`/`up`; without a wipe, stale files (especially an old
+    # index.html or service-worker) can survive a rebuild and keep being
+    # served by Caddy. Clean copy = predictable deploy.
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -e
+        rm -rf /output/* /output/.[!.]* 2>/dev/null || true
+        cp -a /srv/www/. /output/
+        echo "Client files copied to /output (cleaned)"
+        exit 0
+    volumes:
+      - client-dist:/output
+
+  # ── Caddy (HTTPS + reverse proxy) ───────
+  caddy:
+    image: caddy:2-alpine
+    container_name: servicepro-caddy
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      api:
+        condition: service_healthy
+      client:
+        condition: service_completed_successfully
+    ports:
+      # Prod serves plain HTTP on :80 (Caddyfile = `http://:80`). 443 is NOT
+      # published — Caddy does not terminate TLS. See deploy/PROD-TOPOLOGY.md.
+      # Bind explicitly on 0.0.0.0 + bindv6only=0 so the host's dual-stack
+      # interface accepts the :80 bind (proven prod config on servpro).
+      - '0.0.0.0:80:80'
+    environment:
+      SUNDOG_HOST: ${SUNDOG_HOST:-:80}
+    sysctls:
+      - net.ipv6.bindv6only=0
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - client-dist:/srv/www:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  postgres-data:
+    external: true
+    name: servicepro_postgres-data
+  redis-data:
+  api-uploads:
+  api-storage:
+  api-logs:
+  client-dist:
+  caddy-data:
+  caddy-config:

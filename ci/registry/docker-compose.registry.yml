@@ -1,0 +1,35 @@
+# ServicePRO — self-hosted Docker registry (mk2, proposed)
+#
+# On-prem image store so CI can push and the prod VM can pull, with NO SaaS
+# (ghcr/dockerhub) in the deploy path. Run this on the Hyper-V host (or a small
+# infra VM) reachable over Tailscale.
+#
+#   docker compose -f ci/registry/docker-compose.registry.yml up -d
+#
+# Reachability: publish on the Tailscale interface only; reference it as
+# REGISTRY=registry.<tailnet>.ts.net:5000 from CI and prod.
+#
+# TLS: a registry served over plain HTTP must be listed as an "insecure-registry"
+# in each Docker daemon's /etc/docker/daemon.json, OR put it behind your existing
+# NPM/Let's-Encrypt edge. Auth: add htpasswd if the tailnet isn't trusted enough.
+# See mk2/CI-IMPLEMENTATION.md for the daemon.json + htpasswd steps.
+
+services:
+  registry:
+    image: registry:2
+    container_name: servicepro-registry
+    restart: unless-stopped
+    ports:
+      - '5000:5000'
+    environment:
+      REGISTRY_STORAGE_DELETE_ENABLED: 'true'
+    volumes:
+      - registry-data:/var/lib/registry
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://localhost:5000/v2/']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  registry-data:
