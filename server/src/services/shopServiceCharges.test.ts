@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
-vi.mock('../index.js', () => ({ prisma: { product: { findMany: vi.fn() } } }));
-import { prisma } from '../index.js';
+vi.mock('../db.js', async importOriginal => ({ ...await importOriginal<typeof import('../db.js')>(), ...(() => ({ prisma: { product: { findMany: vi.fn() } } }))() }));
+import { prisma } from '../db.js';
 import { linkedQaActions, normalizeServiceCharges, serviceQaMapping, saveQaServices, validateVendorServiceLink } from './shopServiceCharges.js';
 
 describe('shop services and QA linkage', () => {

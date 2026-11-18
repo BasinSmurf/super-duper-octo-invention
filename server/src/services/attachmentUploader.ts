@@ -23,7 +23,7 @@
  *   verified either way) but wasteful of B2 egress, which is metered.
  */
 
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { runScheduledJob } from './jobs.js';
 import { heartbeat } from './supervisor.js';
 import { promoteToRemote, remoteTierEnabled } from './attachmentStore.js';
@@ -78,11 +78,14 @@ export async function processAttachmentUploads(): Promise<{ promoted: number; fa
   let promoted = 0;
   let failed = 0;
 
+  const processedKeys = new Set<string>();
   for (const attachment of pending) {
+    if (attachment.bufferKey && processedKeys.has(attachment.bufferKey)) continue;
+    if (attachment.bufferKey) processedKeys.add(attachment.bufferKey);
     try {
       const { remoteKey, uploadedAt } = await promoteToRemote(attachment);
-      await prisma.attachment.update({
-        where: { id: attachment.id },
+      await prisma.attachment.updateMany({
+        where: attachment.bufferKey ? { bufferKey: attachment.bufferKey } : { id: attachment.id },
         data: {
           storageState: 'remote',
           remoteKey,
@@ -99,8 +102,8 @@ export async function processAttachmentUploads(): Promise<{ promoted: number; fa
     } catch (err) {
       failed++;
       const message = err instanceof Error ? err.message : String(err);
-      await prisma.attachment.update({
-        where: { id: attachment.id },
+      await prisma.attachment.updateMany({
+        where: attachment.bufferKey ? { bufferKey: attachment.bufferKey } : { id: attachment.id },
         data: {
           // Stays retryable. 'failed' means "surfacing this to a human",
           // not "stopped trying".

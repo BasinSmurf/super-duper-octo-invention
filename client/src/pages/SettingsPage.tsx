@@ -1,6 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/cn'
+import { ReportSubscriptions } from '@/components/ReportSubscriptions'
+import { WorkPointVerificationSettings } from '@/components/WorkPointVerificationSettings'
+import { BrandingSettings } from '@/components/BrandingSettings'
 import { Shield, Plus, Pencil, Trash2, Save, X, AlertTriangle, CheckCircle, Users, Key, KeyRound, UserX, UserCheck, Search, RefreshCw, Lock, MapPin, Percent } from 'lucide-react'
 
 // ── Shared constants ──
@@ -48,6 +51,7 @@ const ROLE_OPTIONS = [
   { value: 'boss', label: 'Boss', color: 'bg-purple-100 text-purple-700' },
   { value: 'field_super', label: 'Field Supervisor', color: 'bg-blue-100 text-blue-700' },
   { value: 'billing_ar', label: 'Billing / AR', color: 'bg-orange-100 text-orange-700' },
+  { value: 'ar_supervisor', label: 'AR Supervisor', color: 'bg-amber-100 text-amber-800' },
   { value: 'dispatch', label: 'Dispatch', color: 'bg-teal-100 text-teal-700' },
   { value: 'field_tech', label: 'Field Tech', color: 'bg-green-100 text-green-700' },
   { value: 'train_admin', label: 'Training Admin', color: 'bg-indigo-100 text-indigo-700' },
@@ -58,6 +62,9 @@ const ROLE_COLOR_MAP = Object.fromEntries(ROLE_OPTIONS.map(r => [r.value, r.colo
 const ROLE_LABEL_MAP = Object.fromEntries(ROLE_OPTIONS.map(r => [r.value, r.label]))
 
 export function SettingsPage() {
+  const [reportUser, setReportUser] = useState<AppUser | null>(null)
+  const reportDialog = useRef<HTMLDialogElement>(null)
+  useEffect(() => { if (reportUser) reportDialog.current?.showModal() }, [reportUser])
   // ── Role Mappings state ──
   const [mappings, setMappings] = useState<RoleMapping[]>([])
   const [loading, setLoading] = useState(true)
@@ -320,7 +327,16 @@ export function SettingsPage() {
 
   return (
     <div className="max-w-3xl space-y-6">
+      {reportUser && <dialog ref={reportDialog} aria-label={`Assign reports to ${reportUser.name}`} className="m-auto rounded-xl p-0 w-[min(95vw,42rem)] backdrop:bg-black/40" onCancel={() => setReportUser(null)}>
+        <div className="bg-white rounded-xl p-4 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+          <div className="flex justify-between items-center mb-3"><h2 className="font-semibold">Reports for {reportUser.name} · {reportUser.email}</h2><button autoFocus aria-label="Close report assignments" className="border rounded px-3 py-1" onClick={() => setReportUser(null)}>Close</button></div>
+          <ReportSubscriptions key={reportUser.id} userId={reportUser.id} />
+        </div>
+      </dialog>}
       <h1 className="text-2xl font-bold text-slate-900">Settings</h1>
+
+      <BrandingSettings />
+      <WorkPointVerificationSettings />
 
       {/* ════════════════════════════════════════════════
           Google Groups → Role Mappings
@@ -640,6 +656,7 @@ export function SettingsPage() {
                       <div className="min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className="text-sm font-medium text-slate-900 truncate">{u.name || 'Unnamed'}</span>
+                          <button className="text-xs text-blue-700 underline" onClick={() => setReportUser(u)}>Assign report</button>
                           {roleEditingId === u.id ? (
                             <select
                               autoFocus

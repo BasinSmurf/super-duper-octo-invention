@@ -1,3 +1,4 @@
+import { closerFieldsFor } from './shopSoftClose.js';
 /**
  * inspectionRouting.ts — ShopWork refactor, Wave 1d
  *
@@ -29,6 +30,8 @@ import {
 import { canTransitionShopItem } from './shopStateMachine.js';
 import { checkCondemnEvidence } from './condemnEvidence.js';
 import { evaluateItemQa, resolveQaDivert } from './shopQaGate.js';
+import { assertShopSerialsCollected } from './shopSerials.js';
+import { AppError } from '../middleware/errorHandler.js';
 
 export interface RoutingResult {
   routed: boolean;
@@ -66,6 +69,9 @@ export async function routeShopItemFromInspection(
       equipmentDescription: true,
       fexBrand: true,
       partsUsed: true,
+      hardClosesAt: true,
+      softClosedAt: true,
+      billedAt: true,
     },
   });
   if (!item) return { routed: false, reason: 'shop item not found' };
@@ -101,9 +107,21 @@ export async function routeShopItemFromInspection(
   if (!target) {
     return { routed: false, reason: `no route for outcome '${inspection.outcome}'`, cascades: cascadeSummary, forcedParts };
   }
+  if (target === 'shop_complete' || target === 'condemned') {
+    try {
+      await assertShopSerialsCollected(prisma, item.workOrderId, [item.id]);
+    } catch (error) {
+      if (!(error instanceof AppError)) throw error;
+      return { routed: false, reason: error.message, cascades: cascadeSummary, forcedParts };
+    }
+  }
   const fromStatus = item.status as ShopItemStatus;
   if (fromStatus === target) {
     return { routed: false, reason: 'already at target status', cascades: cascadeSummary, forcedParts };
+  }
+  if (fromStatus === 'shop_complete' &&
+      (item.billedAt || !item.hardClosesAt || item.hardClosesAt.getTime() <= Date.now())) {
+    return { routed: false, reason: 'Closed unit must be explicitly reopened before correcting its status', cascades: cascadeSummary, forcedParts };
   }
   // CONDEMN EVIDENCE backstop (WI-04). The lock path already gates this, but
   // the OFFLINE path does not go through lock -- sync.ts calls this function
@@ -195,6 +213,7 @@ export async function routeShopItemFromInspection(
       where: { id: item.id },
       data: {
         status: target as ShopItemStatus,
+        ...(userId ? closerFieldsFor(item, target, userId) : !['shop_complete', 'returned', 'condemned'].includes(target) ? { softClosedAt: null, hardClosesAt: null, closedById: null } : {}),
         ...(partsUpdate ? { partsUsed: partsUpdate as never } : {}),
       },
     });

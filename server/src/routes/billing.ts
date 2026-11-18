@@ -11,13 +11,70 @@
 // CHECK constraint in the migration, belt-and-suspenders).
 
 import { Router, Request, Response } from 'express';
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { requirePermission } from '../middleware/rbac.js';
 import { recordObservation } from '../services/billingObservations.js';
 import { createAuditLog } from '../utils/auditLog.js';
+import { rebillingReportFilter, combineRebillingTotals } from '../services/rebillingReport.js';
 
 export const billingRouter = Router();
+
+// Complete-history totals; the detail page size never limits the aggregates.
+billingRouter.get('/rebilling', async (req: Request, res: Response, next) => {
+  try {
+    const where = rebillingReportFilter(req.query);
+    const page = Number(req.query.page ?? 0);
+    if (!Number.isSafeInteger(page) || page < 0) throw new AppError(400, 'Invalid page');
+    const group = { by: ['companyId', 'companyName', 'qbCustomerOverride'] as Array<'companyId' | 'companyName' | 'qbCustomerOverride'>,
+      _count: { _all: true as const }, _sum: { total: true as const } };
+    const [posted, pending, invoices, total] = await Promise.all([
+      prisma.invoice.groupBy({ ...group, where: { ...where, qbInvoiceTxnId: { not: null } } }),
+      prisma.invoice.groupBy({ ...group, where: { ...where, qbInvoiceTxnId: null } }),
+      prisma.invoice.findMany({ where, take: 50, skip: page * 50,
+        orderBy: [{ invoiceDate: 'desc' }, { id: 'desc' }],
+        select: { id: true, invoiceNumber: true, companyName: true, qbCustomerOverride: true,
+          invoiceDate: true, total: true, status: true, qbInvoiceTxnId: true, qbInvoiceNumber: true } }),
+      prisma.invoice.count({ where }),
+    ]);
+    res.json({ groups: combineRebillingTotals(posted, pending), invoices, total, hasMore: total > (page + 1) * 50 });
+  } catch (error) { next(error); }
+});
+
+// Search all identifier spaces together; only load the full lineage after selection.
+billingRouter.get('/lineage/search', async (req: Request, res: Response, next) => {
+  try {
+    const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+    if (!q) throw new AppError(400, 'q is required');
+    const page = Number(req.query.page ?? 0);
+    if (!Number.isSafeInteger(page) || page < 0) throw new AppError(400, 'Invalid page');
+    const contains = { contains: q, mode: 'insensitive' as const };
+    const docWhere = { OR: [
+      { docNumber: contains }, { qbTxnId: contains },
+      { submissions: { some: { externalRef: contains } } },
+    ] };
+    const ticketWhere = { ticketNumber: contains };
+    const take = 100;
+    const [documents, tickets, documentCount, ticketCount] = await Promise.all([
+      prisma.billingDocRef.findMany({
+        where: docWhere, skip: page * take, take,
+        orderBy: [{ docNumber: 'asc' }, { revision: 'asc' }, { id: 'asc' }],
+        select: { id: true, docNumber: true, docType: true, revision: true, qbTxnId: true },
+      }),
+      prisma.serviceTicket.findMany({
+        where: ticketWhere, skip: page * take, take,
+        orderBy: [{ ticketNumber: 'asc' }, { id: 'asc' }],
+        select: { id: true, ticketNumber: true, workDescription: true, status: true },
+      }),
+      prisma.billingDocRef.count({ where: docWhere }),
+      prisma.serviceTicket.count({ where: ticketWhere }),
+    ]);
+    res.json({ documents, tickets, total: documentCount + ticketCount,
+      hasMore: Math.max(documentCount, ticketCount) > (page + 1) * take });
+  } catch (err) {
+    next(err);
+  }
+});
 
 // POST /api/billing/observations — manual mirror entry (source: human only)
 billingRouter.post('/observations', requirePermission('billing:record_observation'), async (req: Request, res: Response, next) => {
@@ -92,13 +149,15 @@ billingRouter.get('/lineage', async (req: Request, res: Response, next) => {
 
     // Try each identifier space in turn — first hit wins. Order is cheapest
     // (exact-match indexed lookups) first.
-    const byDocNumber = await prisma.billingDocRef.findMany({ where: { docNumber: q }, select: { id: true } });
+    const selectedTicketId = typeof req.query.ticketId === 'string' ? req.query.ticketId : undefined;
+    const selectedDocRefId = typeof req.query.docRefId === 'string' ? req.query.docRefId : undefined;
+    const byDocNumber = selectedTicketId ? [] : await prisma.billingDocRef.findMany({ where: selectedDocRefId ? { id: selectedDocRefId } : { docNumber: q }, select: { id: true } });
     if (byDocNumber.length > 0) {
       anchorDocRefIds = byDocNumber.map((d) => d.id);
       resolvedVia = 'doc_number';
     }
 
-    if (anchorDocRefIds.length === 0) {
+    if (anchorDocRefIds.length === 0 && !selectedTicketId && !selectedDocRefId) {
       const byTxnId = await prisma.billingDocRef.findMany({ where: { qbTxnId: q }, select: { id: true } });
       if (byTxnId.length > 0) {
         anchorDocRefIds = byTxnId.map((d) => d.id);
@@ -106,7 +165,7 @@ billingRouter.get('/lineage', async (req: Request, res: Response, next) => {
       }
     }
 
-    if (anchorDocRefIds.length === 0) {
+    if (anchorDocRefIds.length === 0 && !selectedTicketId && !selectedDocRefId) {
       const bySubmission = await prisma.billingSubmission.findFirst({ where: { externalRef: q }, select: { docRefId: true } });
       if (bySubmission) {
         anchorDocRefIds = [bySubmission.docRefId];
@@ -114,8 +173,8 @@ billingRouter.get('/lineage', async (req: Request, res: Response, next) => {
       }
     }
 
-    if (anchorDocRefIds.length === 0) {
-      const ticket = await prisma.serviceTicket.findUnique({ where: { ticketNumber: q }, select: { id: true } });
+    if (anchorDocRefIds.length === 0 && !selectedDocRefId) {
+      const ticket = await prisma.serviceTicket.findUnique({ where: selectedTicketId ? { id: selectedTicketId } : { ticketNumber: q }, select: { id: true } });
       if (ticket) {
         anchorTicketId = ticket.id;
         resolvedVia = 'ticket_number';
@@ -179,9 +238,20 @@ billingRouter.get('/lineage', async (req: Request, res: Response, next) => {
       }),
     ]);
     const invoiceByDocNumber = new Map(invoiceMeta.map((i) => [i.invoiceNumber, i]));
+    const sourceTickets = ticketIdsInvolved.length ? await prisma.serviceTicket.findMany({
+      where: { id: { in: ticketIdsInvolved } }, select: { id: true, ticketNumber: true, offlineId: true, companyId: true },
+    }) : [];
+    const sourceLinks = sourceTickets.flatMap(ticket => [...new Set([ticket.id, ticket.offlineId].filter((id): id is string => !!id))]
+      .map(sourceId => ({ workOrder: { companyId: ticket.companyId }, customData: { path: ['fieldInspectionRecord', 'sourceTicketOfflineId'], equals: sourceId } })));
+    const relatedItems = sourceLinks.length ? await prisma.shopWorkOrderItem.findMany({
+      where: { OR: sourceLinks }, select: { workOrder: { select: { id: true, workOrderNumber: true, status: true } } },
+    }) : [];
+    const relatedShopOrders = [...new Map(relatedItems.map(item => [item.workOrder.id, item.workOrder])).values()];
 
     res.json({
       resolvedVia,
+      tickets: sourceTickets.map(({ id, ticketNumber }) => ({ ticketId: id, ticketNumber })),
+      relatedShopOrders,
       docRefs: docRefs.map((d) => ({ ...d, invoice: invoiceByDocNumber.get(d.docNumber) ?? null })),
       lines,
       submissions,

@@ -25,87 +25,34 @@ const ticket = (over: Partial<BillingRuleTicketContext> = {}): BillingRuleTicket
   well: over.well ?? null,
 });
 
-const TIER1 = 'tier1_reservation_fee';
-
-describe('rule 5A — Tier 1 reservation fee fires on pad OR well', () => {
-  it('fires on a tier1 pad (the original behaviour)', () => {
-    const r = resolveInvoiceRules(ctx([ticket({ pad: { id: 'p1', tier1: true } })]));
-    expect(r.appliedRules).toContain(TIER1);
-    expect(r.extraLines).toHaveLength(1);
-    expect(r.extraLines[0]!.amount).toBe(50); // 5% of 1000
+describe('Tier 1 routes to Pale Horse without an upcharge', () => {
+  it.each([
+    { pad: { id: 'p1', tier1: true } },
+    { well: { id: 'w1', tier1: true } },
+    { pad: { id: 'p1', tier1: true }, well: { id: 'w1', tier1: true } },
+  ])('routes a qualifying site: %j', location => {
+    const input = ctx([ticket(location)]);
+    const before = JSON.stringify(input);
+    const result = resolveInvoiceRules(input);
+    expect(result.qbCustomerOverride).toBe('Pale Horse Service Inc');
+    expect(result.appliedRules).toContain('tier1_customer_override');
+    expect(result.extraLines).toEqual([]);
+    expect(result.lineAdjustments).toEqual([]);
+    expect(JSON.stringify(input)).toBe(before);
   });
-
-  // The reason this rule was widened: 2877 of 2886 wells have no pad, so a
-  // pad-only check silently skipped the fee on nearly all reservation work.
-  it('fires on a tier1 well with no pad at all', () => {
-    const r = resolveInvoiceRules(ctx([ticket({ well: { id: 'w1', tier1: true } })]));
-    expect(r.appliedRules).toContain(TIER1);
-    expect(r.extraLines).toHaveLength(1);
-    expect(r.extraLines[0]!.amount).toBe(50);
-  });
-
-  it('does not fire when neither pad nor well is flagged', () => {
-    const r = resolveInvoiceRules(ctx([
-      ticket({ pad: { id: 'p1', tier1: false }, well: { id: 'w1', tier1: false } }),
-    ]));
-    expect(r.appliedRules).not.toContain(TIER1);
-    expect(r.extraLines).toHaveLength(0);
-    expect(r.qbCustomerOverride).toBeNull();
-  });
-
-  it('does not fire when the ticket carries no location at all', () => {
-    const r = resolveInvoiceRules(ctx([ticket()]));
-    expect(r.appliedRules).not.toContain(TIER1);
-    expect(r.extraLines).toHaveLength(0);
-  });
-
-  // A Tier 1 well sitting under a Tier 1 pad is the normal case once pads
-  // get built for reservation sites — it must not double-charge.
-  it('adds exactly one fee line when both pad and well are flagged', () => {
-    const r = resolveInvoiceRules(ctx([
-      ticket({ pad: { id: 'p1', tier1: true }, well: { id: 'w1', tier1: true } }),
-    ]));
-    expect(r.extraLines).toHaveLength(1);
-    expect(r.extraLines[0]!.amount).toBe(50);
-  });
-
-  it('adds one fee line across several qualifying tickets, on the whole subtotal', () => {
-    const r = resolveInvoiceRules(ctx(
-      [
-        ticket({ id: 't1', well: { id: 'w1', tier1: true } }),
-        ticket({ id: 't2', pad: { id: 'p2', tier1: true } }),
-        ticket({ id: 't3' }),
-      ],
-      [1000, 500, 500],
-    ));
-    expect(r.extraLines).toHaveLength(1);
-    expect(r.extraLines[0]!.amount).toBe(100); // 5% of 2000
-    expect(r.extraLines[0]!.notes).toContain('2 Tier 1 tickets');
-  });
-
-  it('flips the QB customer to Pale Horse and keeps the fee line out of QB', () => {
-    const r = resolveInvoiceRules(ctx([ticket({ well: { id: 'w1', tier1: true } })]));
-    expect(r.qbCustomerOverride).toBe('Pale Horse Service Inc');
-    expect(r.extraLines[0]!.qbSkip).toBe(true);
-    expect(r.extraLines[0]!.isTaxable).toBe(false);
-  });
-
-  it('excludes qbSkip lines from the subtotal the fee is taken on', () => {
-    const base = ctx([ticket({ well: { id: 'w1', tier1: true } })], [1000]);
-    const r = resolveInvoiceRules({
-      ...base,
-      lineItems: [...base.lineItems, { rate: 400, quantity: 1, amount: 400, qbSkip: true }],
+  it.each([{}, { pad: { id: 'p1', tier1: false }, well: { id: 'w1', tier1: false } }])(
+    'preserves ordinary customer billing: %j', location => {
+      const result = resolveInvoiceRules(ctx([ticket(location)]));
+      expect(result.qbCustomerOverride).toBeNull();
+      expect(result.extraLines).toEqual([]);
+      expect(result.appliedRules).not.toContain('tier1_customer_override');
     });
-    expect(r.extraLines[0]!.amount).toBe(50); // 5% of 1000, not of 1400
-  });
-
-  it('skips the fee entirely when there is nothing billable to take it from', () => {
-    const r = resolveInvoiceRules(ctx([ticket({ well: { id: 'w1', tier1: true } })], [0]));
-    expect(r.appliedRules).not.toContain(TIER1);
-    expect(r.extraLines).toHaveLength(0);
+  it.each([{ amounts: [0] }, { amounts: [1000, 500, 500] }])('does not depend on subtotal: %j', ({ amounts }) => {
+    const result = resolveInvoiceRules(ctx([ticket({ well: { id: 'w1', tier1: true } }), ticket()], amounts));
+    expect(result.qbCustomerOverride).toBe('Pale Horse Service Inc');
+    expect(result.extraLines).toEqual([]);
   });
 });
-
 
 // ─────────────────────────────────────────────────────────────────────────
 // Price Levels. These same rules now run on the DEVICE too, at the moment a
@@ -176,13 +123,14 @@ describe('rule 5C — price levels applied through resolveInvoiceRules', () => {
     ]);
   });
 
-  it('takes the Tier 1 fee on the POST-contract subtotal', () => {
+  it('preserves negotiated rates while routing Tier 1 to Pale Horse', () => {
     const base = priced([{ qbItemListId: 'item-451', rate: 250, quantity: 1, amount: 250 }]);
     const r = resolveInvoiceRules({
       ...base,
       tickets: [ticket({ well: { id: 'w1', tier1: true } })],
     });
-    // 5% of the contracted 175, not of the 250 list.
-    expect(r.extraLines[0]!.amount).toBe(8.75);
+    expect(r.lineAdjustments[0]!.newAmount).toBe(175);
+    expect(r.extraLines).toEqual([]);
+    expect(r.qbCustomerOverride).toBe('Pale Horse Service Inc');
   });
 });

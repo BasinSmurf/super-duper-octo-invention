@@ -1,3 +1,4 @@
+import { CompanyBrand } from '@/components/CompanyBrand'
 import { useEffect, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { ArrowLeft, MailPlus, UserRound, LogOut } from 'lucide-react'
@@ -50,8 +51,8 @@ export function PortalLayout() {
       <header className="bg-white border-b border-slate-200">
         <div className="max-w-7xl mx-auto px-4 py-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="h-12 w-44 bg-white border border-slate-200 flex items-center px-2 shrink-0">
-              <img src="/servicepro-logo.png" alt="Service Pro" className="max-h-9 object-contain" />
+            <div className="min-h-12 w-48 bg-white border border-slate-200 flex items-center px-2 py-1 shrink-0">
+              <CompanyBrand className="max-h-9 max-w-44 object-contain" />
             </div>
             <div className="min-w-0">
               <p className="text-sm font-extrabold text-black truncate">{companyName}</p>

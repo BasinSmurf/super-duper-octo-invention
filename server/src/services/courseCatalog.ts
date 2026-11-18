@@ -9,11 +9,12 @@
  *
  * Every consumer keeps its legacy static map as a bad-divorce fallback
  * for courses missing from the catalog (free-text "Other" courses, or a
- * catalog row someone deleted). A DB error degrades to the fallback too —
- * the catalog being unreachable must never block a push or an invoice.
+ * catalog row someone deleted). A DB error degrades to the fallback too.
+ * Invoice generation separately requires a mapped product and an explicit
+ * configured price; availability fallbacks must not invent billing amounts.
  */
 
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { mapCourseToClassCode } from './blueLionClassMap.js';
 
 export interface CatalogCourse {

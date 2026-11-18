@@ -1,5 +1,5 @@
 import { Prisma, type TicketStatus } from '../db.js';
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 
 // H2S readings at or above this many ppm flag a location as elevated.
 export const H2S_ELEVATED_PPM = 10;

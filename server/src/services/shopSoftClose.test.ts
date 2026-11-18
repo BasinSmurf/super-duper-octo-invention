@@ -9,6 +9,7 @@ import {
   unlockStamp,
   msUntilHardClose,
   isClosingState,
+  closerFieldsFor,
   SOFT_CLOSE_HOURS,
   CLOSING_STATES,
 } from './shopSoftClose.js';
@@ -197,6 +198,24 @@ describe('unlockStamp', () => {
     const now = new Date('2026-09-01T09:00:00Z');
     const stamp = unlockStamp('admin-1', 'reason', now);
     expect(closeStateOf({ ...unit(), ...stamp }, now)).toBe('soft');
+  });
+});
+
+describe('close fields when work restarts', () => {
+  it.each(['in_work', 'qc_testing'])('retracts the close when returning to %s', (status) => {
+    const closedAt = new Date('2026-08-28T12:00:00Z');
+    const active = {
+      ...unit({ softClosedAt: closedAt, hardClosesAt: hardCloseDeadline(closedAt), closedById: 'tech-1' }),
+      status,
+      ...closerFieldsFor({ softClosedAt: closedAt }, status, 'tech-1'),
+    };
+    expect(closeStateOf(active, new Date(closedAt.getTime() + 49 * HOUR))).toBe('open');
+    expect(canEditUnit(active, { userId: 'tech-1', role: 'field_tech' }).allowed).toBe(true);
+    expect(closerFieldsFor(active, 'condemned', 'tech-1')).toEqual({ closedById: 'tech-1' });
+  });
+
+  it('preserves the close deadline when correcting completion to condemned', () => {
+    expect(closerFieldsFor({ softClosedAt: new Date() }, 'condemned', 'tech-1')).toEqual({});
   });
 });
 

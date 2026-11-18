@@ -1,5 +1,6 @@
+import { cycleLength } from '../services/writeValidation.js';
 import { Router, Request, Response } from 'express';
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { requirePermission } from '../middleware/rbac.js';
 import { createAuditLog } from '../utils/auditLog.js';
@@ -159,7 +160,7 @@ routesRouter.post('/', requirePermission('routes:manage'), async (req: Request, 
         area: area || null,
         description: description || null,
         estimatedMiles: estimatedMiles != null ? estimatedMiles : null,
-        cycleMonths: cycleMonths != null ? parseInt(cycleMonths, 10) : 6,
+        cycleMonths: cycleMonths != null ? cycleLength(cycleMonths) : 6,
         sortOrder: sortOrder != null ? parseInt(sortOrder, 10) : 0,
       },
       include: {
@@ -201,7 +202,7 @@ routesRouter.put('/:id', requirePermission('routes:manage'), async (req: Request
     if (area !== undefined) data.area = area || null;
     if (description !== undefined) data.description = description || null;
     if (estimatedMiles !== undefined) data.estimatedMiles = estimatedMiles;
-    if (cycleMonths !== undefined) data.cycleMonths = parseInt(cycleMonths, 10);
+    if (cycleMonths !== undefined) data.cycleMonths = cycleLength(cycleMonths);
     if (sortOrder !== undefined) data.sortOrder = parseInt(sortOrder, 10);
     if (isActive !== undefined) data.isActive = isActive;
 
@@ -296,9 +297,12 @@ routesRouter.post('/:id/stops', requirePermission('routes:manage'), async (req: 
         select: { id: true, padId: true },
       });
       if (!well) throw new AppError(404, 'Well not found');
+      if (resolvedPadId && resolvedPadId !== well.padId) throw new AppError(400, 'Well does not belong to the selected pad');
       if (!resolvedPadId && well.padId) resolvedPadId = well.padId;
     }
 
+    const duplicate = await prisma.routeStop.findFirst({ where: { routeId, isActive: true, ...(wellId ? { wellId } : facilityId ? { facilityId } : { padId: resolvedPadId, wellId: null }) } });
+    if (duplicate) throw new AppError(409, 'Location already has an active stop on this route');
     // Auto-calculate stopIndex if not provided
     let idx = stopIndex;
     if (idx == null) {
@@ -369,7 +373,7 @@ routesRouter.put('/:id/stops/:stopId', requirePermission('routes:manage'), async
     const existing = await prisma.routeStop.findUnique({
       where: { id: req.params.stopId as string },
     });
-    if (!existing) throw new AppError(404, 'Stop not found');
+    if (!existing || existing.routeId !== req.params.id) throw new AppError(404, 'Stop not found');
 
     const { padId, wellId, facilityId, clientName, notes, workOrderNumber, afeNumber, costCenter, salesTaxId, routeMileage, stopIndex } = req.body;
     const data: any = {};
@@ -391,6 +395,14 @@ routesRouter.put('/:id/stops/:stopId', requirePermission('routes:manage'), async
     if (routeMileage !== undefined) data.routeMileage = routeMileage;
     if (stopIndex !== undefined) data.stopIndex = parseInt(stopIndex, 10);
 
+    const nextWell = data.wellId === undefined ? existing.wellId : data.wellId;
+    const nextPad = data.padId === undefined ? existing.padId : data.padId;
+    if (nextWell && nextPad) {
+      const well = await prisma.well.findUnique({ where: { id: nextWell }, select: { padId: true } });
+      if (!well || well.padId !== nextPad) throw new AppError(400, 'Well does not belong to the selected pad');
+    }
+    const duplicate = await prisma.routeStop.findFirst({ where: { routeId: existing.routeId, isActive: true, id: { not: existing.id }, ...(nextWell ? { wellId: nextWell } : { padId: nextPad, wellId: null }) } });
+    if (duplicate && (nextWell || nextPad)) throw new AppError(409, 'Location already has an active stop on this route');
     const stop = await prisma.routeStop.update({
       where: { id: req.params.stopId as string },
       data,

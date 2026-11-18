@@ -1,28 +1,30 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useNavigate, useSearchParams, useParams } from 'react-router-dom'
-import { v4 as uuidv4 } from 'uuid'
+import { v4 as uuidv4, v5 as uuidv5 } from 'uuid'
 import { useAuth } from '@/contexts/AuthContext'
 import { cn } from '@/lib/cn'
 import { db } from '@/lib/db'
+import { persistTicketBatch } from '@/lib/trainingSubmission'
+import { fieldInspectionBillingError, fieldInspectionBillingLines } from '@/lib/fieldInspectionBilling'
 import { api } from '@/lib/api'
 import { useDraftPersistence } from '@/hooks/useDraftPersistence'
+import { queueRentalEventTicket } from '@/lib/rentalEventTicket'
+import { loadSwapBillingLines } from '@/lib/rentalSwapBilling'
 import { getDefaultLineItems } from '@/lib/defaultLineItems'
+import { dispatchWizardSteps, wizardResumeStep } from '@/lib/dispatchWizard'
+import { TechCombobox } from '@/components/TechCombobox'
 import { CustomerSearch } from '@/components/CustomerSearch'
 import { LocationPicker, type LocationSelection } from '@/components/LocationPicker'
-import { MobileAssetPicker, type MobileAssetOption } from '@/components/MobileAssetPicker'
 import { TrainingLocationPicker, type TrainingLocationOption } from '@/components/TrainingLocationPicker'
 import { LineItemEditor, type LineItem } from '@/components/LineItemEditor'
 import { PhotoCapture, type CapturedPhoto } from '@/components/PhotoCapture'
 import { SignaturePad } from '@/components/SignaturePad'
 import { FitTestEditor, occRecordComplete } from '@/components/FitTestEditor'
-import { DeployInspectionModal } from '@/components/DeployInspectionModal'
-import { resolveDeployCategory, type DeployCategory } from '@/lib/deployChecklist'
 import { AirSystemInspectionEditor } from '@/components/AirSystemInspectionEditor'
 import { FieldInspectionCapture } from '@/components/FieldInspectionCapture'
 import { getActiveSiteId, cacheActiveSites, getCachedActiveSites } from '@/lib/site'
 import { IhTestingEditor, IH_SUBTYPES } from '@/components/IhTestingEditor'
 import { TrainingClassEditor, COURSE_TYPES } from '@/components/TrainingClassEditor'
-import { EquipmentScanner, type ScannedEquipment } from '@/components/EquipmentScanner'
 import { BillingRefsField } from '@/components/BillingRefsField'
 import { LiveClock } from '@/components/LiveClock'
 import { DivisionSelector, type Division } from '@/components/DivisionSelector'
@@ -38,6 +40,7 @@ import { useCompanyPriceLevels, type PriceLevel } from '@/lib/priceLevels'
 import { ContractPricingBanner } from '@/components/ContractPriceBadge'
 import { todayKey, calendarDateKey, formatCalendarDateNumeric } from '@/lib/dates'
 import { getSiteShiftWindow, restoreSiteTimesManual } from '@/lib/siteTimes'
+import { rentalDeploymentLines, removeRentalDeployment, formatEquipmentTestDate, seedDeploymentRows, deploymentRowCategory } from '@/lib/rentalDeploymentItems'
 import type { LucideIcon } from 'lucide-react'
 import {
   ArrowLeft,
@@ -51,10 +54,8 @@ import {
   ShieldCheck,
   GraduationCap,
   Settings,
-  Package,
   FlaskConical,
   X,
-  DollarSign,
   Wind,
   ShoppingCart,
   Caravan,
@@ -294,7 +295,7 @@ const WORK_TYPES: WorkTypeConfig[] = [
     // Phase C: liability step is gone. rn_setup now requires picking a
     // dispatched rental contract first; the dispatcher already captured
     // customer + location + contact info on the contract itself.
-    steps: ['rn_setup', 'rn_equipment', 'rn_review'],
+    steps: ['rn_setup', 'rn_equipment', 'rn_billing', 'rn_review'],
     comingSoon: false,
   },
   {
@@ -314,7 +315,7 @@ const WORK_TYPES: WorkTypeConfig[] = [
 const SERVICE_TYPES = [
   { value: 'gas_detection', label: 'Gas Detection' },
   { value: 'cascade_air', label: 'Cascade Air Service' },
-  { value: 'on_site_services', label: 'On-Site Services' },
+  { value: 'on_site_services', label: 'On Site Supervision' },
   { value: 'inspection', label: 'Inspection' },
   { value: 'general', label: 'General Field Svc' },
 ]
@@ -406,8 +407,10 @@ interface Company {
  * list-priced line — an empty object would be a lie about having checked.
  */
 function priceLevelCustomData(item: LineItem) {
-  if (!item.priceLevelName || item.contractRate == null) return null
+  const inspection = item.fieldInspectionId ? { fieldInspectionId: item.fieldInspectionId } : {}
+  if (!item.priceLevelName || item.contractRate == null) return item.fieldInspectionId ? inspection : null
   return {
+    ...inspection,
     priceLevel: {
       name: item.priceLevelName,
       listRate: item.listRate ?? null,
@@ -427,14 +430,31 @@ export function TicketWizard() {
 
   // ---- Edit mode detection ----
   const isEditMode = !!editTicketId
+  const dispatchMode = !isEditMode && searchParams.get('dispatch') === '1'
+  const [dispatchTechId, setDispatchTechId] = useState('')
+  const [dispatchNotificationDivision, setDispatchNotificationDivision] = useState<'D3' | 'D4' | ''>('')
+  const [dispatchCalloutFee, setDispatchCalloutFee] = useState('150')
+  const [dispatchFeeLineId] = useState(() => uuidv4())
+  const [dispatchTechs, setDispatchTechs] = useState<{ id: string; name: string; role: string }[]>([])
+  const [dispatchUsersError, setDispatchUsersError] = useState('')
+  const dispatchSubmitting = useRef(false)
+  useEffect(() => {
+    if (!dispatchMode) return
+    api.get<{ data: { id: string; name: string; role: string }[] }>('/users/active')
+      .then(result => { setDispatchTechs(result.data); setDispatchUsersError('') })
+      .catch(() => setDispatchUsersError('Could not load active users. Reload to retry.'))
+  }, [dispatchMode])
 
   // Work type selection
   const [workType, setWorkType] = useState<WorkType | null>(null)
 
   // Derived: active config + step helpers
   const activeConfig = useMemo(
-    () => WORK_TYPES.find(wt => wt.key === workType) ?? null,
-    [workType],
+    () => {
+      const config = WORK_TYPES.find(wt => wt.key === workType)
+      return config ? { ...config, steps: dispatchMode ? dispatchWizardSteps(config.steps) : config.steps } : null
+    },
+    [workType, dispatchMode],
   )
   const totalSteps = activeConfig?.steps.length ?? 0
   const currentStepId = activeConfig && step >= 1 ? activeConfig.steps[step - 1] ?? null : null
@@ -443,7 +463,7 @@ export function TicketWizard() {
   // Generate or restore draft ID from URL (edit mode uses ticket ID as key)
   const draftId = useMemo(() => {
     if (isEditMode) return `edit-${editTicketId}`
-    return searchParams.get('draft') || uuidv4()
+    return searchParams.get('draft') || (searchParams.get('deployTicket') ? `deploy-${searchParams.get('deployTicket')}` : uuidv4())
   }, [isEditMode, editTicketId, searchParams])
 
   // Set draft ID in URL if not present (skip for edit mode — identified by route).
@@ -458,7 +478,7 @@ export function TicketWizard() {
   }, [isEditMode, draftId, searchParams, setSearchParams])
 
   // Offline ID for the ticket itself (for server-side dedup)
-  const [offlineId] = useState(() => uuidv4())
+  const [offlineId] = useState(() => searchParams.get('deployTicket') || uuidv4())
 
   // Draft persistence
   const { draft, saveDraft: persistDraft, clearDraft, isLoaded } = useDraftPersistence(draftId)
@@ -482,16 +502,15 @@ export function TicketWizard() {
   // The customer's QuickBooks contract pricebook, if they're on one. Every
   // billing line the wizard fills in is priced through it, at the moment it's
   // added — not left for the invoice to silently correct days later.
-  const { levels: priceLevels, level: priceLevel } = useCompanyPriceLevels(customer?.id ?? null)
+  const { levels: priceLevels, level: priceLevel, loaded: rentalPricesLoaded } = useCompanyPriceLevels(customer?.id ?? null)
   const [location, setLocation] = useState<LocationSelection>({ field: null, pad: null, wells: [] })
   // Field service: was a rig present on-site? Independent of the main
   // location — noted context for the visit, not the location itself.
   const [rigPresent, setRigPresent] = useState(false)
-  const [presentRig, setPresentRig] = useState<MobileAssetOption | null>(null)
-  const [selectedServiceType, setServiceType] = useState('')
-  // This flow has no service picker. Derive its fixed service for fresh URLs,
-  // restored drafts, and edits, including drafts saved with a blank service.
-  const serviceType = workType === 'field_inspection' ? 'inspection' : selectedServiceType
+  // Free text (ServiceTicket.presentRigNumber) — rigs are no longer a picked
+  // equipment record, so this works offline and needs no lookup.
+  const [rigNumber, setRigNumber] = useState('')
+  const [serviceType, setServiceType] = useState('')
   const [poNumber, setPoNumber] = useState('')
   // #3 structured billing refs (PO/AFE/Cost-Code repeater). poNumber above is
   // kept synced to the first PO row for display + back-compat.
@@ -501,6 +520,11 @@ export function TicketWizard() {
   const [billingProfilesSeed, setBillingProfilesSeed] = useState<BillingProfileSeed[]>([])
   // Internal QB Class — drives division on SalesOrder header, never on customer PDF
   const [division, setDivision] = useState<Division>(null)
+  useEffect(() => {
+    // Calendar-created classes from older clients may have no revenue class,
+    // and the training form intentionally has no technical division selector.
+    if (workType === 'training' && !division) setDivision(WORK_TYPE_QB_DIVISION.training)
+  }, [workType, division])
   const [isDickinson, setIsDickinson] = useState(false)
   // Catalog division for the line-item picker: follow the ticket's division
   // (the job's nature) when set, else default by work type. Scopes the parts
@@ -531,6 +555,9 @@ export function TicketWizard() {
     siteContactName?: string | null
     personCallingName?: string | null
     composition?: RentalComposition | null
+    isManned?: boolean
+    isRigJob?: boolean
+    monitorsIncluded?: boolean
   }
   type RentalJobRow = Omit<Partial<RentalJobOption>, 'wellIds'> & {
     id: string
@@ -547,6 +574,7 @@ export function TicketWizard() {
   const [activeRentals, setActiveRentals] = useState<RentalJobOption[]>([])
   const [arrivedAt, setArrivedAt] = useState<string | null>(null)
   const [serviceDate, setServiceDate] = useState(todayKey())
+  const [deploymentAt, setDeploymentAt] = useState<string | null>(() => new Date().toISOString())
   const [dispatchNotes, setDispatchNotes] = useState('')
   const [lineItems, setLineItems] = useState<LineItem[]>([])
   const [departedAt, setDepartedAt] = useState<string | null>(null)
@@ -608,10 +636,9 @@ export function TicketWizard() {
   // ---- Air system inspection state ----
   const [airSystemRecords, setAirSystemRecords] = useState<AirSystemDraftRecord[]>([])
 
-  // ---- Gas detection state (Phase B) ----
-  // Note: edit-load of existing records (originalGasDetectionIds tracking +
-  // diff on save) is deferred to a B2 follow-up — new tickets only for now.
+  // ---- Gas detection state ----
   const [gasDetectionRecords, setGasDetectionRecords] = useState<GasDetectionDraftRecord[]>([])
+  const [originalGasDetectionIds, setOriginalGasDetectionIds] = useState<Set<string>>(new Set())
   const [gasDetectionFixed, setGasDetectionFixed] = useState(false)
   const [gasDetectionArea, setGasDetectionArea] = useState(false)
   type D3CombinedService = 'air' | 'ih' | 'gas'
@@ -626,6 +653,7 @@ export function TicketWizard() {
   // wizard state via the capture-only editor). At submit, PASS units persist as
   // locked inspections (ledger + visual-only field bill); FAIL units spawn a Shop WO.
   const [inspectionRecords, setInspectionRecords] = useState<OfflineEquipmentInspection[]>([])
+  const [fieldInspectionSubmittedIds, setFieldInspectionSubmittedIds] = useState<Set<string>>(new Set())
   // Which shop failed units transit to. Defaults to Williston ('WIL') — ~98% go
   // there — but selectable so the rare return-elsewhere unit isn't "lost" at the
   // wrong site. Sites loaded lazily when the field-inspection flow is active.
@@ -873,19 +901,12 @@ export function TicketWizard() {
 
   // ---- Rental state ----
   const [rentalItems, setRentalItems] = useState<OfflineRentalAgreementItem[]>([])
+  const rentalLines = rentalDeploymentLines(rentalItems)
   const [deployShortReason, setDeployShortReason] = useState('')
-  // #19/#20 Deploy QA gate: scanned gear waits here until its required
-  // inspection is completed (assembly children ride under the parent's).
-  const [pendingDeploy, setPendingDeploy] = useState<{
-    items: OfflineRentalAgreementItem[]
-    category: DeployCategory
-    name: string
-    serial: string
-  } | null>(null)
   // #19 equipment already deployed on the selected (active) job — read-only context.
   const [existingDeployed, setExistingDeployed] = useState<{ id: string; productName: string; serialNumber: string }[]>([])
   const [rentalBillingRateType, setRentalBillingRateType] = useState('weekly')
-  // Catalog slice for the package baseline diff: a scanned serial only knows its
+  // Catalog slice for the package baseline diff: an entered serial only knows its
   // productId, and the diff runs on Product.category. Also carries the rental
   // rates, so an over-baseline extra can be priced without another round-trip.
   const [deployProductsById, setDeployProductsById] = useState<Map<string, RentalBomProduct>>(new Map())
@@ -893,10 +914,9 @@ export function TicketWizard() {
   // Phase C: classification flags now live on the dispatched rental contract,
   // not on the Start Job ticket. Kept here read-only for the rn_review summary
   // and any legacy ticket edit-load that wants to surface them.
-  const [rentalIsManned] = useState(true)
-  const [rentalIsRigJob] = useState(false)
-  const [rentalMonitorsIncluded] = useState(false)
-  const [showEquipmentScanner, setShowEquipmentScanner] = useState(false)
+  const [rentalIsManned, setRentalIsManned] = useState(false)
+  const [rentalIsRigJob, setRentalIsRigJob] = useState(false)
+  const [rentalMonitorsIncluded, setRentalMonitorsIncluded] = useState(false)
   // Rental liability / site contact
   const [rentalLiabilitySignedByName, setRentalLiabilitySignedByName] = useState('')
   const [rentalLiabilitySignature, setRentalLiabilitySignature] = useState<string | null>(null)
@@ -926,26 +946,22 @@ export function TicketWizard() {
   // Track whether we've restored from a draft
   const [draftRestored, setDraftRestored] = useState(false)
 
-  // Restore draft on load
-  useEffect(() => {
-    if (!isLoaded || draftRestored) return
-    if (draft?.wizardData) {
-      const d = draft.wizardData
+  function restoreWizardData(d: WizardDraftData, savedStep = 1, restoreContext = true) {
       // Restore work type (backward compat: default to field_service)
       if (d.workType) {
         setWorkType(d.workType as WorkType)
-        setStep(draft.step || 1) // skip type selector since type was already chosen
+        setStep(savedStep || 1) // skip type selector since type was already chosen
       } else if (d.serviceType === 'fit_test') {
         // Legacy draft upgrade: fit_test used to be a field_service subtype
         setWorkType('fit_test')
-        setStep(draft.step || 1)
+        setStep(savedStep || 1)
       } else if (d.customer || d.serviceType) {
         // Legacy draft without workType — assume field_service
         setWorkType('field_service')
-        setStep(draft.step || 1)
+        setStep(savedStep || 1)
       }
-      if (d.customer) setCustomer(d.customer)
-      if (d.location) {
+      if (restoreContext && d.customer) setCustomer(d.customer)
+      if (restoreContext && d.location) {
         // Backward compat: old drafts had `well` (singular), migrate to `wells` array
         const loc = d.location as any
         if (loc.well && !loc.wells) {
@@ -970,8 +986,16 @@ export function TicketWizard() {
       if (d.returnShopShortCode) setReturnShopShortCode(d.returnShopShortCode)
       if (d.linkedRentalId) setLinkedRentalId(d.linkedRentalId)
       if (d.arrivedAt) setArrivedAt(d.arrivedAt)
-      if (d.serviceDate) setServiceDate(d.serviceDate)
-      if (d.dispatchNotes) setDispatchNotes(d.dispatchNotes)
+      // Synced drafts restore work capture, while ticket fields retain any
+      // date/notes corrections made through the office editor.
+      if (restoreContext && d.serviceDate) setServiceDate(d.serviceDate)
+      if (d.deploymentAt !== undefined) setDeploymentAt(d.deploymentAt)
+      else if (d.workType === 'rental' && d.serviceDate) setDeploymentAt(localInputToIso(`${d.serviceDate}T00:00`))
+      if (restoreContext && d.dispatchNotes) setDispatchNotes(d.dispatchNotes)
+      if (d.dispatchTechId) setDispatchTechId(d.dispatchTechId)
+      if (d.dispatchNotificationDivision === 'D3' || d.dispatchNotificationDivision === 'D4') setDispatchNotificationDivision(d.dispatchNotificationDivision)
+      if (d.dispatchCalloutFee !== undefined) setDispatchCalloutFee(d.dispatchCalloutFee)
+      if (d.isCallOut !== undefined) setIsCallOut(d.isCallOut)
       if (d.lineItems) setLineItems(d.lineItems)
       if (d.departedAt) setDepartedAt(d.departedAt)
       if (d.onSiteSubtype) setOnSiteSubtype(d.onSiteSubtype)
@@ -981,7 +1005,7 @@ export function TicketWizard() {
         manual: d.siteTimesManual, entries: d.onSiteEntries,
         serviceDate: d.serviceDate, arrivedAt: d.arrivedAt, departedAt: d.departedAt,
       }))
-      if (d.workNotes) setWorkNotes(d.workNotes)
+      if (restoreContext && d.workNotes) setWorkNotes(d.workNotes)
       if (d.photos) setPhotos(d.photos)
       if (d.siteSignPhotos) setSiteSignPhotos(d.siteSignPhotos)
       if (d.signature !== undefined) setSignature(d.signature)
@@ -1008,6 +1032,9 @@ export function TicketWizard() {
       if (d.ihTestRecords) {
         setIhTestRecords(d.ihTestRecords)
       }
+      if (d.inspectionRecords) setInspectionRecords(d.inspectionRecords)
+      if (d.fieldInspectionSubmittedIds) setFieldInspectionSubmittedIds(new Set(d.fieldInspectionSubmittedIds))
+      if (d.occDailyCalFiles) setOccDailyCalFiles(d.occDailyCalFiles)
       if (d.gasDetectionRecords) {
         setGasDetectionRecords(d.gasDetectionRecords)
       }
@@ -1026,8 +1053,12 @@ export function TicketWizard() {
         }
       }
       // Restore training class state
+      if (d.originalTrainingRosterIds) setOriginalTrainingRosterIds(new Set(d.originalTrainingRosterIds))
       if (d.trainingRosterRecords) {
-        setTrainingRosterRecords(d.trainingRosterRecords)
+        setTrainingRosterRecords(current => restoreContext ? d.trainingRosterRecords : [
+          ...d.trainingRosterRecords,
+          ...current.filter(row => !d.trainingRosterRecords.some(saved => saved.id === row.id)),
+        ])
       }
       if (d.trainingCourseName) setTrainingCourseName(d.trainingCourseName)
       if (d.trainingCourseOther) setTrainingCourseOther(d.trainingCourseOther)
@@ -1042,7 +1073,7 @@ export function TicketWizard() {
       if (d.cpLocationId) setTrainingLocation({ id: d.cpLocationId, name: d.trainingLocationText || d.cpLocationId, type: 'client' })
       if (d.rigPresent) {
         setRigPresent(true)
-        if (d.presentRigId) setPresentRig({ id: d.presentRigId, name: d.presentRigName || d.presentRigId, kind: 'rig' })
+        setRigNumber(d.presentRigNumber || d.presentRigName || '')
       }
       // Restore air fill state
       if (d.airFillLocationText) setAirFillLocationText(d.airFillLocationText)
@@ -1062,7 +1093,12 @@ export function TicketWizard() {
       if (d.rentalSiteContactPhone) setRentalSiteContactPhone(d.rentalSiteContactPhone)
       if (d.rentalSiteContactEmail) setRentalSiteContactEmail(d.rentalSiteContactEmail)
       if (d.rentalPics) setRentalPics(d.rentalPics)
-    }
+  }
+
+  // Restore draft on load
+  useEffect(() => {
+    if (!isLoaded || draftRestored) return
+    if (draft?.wizardData) restoreWizardData(draft.wizardData, draft.step)
     // If no draft restored a work type, check ?type= query param to auto-select
     if (!draft?.wizardData?.workType) {
       const typeParam = searchParams.get('type') as WorkType | null
@@ -1257,20 +1293,30 @@ export function TicketWizard() {
   useEffect(() => {
     if (isEditMode || !isLoaded || !draftRestored || !templateSeeded) return
     if (workType) return
-    navigate('/tickets/start', { replace: true })
-  }, [isEditMode, isLoaded, draftRestored, templateSeeded, workType, navigate])
+    navigate(dispatchMode ? `/tickets/start?dispatch=1${searchParams.get('rentalId') ? `&rentalId=${searchParams.get('rentalId')}` : ''}` : '/tickets/start', { replace: true })
+  }, [isEditMode, isLoaded, draftRestored, templateSeeded, workType, navigate, dispatchMode, searchParams])
 
   // ---- Edit mode: load existing ticket ----
   useEffect(() => {
     if (!isEditMode || !isLoaded || editDataLoaded) return
     // If a draft exists for this edit session, skip loading from ticket
     if (draft?.wizardData?.workType) {
-      setEditDataLoaded(true)
+      void restoreEditStatus(editTicketId!)
       return
     }
     loadExistingTicket(editTicketId!)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isEditMode, isLoaded, editDataLoaded, editTicketId])
+
+  // Dispatch caches the parent ticket without its roster. Hydrate students
+  // when entering the editor, including resumed drafts; never require the
+  // trainer to discover the QR refresh control to see preregistrations.
+  useEffect(() => {
+    if (!isEditMode || !editDataLoaded || workType !== 'training') return
+    void refreshSignins()
+    // Refresh only on entry. Later QR arrivals use the explicit refresh button.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isEditMode, editDataLoaded, workType])
 
   // #13 Landing after the create→edit sign-in handoff (?signin=1): jump to the
   // roster step and restore the QR (the link route is idempotent — it returns
@@ -1297,6 +1343,7 @@ export function TicketWizard() {
         const localLineItems = await db.ticketLineItems.where('ticketId').equals(id).toArray()
         const localFitTests = await db.fitTestRecords.where('ticketId').equals(id).toArray()
         const localAirSystems = await db.airSystemRecords.where('ticketId').equals(id).toArray()
+        const localGasRecords = await db.gasDetectionRecords.where('ticketId').equals(id).toArray()
         const localIhTests = await db.ihTestRecords.where('ticketId').equals(id).toArray()
         const localTrainingRoster = await db.trainingRosterRecords.where('ticketId').equals(id).toArray()
         const company = ticket.companyId ? await db.companies.get(ticket.companyId) : null
@@ -1336,14 +1383,14 @@ export function TicketWizard() {
           } : undefined,
           _resolvedWellsById: wellsById,
         }
-        populateFromTicket(enriched, localLineItems, localFitTests, localAirSystems, localIhTests, localTrainingRoster, company)
+        populateFromTicket(enriched, localLineItems, localFitTests, localAirSystems, localIhTests, localTrainingRoster, company, localGasRecords)
         return
       }
 
       // Fallback: try API
       const apiTicket = await api.get<any>(`/tickets/${id}`)
       if (apiTicket?.id) {
-        populateFromTicket(apiTicket, apiTicket.lineItems || [], apiTicket.fitTestRecords || [], apiTicket.airSystemInspections || [], apiTicket.ihTestRecords || [], apiTicket.trainingRosterRecords || [], apiTicket.company)
+        populateFromTicket(apiTicket, apiTicket.lineItems || [], apiTicket.fitTestRecords || [], apiTicket.airSystemInspections || [], apiTicket.ihTestRecords || [], apiTicket.trainingRosterRecords || [], apiTicket.company, apiTicket.gasDetectionRecords || [])
         return
       }
       setError('Ticket not found')
@@ -1352,10 +1399,48 @@ export function TicketWizard() {
     }
   }
 
-  function populateFromTicket(ticket: any, ticketLineItems: any[], ticketFitTests: any[], ticketAirSystems: any[], ticketIhTests: any[], ticketTrainingRoster: any[], company?: any) {
+  async function restoreEditStatus(id: string) {
+    // The draft owns the unsaved form, but the ticket owns its workflow state.
+    // Defaulting to "draft" here made Save Changes undo Start Work on reload.
+    try {
+      let ticket = await db.tickets.get(id)
+      if (ticket?._offlineStatus !== 'pending') {
+        try { ticket = await api.get<any>(`/tickets/${id}`) } catch { /* use cached status offline */ }
+      }
+      if (!ticket?.status) throw new Error('Ticket status unavailable')
+      setOriginalStatus(ticket.status)
+      // The draft carries the form but not which child rows already exist on
+      // the ticket. Without these, a save after a reload (the camera can evict
+      // the page mid-ticket) re-creates every existing row and never deletes
+      // a removed one. Best-effort: a failed lookup must not block the editor.
+      try {
+        const [lines, fits, airs, ihs] = await Promise.all([
+          db.ticketLineItems.where('ticketId').equals(id).primaryKeys(),
+          db.fitTestRecords.where('ticketId').equals(id).primaryKeys(),
+          db.airSystemRecords.where('ticketId').equals(id).primaryKeys(),
+          db.ihTestRecords.where('ticketId').equals(id).primaryKeys(),
+        ])
+        const serverIds = (rows: unknown) => Array.isArray(rows) ? rows.map((row: any) => row?.id).filter(Boolean) : []
+        const remote = ticket as any
+        setOriginalLineItemIds(new Set([...lines.map(String), ...serverIds(remote.lineItems)]))
+        setOriginalFitTestIds(new Set([...fits.map(String), ...serverIds(remote.fitTestRecords)]))
+        setOriginalAirSystemIds(new Set([...airs.map(String), ...serverIds(remote.airSystemInspections)]))
+        setOriginalIhTestIds(new Set([...ihs.map(String), ...serverIds(remote.ihTestRecords)]))
+      } catch { /* keep going with what the draft restored */ }
+      setEditDataLoaded(true)
+    } catch {
+      setError('Could not load ticket status for editing')
+    }
+  }
+
+  function populateFromTicket(ticket: any, ticketLineItems: any[], ticketFitTests: any[], ticketAirSystems: any[], ticketIhTests: any[], ticketTrainingRoster: any[], company?: any, ticketGasRecords: GasDetectionDraftRecord[] = []) {
     // Determine work type
+    const combinedServices: D3CombinedService[] = Array.isArray(ticket.customData?.d3CombinedServices)
+      ? ticket.customData.d3CombinedServices.filter((value: unknown) => value === 'air' || value === 'ih' || value === 'gas')
+      : []
     let resolvedWorkType: WorkType = 'field_service'
-    if (ticket.serviceSubtype === 'air_fill') resolvedWorkType = 'air_fill'
+    if (combinedServices.length > 0) resolvedWorkType = 'd3_combined'
+    else if (ticket.serviceSubtype === 'air_fill') resolvedWorkType = 'air_fill'
     else if (ticket.ticketType === 'field_service' && ticket.serviceSubtype === 'inspection') resolvedWorkType = 'field_inspection'
     else if (ticket.serviceSubtype === 'fit_test') resolvedWorkType = 'fit_test'
     else if (ticket.ticketType === 'inspection' && ticket.serviceSubtype?.startsWith('ih_')) resolvedWorkType = 'ih_testing'
@@ -1371,6 +1456,7 @@ export function TicketWizard() {
     }
 
     setWorkType(resolvedWorkType)
+    setD3CombinedServices(new Set(combinedServices))
     setOriginalStatus(ticket.status || 'draft')
 
     // Customer — mirror the location fallback below: preserve the companyId
@@ -1430,13 +1516,11 @@ export function TicketWizard() {
     }
     setLocation({ field: locField, pad: locPad, wells: locWells })
 
-    // Rig present — mirrors the pad/well fallback above: use the included
-    // relation when present, else fall back to an id-only stub so re-saving
-    // an edited ticket doesn't silently clear an existing presentRigId.
+    // Rig present — the number is free text; tickets from before that carry
+    // only the legacy presentRig relation, so fall back to its name.
     if (ticket.rigPresent) {
       setRigPresent(true)
-      const rig = ticket.presentRig || (ticket.presentRigId ? { id: ticket.presentRigId, name: ticket.presentRigId } : null)
-      if (rig) setPresentRig({ id: rig.id, name: rig.name, kind: 'rig' })
+      setRigNumber(ticket.presentRigNumber || ticket.presentRig?.name || '')
     }
 
     // Service subtype (field service only). Legacy values are mapped to the
@@ -1483,6 +1567,7 @@ export function TicketWizard() {
     if (ticketLineItems.length > 0) {
       const mapped = ticketLineItems.map(li => ({
         id: li.id,
+        fieldInspectionId: li.customData?.fieldInspectionId,
         lineType: li.lineType || 'part',
         description: li.description || '',
         quantity: Number(li.quantity) || 1,
@@ -1566,6 +1651,8 @@ export function TicketWizard() {
         ticketId: as.ticketId,
         workPointId: as.workPointId || null,
         workPointName: as.workPointName || '',
+        verified: as.verified ?? false,
+        dateVerified: as.dateVerified || null,
         airSystemType: as.airSystemType || 'tank_battery',
         reelSerialNumber: as.reelSerialNumber || '',
         standSerialNumber: as.standSerialNumber || '',
@@ -1593,6 +1680,8 @@ export function TicketWizard() {
       setAirSystemRecords(mapped)
       setOriginalAirSystemIds(new Set(mapped.map(r => r.id)))
     }
+
+    restoreGasDetectionRecords(ticketGasRecords)
 
     // IH test records
     if (ticketIhTests.length > 0) {
@@ -1673,6 +1762,8 @@ export function TicketWizard() {
     }
     if (ticket.customData?.isCallOut) {
       setIsCallOut(true)
+      const fee = ticketLineItems.find(line => line.partNumber === '148')
+      if (fee?.rate != null) setDispatchCalloutFee(String(fee.rate))
     }
     if (ticket.customData?.truckUnit) {
       setAirFillLocationText(ticket.customData.truckUnit)
@@ -1747,14 +1838,32 @@ export function TicketWizard() {
       setAirFillDepartPsi(ticket.customData.departPsi)
     }
 
-    // Skip type selector, go to step 1
-    setStep(1)
+    const fieldInspection = ticket.customData?.fieldInspection
+    if (resolvedWorkType === 'field_inspection' && fieldInspection) {
+      setInspectionRecords(fieldInspection.records ?? [])
+      setFieldInspectionSubmittedIds(new Set(fieldInspection.submittedIds ?? []))
+      if (fieldInspection.returnShopShortCode) setReturnShopShortCode(fieldInspection.returnShopShortCode)
+    }
+
+    // Saved drafts can contain incomplete inspections and unsigned work. Keep
+    // that content outside the completed service ledger until submission, and
+    // restore it without replacing freshly resolved customer/location data.
+    const savedWizard = ticket.customData?.wizardDraft
+    if (['draft', 'dispatched', 'in_progress', 'on_hold'].includes(ticket.status) && savedWizard?.version === 1 && savedWizard.data?.workType) {
+      restoreWizardData(savedWizard.data, wizardResumeStep(ticket.customData), false)
+    } else {
+      setStep(1)
+    }
     setEditDataLoaded(true)
   }
 
   // Build current wizard data snapshot
   const getWizardData = useCallback((): WizardDraftData => ({
     workType: workType || '',
+    dispatchTechId,
+    dispatchNotificationDivision,
+    dispatchCalloutFee,
+    isCallOut,
     customer,
     location: {
       field: location.field ? { id: location.field.id, name: location.field.name } : null,
@@ -1762,6 +1871,7 @@ export function TicketWizard() {
         id: location.pad.id,
         name: location.pad.name,
         fieldId: location.pad.fieldId,
+        pendingReview: location.pad.pendingReview ?? false,
         currentOperatorId: location.pad.currentOperatorId ?? null,
         currentOperatorName: location.pad.currentOperatorName ?? null,
       } : null,
@@ -1787,6 +1897,7 @@ export function TicketWizard() {
     onSiteEntries,
     onSiteOtherDescription,
     serviceDate,
+    deploymentAt,
     dispatchNotes,
     lineItems,
     departedAt,
@@ -1795,6 +1906,9 @@ export function TicketWizard() {
     siteSignPhotos,
     signature,
     fitTestRecords,
+    inspectionRecords,
+    fieldInspectionSubmittedIds: [...fieldInspectionSubmittedIds],
+    occDailyCalFiles,
     airSystemRecords,
     newInstallSystems,
     ihTestRecords,
@@ -1808,6 +1922,7 @@ export function TicketWizard() {
     gasDetectionArea,
     d3CombinedServices: d3CombinedServicesArr,
     trainingRosterRecords,
+    originalTrainingRosterIds: [...originalTrainingRosterIds],
     trainingCourseName,
     trainingCourseOther,
     trainingTrainerName,
@@ -1816,8 +1931,7 @@ export function TicketWizard() {
     cpLocationId: trainingLocation?.id || null,
     linkedRentalId,
     rigPresent,
-    presentRigId: presentRig?.id || null,
-    presentRigName: presentRig?.name || null,
+    presentRigNumber: rigNumber.trim() || null,
     airFillLocationText,
     driverName,
     airFillArrivePsi,
@@ -1834,7 +1948,7 @@ export function TicketWizard() {
     rentalSiteContactPhone,
     rentalSiteContactEmail,
     rentalPics,
-  }), [siteTimesManual, onSiteSubtype, onSiteEntries, onSiteOtherDescription, workType, customer, location, serviceType, poNumber, billingRefs, division, isDickinson, returnShopShortCode, linkedRentalId, arrivedAt, serviceDate, dispatchNotes, lineItems, departedAt, workNotes, photos, siteSignPhotos, signature, fitTestRecords, airSystemRecords, newInstallSystems, ihTestRecords, ihSubtypes, occServices, occOnSite, occMileage, trainingMileage, gasDetectionRecords, gasDetectionFixed, gasDetectionArea, d3CombinedServicesArr, trainingRosterRecords, trainingCourseName, trainingCourseOther, trainingTrainerName, trainingIsOnSite, trainingLocationText, airFillLocationText, airFillArrivePsi, airFillDepartPsi, selectedStartJobRentalId, rentalItems, deployShortReason, rentalBillingRateType, rentalAfeNumber, rentalLiabilitySignedByName, rentalLiabilitySignature, rentalLiabilityAcknowledged, rentalSiteContactName, rentalSiteContactPhone, rentalSiteContactEmail, rentalPics])
+  }), [dispatchTechId, dispatchNotificationDivision, dispatchCalloutFee, isCallOut, siteTimesManual, onSiteSubtype, onSiteEntries, onSiteOtherDescription, workType, customer, location, serviceType, poNumber, billingRefs, division, isDickinson, returnShopShortCode, linkedRentalId, arrivedAt, serviceDate, deploymentAt, dispatchNotes, lineItems, departedAt, workNotes, photos, siteSignPhotos, signature, fitTestRecords, inspectionRecords, fieldInspectionSubmittedIds, occDailyCalFiles, airSystemRecords, newInstallSystems, ihTestRecords, ihSubtypes, occServices, occOnSite, occMileage, trainingMileage, gasDetectionRecords, gasDetectionFixed, gasDetectionArea, d3CombinedServicesArr, trainingRosterRecords, originalTrainingRosterIds, trainingCourseName, trainingCourseOther, trainingTrainerName, trainingIsOnSite, trainingLocationText, airFillLocationText, driverName, airFillArrivePsi, airFillDepartPsi, selectedStartJobRentalId, rentalItems, deployShortReason, rentalBillingRateType, rentalAfeNumber, rentalLiabilitySignedByName, rentalLiabilitySignature, rentalLiabilityAcknowledged, rentalSiteContactName, rentalSiteContactPhone, rentalSiteContactEmail, rentalPics])
 
   // Auto-save draft on every field change (debounced in useDraftPersistence)
   useEffect(() => {
@@ -1910,6 +2024,7 @@ export function TicketWizard() {
         poNumber: r.poNumber || null,
         afeNumber: r.afeNumber || null,
         locationDisplay: r.locationDisplay || (locationParts.length ? locationParts.join(' > ') : null),
+        isManned: r.isManned, isRigJob: r.isRigJob, monitorsIncluded: r.monitorsIncluded,
         siteContactName: r.siteContactName,
         personCallingName: r.personCallingName,
         composition: r.composition || null,
@@ -1972,10 +2087,29 @@ export function TicketWizard() {
 
   async function applyRentalJobToWizard(r: RentalJobOption, mode: 'start' | 'link') {
     if (mode === 'start') {
+      setRentalIsManned(!!r.isManned)
+      setRentalIsRigJob(!!r.isRigJob)
+      setRentalMonitorsIncluded(!!r.monitorsIncluded)
+      if (selectedStartJobRentalId !== r.id) {
+        setRentalItems(seedDeploymentRows(r, uuidv4))
+      }
       setSelectedStartJobRentalId(r.id)
       setRentalBillingRateType(r.billingRateType)
+      try {
+        const remote = await api.get<import('@/lib/db-types').OfflineRentalAgreement>(`/rentals/${r.id}`)
+        const local = await db.rentalAgreements.get(r.id)
+        if (local?._offlineStatus !== 'pending') await db.rentalAgreements.put({ ...remote, _offlineStatus: 'synced' })
+      } catch { /* offline: use the synced agreement */ }
     } else {
       setLinkedRentalId(r.id)
+      if (dispatchMode) {
+        setBillingRefsSeeded(true)
+        setPoNumber(r.poNumber || '')
+        setBillingRefs([
+          ...(r.poNumber ? [{ id: uuidv4(), type: 'po' as const, value: r.poNumber }] : []),
+          ...(r.afeNumber ? [{ id: uuidv4(), type: 'afe' as const, value: r.afeNumber }] : []),
+        ])
+      }
     }
 
     if (r.companyId) {
@@ -1997,6 +2131,27 @@ export function TicketWizard() {
     }
   }
 
+  const dispatchRentalSeeded = useRef(false)
+  useEffect(() => {
+    const rentalId = searchParams.get('rentalId')
+    if (!dispatchMode || !draftRestored || !rentalId || dispatchRentalSeeded.current) return
+    dispatchRentalSeeded.current = true
+    if (draft?.wizardData?.customer) return
+    void (async () => {
+      try {
+        const rental = await api.get<RentalJobRow>(`/rentals/${rentalId}`)
+        const [option] = await decorateRentalJobs([rental])
+        await applyRentalJobToWizard(option, 'link')
+        setBillingRefsSeeded(true)
+        setPoNumber(rental.poNumber || '')
+        setBillingRefs([
+          ...(rental.poNumber ? [{ id: uuidv4(), type: 'po' as const, value: rental.poNumber }] : []),
+          ...(rental.afeNumber ? [{ id: uuidv4(), type: 'afe' as const, value: rental.afeNumber }] : []),
+        ])
+      } catch (err) { setError(err instanceof Error ? err.message : 'Could not load rental agreement') }
+    })()
+  }, [dispatchMode, draftRestored, searchParams])
+
   // ---- Field Inspection: pin division to D6 + load shop sites ----
   // FEX field inspection (and the shop work it spawns) is always D6 — only the
   // Dickinson toggle splits the charge path. Force it here so the locked
@@ -2004,6 +2159,9 @@ export function TicketWizard() {
   useEffect(() => {
     if (workType !== 'field_inspection') return
     if (division !== 'D6') setDivision('D6')
+    // This dedicated tile hides the service picker; seed the fixed subtype
+    // used by step validation and the inspection capture/persistence branches.
+    setServiceType('inspection')
     // Always refetch, even when the cache seeded shopSites — a stale cache is
     // the thing that would let a deactivated shop stay selectable.
     api.get<{ data: { id: string; name: string; shortCode: string }[] }>('/sites?active=true')
@@ -2079,6 +2237,13 @@ export function TicketWizard() {
     return () => { cancelled = true }
   }, [workType, customer?.id])
 
+  useEffect(() => {
+    const rentalId = searchParams.get('rentalId')
+    if (workType !== 'rental' || !rentalId || selectedStartJobRentalId) return
+    const rental = startJobCandidates.find(row => row.id === rentalId)
+    if (rental) void applyRentalJobToWizard(rental, 'start')
+  }, [workType, searchParams, startJobCandidates, selectedStartJobRentalId])
+
   // #19 Surface equipment already on the selected job (active rentals being
   // re-deployed / added to). Read-only context above the scanner.
   useEffect(() => {
@@ -2117,6 +2282,20 @@ export function TicketWizard() {
     }
     ;(async () => {
       try {
+        if (dispatchMode) {
+          const all: RentalJobRow[] = []
+          let total = Infinity
+          while (all.length < total) {
+            const params = new URLSearchParams({ status: 'active', limit: '100', offset: String(all.length) })
+            if (customer?.id) params.set('companyId', customer.id)
+            const result = await api.get<{ data: RentalJobRow[]; total: number }>(`/rentals?${params}`)
+            all.push(...result.data)
+            total = result.total
+            if (!result.data.length) break
+          }
+          setActiveRentals(await decorateRentalJobs(all))
+          return
+        }
         const rentals = customer?.id
           ? await db.rentalAgreements
             .where('companyId').equals(customer.id)
@@ -2130,7 +2309,7 @@ export function TicketWizard() {
         setActiveRentals([])
       }
     })()
-  }, [customer?.id, workType, serviceType, onSiteSubtype])
+  }, [customer?.id, workType, serviceType, onSiteSubtype, dispatchMode])
 
   // ---- #1 PIC roster: seed from the linked rental agreement ----
   // When a manned-trailer ticket links to a rental, pull that agreement's
@@ -2144,6 +2323,7 @@ export function TicketWizard() {
     ;(async () => {
       try {
         const agreement = await db.rentalAgreements.get(linkedRentalId)
+        if (agreement?.poNumber) setPoNumber(previous => previous || agreement.poNumber || '')
         const existing = Array.isArray(agreement?.pics) ? agreement!.pics! : []
         if (cancelled) return
         setRentalPics(prev => {
@@ -2188,8 +2368,10 @@ export function TicketWizard() {
   }, [customer?.id])
 
   // ---- #3 Seed billing-ref row 1 from the customer's billing profile ----
-  // requiresPo → a required PO row; requiresAfe → a required AFE row; else one
-  // optional row (pre-filled from a default if any). Seeds once, only after the
+  // requiresPo → a PO row marked "billing needs"; requiresAfe → the same for AFE
+  // (unless the profile takes the AFE from the well/pad); else one optional row
+  // (pre-filled from a default if any). None of them block submit — billing
+  // enforces requirements at invoicing. Seeds once, only after the
   // draft-restore pass, and never in edit mode (edit hydrates from the ticket).
   useEffect(() => {
     if (isEditMode || !draftRestored || billingRefsSeeded) return
@@ -2201,7 +2383,7 @@ export function TicketWizard() {
     })
     const seeded: BillingRef[] = []
     if (profile?.requiresPo) seeded.push({ id: uuidv4(), type: 'po', value: profile.defaultPoNumber || '', required: true })
-    if (profile?.requiresAfe) seeded.push({ id: uuidv4(), type: 'afe', value: profile.defaultAfeNumber || '', required: true })
+    if (profile?.requiresAfe && profile.afeNumberSource !== 'location') seeded.push({ id: uuidv4(), type: 'afe', value: profile.defaultAfeNumber || '', required: true })
     if (seeded.length === 0) {
       seeded.push({ id: uuidv4(), type: 'po', value: profile?.defaultPoNumber || '', required: false })
     }
@@ -2245,6 +2427,12 @@ export function TicketWizard() {
     // Only for new tickets (not edits), only when service type just changed.
     if (isEditMode) return
     if (!serviceType) return
+    // Air inspection has its own service charge. Wait for the work selection
+    // before seeding so generic labor/mileage cannot get there first.
+    if (serviceType === 'cascade_air' && cascadeAirSubtypes.size === 0) return
+    const defaultServiceType = serviceType === 'cascade_air' && cascadeAirSubtypes.has('inspection')
+      ? 'cascade_air_inspection'
+      : serviceType
     // On-Site Services can't seed until the subtype is settled — what gets
     // billed differs per subtype, and a manned-trailer day bills nothing at
     // all: the shift is already inside the rental package. Parts and labor
@@ -2260,11 +2448,11 @@ export function TicketWizard() {
     if (lineItems.some(li => li.lineType !== 'service')) return
 
     let cancelled = false
-    getDefaultLineItems(serviceType, pickerDivision, priceLevels).then(defaults => {
+    getDefaultLineItems(defaultServiceType, pickerDivision, priceLevels).then(defaults => {
       if (cancelled || defaults.length === 0) return
       setLineItems(prev => {
-        // Double-fire / async-race guard: never duplicate labor or mileage.
-        if (prev.some(li => li.lineType === 'labor' || li.lineType === 'travel')) return prev
+        // Double-fire / async-race guard: preserve billing lines added meanwhile.
+        if (prev.some(li => li.lineType !== 'service' || li.partNumber === '0311001')) return prev
         // Preserve any existing line (e.g. air fill's PSI service line); append.
         return [...prev, ...defaults]
       })
@@ -2274,11 +2462,25 @@ export function TicketWizard() {
   // the pricebook lands. LineItemEditor's own reprice pass fixes up rates that
   // were seeded before the customer's levels loaded.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serviceType, onSiteSubtype])
+  }, [serviceType, onSiteSubtype, cascadeAirSubtypes])
+
+  const [rentalBillingReady, setRentalBillingReady] = useState(false)
+  useEffect(() => {
+    if (workType !== 'rental' || currentStepId !== 'rn_billing' || !rentalPricesLoaded) return
+    if (lineItems.length) { setRentalBillingReady(true); return }
+    let cancelled = false
+    loadSwapBillingLines(priceLevels).then(lines => {
+      if (!cancelled) {
+        setLineItems(lines.map(line => line.lineType === 'labor' ? { ...line, notes: 'Equipment deployment' } : line))
+        setRentalBillingReady(true)
+      }
+    }).catch(err => { if (!cancelled) setError(err instanceof Error ? err.message : 'Could not load billing defaults') })
+    return () => { cancelled = true }
+  }, [workType, currentStepId, priceLevels, rentalPricesLoaded])
 
   // ---- #5 Rental deploy fulfillment ----
   // The composition (set at dispatch) defines the priced lines. At deploy the
-  // checklist compares scanned serials against the spec per gas-monitor line
+  // checklist compares entered serials against the spec per gas-monitor line
   // (product-matched). A mismatch — under OR over — soft-gates Next with a
   // confirm rather than blocking: field reality wins, but on purpose.
   // Trailer/other are shown as a reminder only (often non-serialized).
@@ -2300,8 +2502,8 @@ export function TicketWizard() {
       const qty = g.qty || 1
       const category = deployItemCategory(g.productId)
       const matchKey = category ? `cat:${category}` : `product:${g.productId}`
-      const totalScanned = rentalItems.filter(it => {
-        if (category) return deployItemCategory(it.productId) === category
+      const totalScanned = rentalLines.filter(it => {
+        if (category) return deploymentRowCategory(it, deployItemCategory) === category
         return it.productId === g.productId
       }).length
       const duplicateSpecCount = specs.filter(s => {
@@ -2318,14 +2520,14 @@ export function TicketWizard() {
         productId: g.productId,
         label: g.productName || 'Gas Monitor',
         qty,
-        scanned: displayScanned,
+        entered: displayScanned,
         met: displayScanned === qty,
       }
     })
   const deployMonitorsMet = deployMonitorLines.every(l => l.met)
 
   // ---- Package baseline diff ----
-  // The customer's package says what a job is supposed to deploy; the scanned
+  // The customer's package says what a job is supposed to deploy; the entered
   // serials say what actually is. Both resolve to the same axis — the BOM row
   // carries an equipment category, and a serial's product has one — so the
   // comparison is a group-by-category count.
@@ -2345,7 +2547,7 @@ export function TicketWizard() {
     deployAlreadyLined.set(cat, (deployAlreadyLined.get(cat) || 0) + (spec.qty || 1))
   }
   const deployedForDiff = netAlreadyLined(
-    rentalItems.map(it => deployItemCategory(it.productId)),
+    rentalLines.map(it => deploymentRowCategory(it, deployItemCategory)),
     deployAlreadyLined,
   )
 
@@ -2370,7 +2572,7 @@ export function TicketWizard() {
     }
   })
 
-  // Resolve the products behind the baseline rows and the scanned serials, so
+  // Resolve the products behind the baseline rows and the entered serials, so
   // the diff has a category for each and an over-baseline extra can be priced.
   // Dexie-first — the field is often offline. Declared after the derived consts
   // above because it depends on them.
@@ -2386,7 +2588,7 @@ export function TicketWizard() {
     // Chase whatever isn't resolved yet. Deliberately keyed on HITS, not
     // attempts: a product Dexie hasn't synced yet must be retried, or its
     // overage would read "rate TBD" for the rest of the session even after the
-    // data lands. Safe from looping — this effect only re-runs when the scanned
+    // data lands. Safe from looping — this effect only re-runs when the entered
     // items or the composition change, not when the resolved map does.
     const wanted = ids.filter(id => !deployProductsById.has(id))
     if (wanted.length === 0) return
@@ -2418,7 +2620,7 @@ export function TicketWizard() {
   function confirmDeployMismatch(): boolean {
     const off = deployMonitorLines.filter(l => !l.met)
     const ordered = off.map(l =>
-      `• ${l.label}: ${l.scanned} scanned, ${l.qty} ordered (${l.scanned < l.qty ? `${l.qty - l.scanned} short` : `${l.scanned - l.qty} extra`})`
+      `• ${l.label}: ${l.entered} entered, ${l.qty} ordered (${l.entered < l.qty ? `${l.qty - l.entered} short` : `${l.entered - l.qty} extra`})`
     )
     const short = deployShortRows.map(r =>
       `• ${r.label}: ${r.deployed} of ${r.expected} in the package (${r.short} short)`
@@ -2434,18 +2636,6 @@ export function TicketWizard() {
     ].filter(Boolean).join('\n\n')
     return confirm(`${sections}\n\nDeploy anyway?`)
   }
-  // True when dispatch priced the composition → billing comes from those lines,
-  // so per-item rates here are tracking-only (not billed). $0 is a real rate
-  // (deliberately free line) — mirrors server hasRate(), only null = unpriced.
-  const deployPriced = !!deployComposition && [
-    deployComposition.trailer?.rate,
-    ...(deployComposition.gasMonitors || []).map(g => g.rate),
-    ...(deployComposition.other || []).map(o => o.rate),
-    ...(deployComposition.bom || []).map(b => b.rate),
-    deployComposition.bomPackage?.rate,
-    ...(deployComposition.bomExtras || []).map(e => e.rate),
-  ].some(r => typeof r === 'number')
-
   // Pure Cascade Air inspection captures everything in the inspection editor,
   // so the standard line-item editor is hidden on this step (see render below).
   // Both the gate and the render read this flag so they can't drift apart.
@@ -2484,11 +2674,6 @@ export function TicketWizard() {
   function lineItemsBlocker(): string | null {
     const serviceBlocker = serviceLineItemsBlocker()
     if (serviceBlocker) return serviceBlocker
-    // Labor-rate lines (legacy 406 or new-scheme [DIV]00002) must describe the
-    // work done before advancing (required, not optional). Checked last so the
-    // service's own "you still owe me an inspection" message wins first.
-    if (lineItems.some(li => isLaborRatePart(li.partNumber) && !li.notes?.trim()))
-      return 'Add notes to the labor line describing the work performed.'
     return null
   }
 
@@ -2529,7 +2714,7 @@ export function TicketWizard() {
       return null
     }
     if (serviceType === 'inspection')
-      return inspectionRecords.length === 0 ? 'Add at least one inspection.' : null
+      return fieldInspectionBillingError(inspectionRecords)
     if (serviceType === 'on_site_services') {
       if (onSiteSubtype === 'other') {
         if (!onSiteOtherDescription.trim()) return 'Describe the work performed.'
@@ -2565,20 +2750,6 @@ export function TicketWizard() {
       if (ihTestRecords.length === 0) return 'Add at least one IH record.'
       if (!selectedIhSubtypes.every(st => ihTestRecords.some(r => r.testType === st))) return 'Each selected IH test type needs a record.'
     }
-    if (lineItems.some(li => isLaborRatePart(li.partNumber) && !li.notes?.trim()))
-      return 'Add notes to the labor line describing the work performed.'
-    return null
-  }
-
-  function whoWhereBlocker(): string | null {
-    if (!customer) return 'Select a customer.'
-    if (!location.pad && location.wells.length === 0) return 'Select a site or well.'
-    if (!division) return 'Select a charge path.'
-    if (workType === 'd3_combined') return null
-    if (!serviceType) return 'Select a service.'
-    if (serviceType === 'gas_detection' && !gasDetectionFixed && !gasDetectionArea) return 'Pick Fixed, Area, or both for Gas Detection.'
-    if (serviceType === 'cascade_air' && cascadeAirSubtypes.size === 0) return 'Pick at least one Cascade Air service.'
-    if (serviceType === 'on_site_services' && !onSiteSubtype) return 'Pick an On-Site service.'
     return null
   }
 
@@ -2593,10 +2764,17 @@ export function TicketWizard() {
         return true
       // Field service
       case 'who_where':
+        if (requiresSiteSignEvidence && !dispatchMode && !siteSignGeotagged) return false
         // A well with no pad is a complete location (wells are first-class;
         // Pad is only an optional grouping), so require *a* location, not a pad.
-        return whoWhereBlocker() === null
+        if (workType === 'd3_combined') return !!customer && (!!location.pad || location.wells.length > 0) && !!division
+        if (!customer || (!location.pad && location.wells.length === 0 && !(linkedRentalId && serviceType === 'on_site_services')) || !serviceType || !division) return false
+        if (serviceType === 'gas_detection' && !gasDetectionFixed && !gasDetectionArea) return false
+        if (serviceType === 'cascade_air' && cascadeAirSubtypes.size === 0) return false
+        if (serviceType === 'on_site_services' && !onSiteSubtype) return false
+        return true
       case 'line_items': return workType === 'd3_combined' ? d3CombinedBlocker() === null : lineItemsBlocker() === null
+      case 'dispatch_review': return !!customer && !!dispatchTechId && !!serviceDate && !!division && !dispatchUsersError && !customerCreditHold && lineItems.every(line => line.rate != null) && (!isCallOut || (dispatchCalloutFee.trim() !== '' && Number.isFinite(Number(dispatchCalloutFee)) && Number(dispatchCalloutFee) >= 0))
       case 'wrap_up': return true
       // Air fill
       case 'af_customer': return !!customer
@@ -2625,9 +2803,10 @@ export function TicketWizard() {
       case 'tr_line_items': return true
       case 'tr_wrap_up': return true
       // Rental
-      case 'rn_setup': return !!customer && !!selectedStartJobRentalId
+      case 'rn_setup': return !!customer && !!selectedStartJobRentalId && !!deploymentAt
       // Mismatch vs the dispatch order soft-gates via confirm in goNext, not here.
-      case 'rn_equipment': return rentalItems.length > 0 && (deployShortRows.length === 0 || deployShortReason.trim().length > 0)
+      case 'rn_equipment': return rentalItems.length > 0 && rentalItems.every(item => !item.manualEntry || (!!item.serialNumber?.trim() && !!item.productName?.trim() && !!item.testDate?.trim())) && (deployShortRows.length === 0 || deployShortReason.trim().length > 0)
+      case 'rn_billing': return rentalBillingReady && lineItems.every(line => line.rate != null)
       case 'rn_review': return true
       default: return false
     }
@@ -2644,6 +2823,9 @@ export function TicketWizard() {
   // Location breadcrumb shared by the Dexie record and the sync payload. Air
   // fills happen at the shop, so their "location" is the truck/unit + driver.
   function locationBreadcrumb(): string {
+    if (workType === 'training') {
+      return trainingLocationText || (trainingIsOnSite ? 'On-Site' : 'In-House (Basin Safety)')
+    }
     if (workType === 'air_fill') {
       return `${airFillLocationText || customer?.name || 'Air Fill'}${driverName ? ` — ${driverName}` : ''}`
     }
@@ -2677,7 +2859,13 @@ export function TicketWizard() {
     return data
   }
 
-  function buildTicketPayload() {
+  function fieldInspectionSnapshot(finalize = false) {
+    return { records: inspectionRecords, returnShopShortCode,
+      submittedIds: [...new Set([...fieldInspectionSubmittedIds, ...(finalize ? inspectionRecords.map(r => r.id) : [])])],
+    }
+  }
+
+  function buildTicketPayload(finalizeFieldInspection = false) {
     const resolvedTicketType = activeConfig?.ticketType || 'field_service'
     const resolvedSubtype = workType === 'ih_testing'
       ? (ihSubtype || undefined)
@@ -2690,7 +2878,7 @@ export function TicketWizard() {
       // Primary well for the FK (first selected)
       wellId: wellIds[0] || undefined,
       rigPresent: rigPresent || undefined,
-      presentRigId: rigPresent ? (presentRig?.id || undefined) : undefined,
+      presentRigNumber: rigPresent ? (rigNumber.trim() || null) : null,
       // Send the breadcrumb the local Dexie record already carries — the server
       // rebuilds it from the location FKs when it's missing, but air-fill
       // tickets have no FKs and their truck/driver label only exists here.
@@ -2715,12 +2903,13 @@ export function TicketWizard() {
       isDickinson: isDickinson || undefined,
       linkedRentalAgreementId: linkedRentalId || undefined,
       dispatchNotes: dispatchNotes || undefined,
-      workDescription: workNotes || undefined,
+      workDescription: workNotes || null,
       arrivalTime: arrivedAt || undefined,
       departureTime: departedAt || undefined,
       // All selected wells in customData for billing + training course metadata
       customData: (() => {
         const data: any = {}
+        if (workType === 'field_inspection') data.fieldInspection = fieldInspectionSnapshot(finalizeFieldInspection)
         if (wellIds.length > 1) data.wellIds = wellIds
         if (workType === 'training') {
           data.courseName = trainingCourseName
@@ -2831,7 +3020,7 @@ export function TicketWizard() {
       facilityId: null,
       workPointId: null,
       rigPresent,
-      presentRigId: rigPresent ? (presentRig?.id || null) : null,
+      presentRigNumber: rigPresent ? (rigNumber.trim() || null) : null,
       locationDisplay: locationBreadcrumb(),
       assignedTechId: user?.id || null,
       serviceDate,
@@ -2856,6 +3045,7 @@ export function TicketWizard() {
       internalNotes: null,
       customData: (() => {
         const data: any = {}
+        if (workType === 'field_inspection') data.fieldInspection = fieldInspectionSnapshot(status === 'supervisor_review')
         const wellIds = location.wells.map(w => w.id)
         if (wellIds.length > 1) data.wellIds = wellIds
         if (workType === 'training') {
@@ -2949,23 +3139,98 @@ export function TicketWizard() {
 
   // ---- Save / Submit ----
 
+  function restoreGasDetectionRecords(records: GasDetectionDraftRecord[]) {
+    setGasDetectionRecords(records.map(rec => ({
+      ...rec, monitorMake: rec.monitorMake || '', monitorModel: rec.monitorModel || '',
+      sensorReplaced: rec.sensorReplaced || '', workPerformed: rec.workPerformed || '', notes: rec.notes || '',
+    })))
+    setOriginalGasDetectionIds(new Set(records.map(rec => rec.id)))
+  }
+
+  async function saveGasDetectionEdits(ticketId: string, now: string) {
+    await db.transaction('rw', [db.gasDetectionRecords, db.mutationQueue], async () => {
+      const stored = await db.gasDetectionRecords.where('ticketId').equals(ticketId).toArray()
+      const existingIds = new Set([...originalGasDetectionIds, ...stored.map(rec => rec.id)])
+      const currentIds = new Set(gasDetectionRecords.map(rec => rec.id))
+      for (const rec of gasDetectionRecords) {
+        await db.gasDetectionRecords.put({ ...rec, ticketId, _offlineStatus: 'pending' })
+        await db.mutationQueue.add({
+          table: 'gasDetectionRecords', action: existingIds.has(rec.id) ? 'update' : 'create', entityId: rec.id,
+          payload: {
+            ticketId, monitorMake: rec.monitorMake || null, monitorModel: rec.monitorModel || null,
+            monitorSerial: rec.monitorSerial, subtype: rec.subtype, testResult: rec.testResult,
+            sensorReplaced: rec.sensorReplaced || null, workPerformed: rec.workPerformed || null, notes: rec.notes || null,
+          },
+          createdAt: now, status: 'pending', retryCount: 0,
+        })
+      }
+      for (const oldId of existingIds) {
+        if (currentIds.has(oldId)) continue
+        await db.gasDetectionRecords.delete(oldId)
+        await db.mutationQueue.add({
+          table: 'gasDetectionRecords', action: 'delete', entityId: oldId,
+          payload: {}, createdAt: now, status: 'pending', retryCount: 0,
+        })
+      }
+    })
+  }
+
+  async function handleDispatchCallout() {
+    if (dispatchSubmitting.current || !customer || !dispatchTechId || !canAdvance()) return
+    dispatchSubmitting.current = true
+    setSaving(true)
+    setError('')
+    try {
+      const payload = buildTicketPayload()
+      const preparedLines: LineItem[] = isCallOut && !lineItems.some(line => line.partNumber === '148')
+        ? [...lineItems, { id: dispatchFeeLineId, lineType: 'misc_charge', partNumber: '148', description: 'Emergency Call out Fee', quantity: 1, rate: Number(dispatchCalloutFee), total: Number(dispatchCalloutFee), unitOfMeasure: 'EA' }]
+        : lineItems
+      const wizardData = { ...getWizardData(), lineItems: preparedLines }
+      await api.post('/tickets/dispatch-callout', {
+        requestId: offlineId,
+        lineItems: preparedLines,
+        ticket: { ...payload, assignedTechId: dispatchTechId,
+          customData: { ...payload.customData, dispatchPrepared: true,
+            dispatchNotificationDivision: dispatchNotificationDivision || (division === 'D3' ? 'D3' : 'D4'),
+            wizardDraft: { version: 1, step: 1, data: wizardData } } },
+      })
+      await clearDraft()
+      navigate('/dispatch')
+    } catch (err) { setError(err instanceof Error ? err.message : 'Could not dispatch callout') }
+    finally { setSaving(false); dispatchSubmitting.current = false }
+  }
+
   async function handleSaveDraft() {
+    if (searchParams.get('deployTicket')) {
+      await db.drafts.put({ id: draftId, ticketId: null, step, wizardData: getWizardData(), updatedAt: new Date().toISOString() })
+      navigate('/my-jobs?tab=rentals')
+      return
+    }
     setSaving(true)
     setError('')
     try {
       const now = new Date().toISOString()
-      await db.tickets.put(buildTicketRecord('draft', now))
-      await db.mutationQueue.add({
-        table: 'tickets',
-        action: 'create',
-        entityId: offlineId,
-        offlineId,
-        payload: { ...buildTicketPayload(), status: 'draft', offlineId },
-        createdAt: now,
-        status: 'pending',
-        retryCount: 0,
+      const record = buildTicketRecord('draft', now)
+      const customData = {
+        ...record.customData,
+        wizardDraft: { version: 1, step, techSaved: true, data: getWizardData() },
+      }
+      // The durable draft and outbox entry must both exist before discarding
+      // the browser autosave. Partial/incomplete children remain draft content.
+      await db.transaction('rw', [db.tickets, db.mutationQueue, db.drafts], async () => {
+        await db.tickets.put({ ...record, customData })
+        await db.mutationQueue.add({
+          table: 'tickets',
+          action: 'create',
+          entityId: offlineId,
+          offlineId,
+          payload: { ...buildTicketPayload(), customData, status: 'draft', offlineId },
+          createdAt: now,
+          status: 'pending',
+          retryCount: 0,
+        })
+        await clearDraft()
       })
-      await clearDraft()
       navigate('/my-jobs')
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to save draft'
@@ -2982,16 +3247,27 @@ export function TicketWizard() {
       setError('Pick a rental contract first.')
       return
     }
+    if (!deploymentAt || isNaN(new Date(deploymentAt).getTime())) {
+      setError('Deployment date and time are required.')
+      return
+    }
+    const deployedDate = isoToLocalInput(deploymentAt).slice(0, 10)
+    if (deployedDate > todayKey()) { setError('Deployment date cannot be in the future.'); return }
     setSaving(true)
     setError('')
     try {
       const now = new Date().toISOString()
       const agreementId = selectedStartJobRentalId
+      if (lineItems.some(line => line.rate == null)) throw new Error('Enter a rate on each billing line (zero is allowed).')
 
       // 1. Update the local Dexie copy of the rental: status → 'active'.
       // What went out beyond the package baseline. Resolved here rather than at
-      // dispatch because it isn't knowable until the tech has scanned — this is
+      // dispatch because it isn't knowable until the tech has entered — this is
       // the moment the 5th-of-4 monitor becomes a real charge.
+      if (!rentalItems.length || rentalItems.some(item => item.manualEntry && (!item.serialNumber?.trim() || !item.productName?.trim() || !item.testDate?.trim()))) throw new Error('Enter Serial, Type, and Test date for every equipment row.')
+      const manualEquipment = rentalItems.filter(item => item.manualEntry).map(item => ({
+        id: item.id, serial: item.serialNumber!.trim(), type: item.productName!.trim(), testDate: item.testDate!.trim(), deployedAt: deploymentAt,
+      }))
       const bomExtras = deployExtras.length ? deployExtras : undefined
       const deploymentExceptions = deployShortRows.length > 0
         ? {
@@ -3010,13 +3286,15 @@ export function TicketWizard() {
         ? { ...deployComposition, ...(bomExtras ? { bomExtras } : {}), ...(deploymentExceptions ? { deploymentExceptions } : {}) }
         : undefined
 
+      await db.transaction('rw', [db.rentalAgreements, db.rentalAgreementItems, db.equipment, db.tickets, db.ticketLineItems, db.mutationQueue], async () => {
       const existing = await db.rentalAgreements.get(agreementId)
+      if (!existing) throw new Error('Rental contract unavailable on this device — sync and try again.')
       if (existing) {
         await db.rentalAgreements.put({
           ...existing,
           status: 'active',
-          ...(existing.composition && (bomExtras || deploymentExceptions)
-            ? { composition: { ...existing.composition, ...(bomExtras ? { bomExtras } : {}), ...(deploymentExceptions ? { deploymentExceptions } : {}) } }
+          ...((existing.composition || manualEquipment.length) && (bomExtras || deploymentExceptions || manualEquipment.length)
+            ? { composition: { trailer: null, gasMonitors: [], other: [], drillingRig: false, ...existing.composition, manualEquipment: [...(existing.composition?.manualEquipment || []).filter(row => !manualEquipment.some(entry => entry.id === row.id)), ...manualEquipment], ...(bomExtras ? { bomExtras } : {}), ...(deploymentExceptions ? { deploymentExceptions } : {}) } }
             : {}),
           updatedAt: now,
           _offlineStatus: 'pending',
@@ -3024,10 +3302,13 @@ export function TicketWizard() {
       }
 
       // 2. Save items to Dexie + mark equipment rented locally.
-      for (const item of rentalItems) {
+      for (const item of rentalItems.filter(item => !item.manualEntry)) {
         await db.rentalAgreementItems.put({
           ...item,
+          rate: item.deployInspection?.coveredBy ? 0 : item.rate,
           rentalAgreementId: agreementId,
+          deployedDate,
+          deployInspection: item.deployInspection ? { ...item.deployInspection, deployedAt: deploymentAt } : item.deployInspection,
           _offlineStatus: 'pending',
         })
         await db.equipment.update(item.serializedEquipmentId, {
@@ -3047,6 +3328,7 @@ export function TicketWizard() {
         payload: {
           status: 'active',
           ...(compositionUpdate ? { composition: compositionUpdate } : {}),
+          ...(manualEquipment.length ? { manualEquipment } : {}),
         },
         createdAt: now,
         status: 'pending',
@@ -3054,7 +3336,7 @@ export function TicketWizard() {
       })
 
       // 4. Push create mutations for items.
-      for (const item of rentalItems) {
+      for (const item of rentalItems.filter(item => !item.manualEntry)) {
         await db.mutationQueue.add({
           table: 'rentalAgreementItems',
           action: 'create',
@@ -3063,11 +3345,11 @@ export function TicketWizard() {
             rentalAgreementId: agreementId,
             productId: item.productId,
             serializedEquipmentId: item.serializedEquipmentId,
-            rate: item.rate,
+            rate: item.deployInspection?.coveredBy ? 0 : item.rate,
             rateType: item.rateType || rentalBillingRateType,
-            deployedDate: serviceDate,
+            deployedDate,
             status: 'deployed',
-            deployInspection: item.deployInspection || undefined,
+            deployInspection: item.deployInspection ? { ...item.deployInspection, deployedAt: deploymentAt } : undefined,
           },
           createdAt: now,
           status: 'pending',
@@ -3075,6 +3357,11 @@ export function TicketWizard() {
         })
       }
 
+      await queueRentalEventTicket({ id: offlineId, assignedTicketId: searchParams.get('deployTicket') || undefined, manualEquipment, rental: existing, workType: 'rental_deploy',
+        serviceDate: deployedDate, userId: user?.id, lines: lineItems,
+        description: `Equipment deployment\n${rentalLines.map(item => `${item.productName || 'Equipment'}: ${item.serialNumber || item.serializedEquipmentId}${item.testDate ? ` (Test date: ${item.testDate})` : ''}`).join('\n')}`,
+      })
+      })
       await clearDraft()
       navigate(`/rentals/${agreementId}`)
     } catch (err: unknown) {
@@ -3086,6 +3373,10 @@ export function TicketWizard() {
   }
 
   async function submitTicket() {
+    if (serviceType === 'inspection') {
+      const billingError = fieldInspectionBillingError(inspectionRecords)
+      if (billingError) { setError(billingError); return }
+    }
     // Customer is mandatory — guard against a customer-less submit (e.g. an
     // offline edit-reopen that couldn't resolve the company). Surfaces a clear
     // error instead of silently saving a ticket with no customer.
@@ -3112,28 +3403,15 @@ export function TicketWizard() {
       setError('Site sign photo must include GPS before submitting. Allow location access and capture the sign again.')
       return
     }
-    // Labor-rate lines (legacy 406 or new-scheme [DIV]00002) must carry a
-    // reason/description of work done.
-    const missing406Reason = lineItems.filter(li => isLaborRatePart(li.partNumber) && !li.notes?.trim())
-    if (missing406Reason.length > 0) {
-      setError('Reason required on labor line(s) — describe work done in the line notes.')
-      return
-    }
-    // #3 Required billing refs (customer-mandated PO/AFE) must be filled in.
-    const missingRef = billingRefs.find(r => r.required && !r.value.trim())
-    if (missingRef) {
-      const lbl = missingRef.type === 'po' ? (billingLabels.po || 'PO')
-        : missingRef.type === 'afe' ? (billingLabels.afe || 'AFE')
-        : (billingLabels.costCode || 'Cost Code')
-      setError(`${lbl} # is required for this customer.`)
-      return
-    }
+    // Customer-required PO/AFE rows are recorded when the tech has them but never
+    // block the work: billing enforces them at invoicing (Enverus submit gate).
     setSaving(true)
     setError('')
     try {
       const now = new Date().toISOString()
       const ticketId = offlineId
 
+      const persist = async () => {
       // 1. Save ticket to Dexie. Status is supervisor_review so the
       //    TicketsPage reflects the Approvals-bound state even before sync.
       const ticketRecord = buildTicketRecord('supervisor_review', now)
@@ -3208,8 +3486,8 @@ export function TicketWizard() {
         entityId: ticketId,
         offlineId,
         payload: {
-          ...buildTicketPayload(),
-          status: 'supervisor_review',
+          ...buildTicketPayload(true),
+          status: workType === 'training' || serviceType === 'inspection' ? 'in_progress' : 'supervisor_review',
           offlineId,
           customerRepSignature: signature || undefined,
         },
@@ -3375,6 +3653,9 @@ export function TicketWizard() {
               ticketId,
               workPointId: rec.workPointId || undefined,
               workPointName: rec.workPointName,
+              verified: rec.verified ?? false,
+              dateVerified: rec.dateVerified || null,
+              verificationUpdate: rec.verificationUpdate,
               airSystemType: rec.airSystemType || undefined,
               reelSerialNumber: rec.reelSerialNumber || undefined,
               standSerialNumber: rec.standSerialNumber || undefined,
@@ -3432,158 +3713,7 @@ export function TicketWizard() {
         }
       }
 
-      //    Field inspection records (ShopWork Wave 4): PASS → locked ledger record
-      //    (visual-only field bill); FAIL → spawn a Shop WO carrying field context.
-      if (serviceType === 'inspection' && inspectionRecords.length > 0) {
-        const passRecords = inspectionRecords.filter(r => r.outcome === 'pass')
-        const failRecords = inspectionRecords.filter(r => r.outcome !== 'pass')
-
-        for (const rec of passRecords) {
-          await db.equipmentInspections.put({ ...rec, ticketId, lockedAt: now, _offlineStatus: 'pending' })
-          await db.mutationQueue.add({
-            table: 'equipmentInspections',
-            action: 'create',
-            entityId: rec.id,
-            // Created already-locked so sync replay runs flow-back + BlueLion enqueue.
-            payload: {
-              id: rec.id,
-              ticketId,
-              shopItemId: null,
-              serializedEquipmentId: rec.serializedEquipmentId ?? null,
-              serialNumber: rec.serialNumber,
-              category: rec.category,
-              outcome: rec.outcome,
-              serviceActions: rec.serviceActions,
-              data: rec.data,
-              partsReplaced: rec.partsReplaced ?? null,
-              notes: rec.notes ?? null,
-              customerApprovedName: rec.customerApprovedName ?? null,
-              customerApprovedSignature: rec.customerApprovedSignature ?? null,
-              customerApprovedAt: rec.customerApprovedAt ?? null,
-              inspectedAt: rec.inspectedAt ?? now,
-              lockedAt: now,
-            },
-            createdAt: now,
-            status: 'pending',
-            retryCount: 0,
-          })
-        }
-
-        // FAIL units write NO ledger record (§4) — the fail survives as Shop WO
-        // intake context. Spawn ONE WO; the shop re-inspects as the authority.
-        if (failRecords.length > 0) {
-          const woId = uuidv4()
-          const woItems = failRecords.map(r => {
-            const d = (r.data ?? {}) as Record<string, any>
-            const isFex = r.category === 'fire_extinguisher'
-            // Best-effort human label: FEX brand/type/size, else make/model
-            // (gas monitors, SCBA), else nothing.
-            const description =
-              [d.brand, d.type, d.size].filter(Boolean).join(' ').trim()
-              || [d.make, d.model].filter(Boolean).join(' ').trim()
-              || null
-            return {
-              serializedEquipmentId: r.serializedEquipmentId ?? null,
-              serialNumber: r.serialNumber,
-              equipmentCategory: INSP_TO_SHOP_CATEGORY[r.category] ?? 'other',
-              serviceType: 'inspection',
-              // Carry the unit identity captured in the field so the shop sees a
-              // real unit, not a bare serial (was dropped pre-fix — only serial +
-              // category survived). FEX brand/size/type map to dedicated columns;
-              // everything captured rides along in customData for the shop.
-              fexBrand: isFex ? (d.brand || null) : null,
-              fexSize: isFex ? (d.size || null) : null,
-              fexType: isFex ? (d.type || null) : null,
-              equipmentDescription: description,
-              customData: Object.keys(d).length > 0 ? { fieldInspection: d } : undefined,
-              reportedIssue: `Field inspection FAILED ${now.slice(0, 10)} (outcome: ${r.outcome.replace(/_/g, ' ')}). Re-inspect.`,
-            }
-          })
-          // A field-spawned WO has no shop drop-off/pickup contact yet — the tech
-          // carried it in. Send a lenient drop-off (the inspecting tech) and flag
-          // contacts optional so the shared create helper doesn't reject it (the
-          // missing contacts were why the WO synced with zero items pre-fix).
-          const techName = user?.name || user?.id || 'Field Tech'
-          const woPayload = {
-            id: woId,
-            companyId: customer?.id || '',
-            isInternal: false,
-            intakeDate: now,
-            intakeNotes: `Auto-spawned from a field inspection — ${failRecords.length} unit(s) failed and were sent in for shop service.`,
-            primaryCategory: woItems[0]?.equipmentCategory ?? null,
-            priority: 5,
-            intakeSiteId: getActiveSiteId() ?? '',
-            sourceLocationId: location.pad?.id ?? null,
-            // Contacts are optional for field-spawned WOs; record the tech as the
-            // drop-off so the shop knows who brought it in.
-            contactsOptional: true,
-            dropOffContact: { name: techName, preferred: 'call' },
-            // Auto-transit to the selected return shop, transported by the
-            // inspecting tech. The server resolves the destination by short
-            // code, leaves the items "in transit" until that shop receives
-            // them, and no-ops when intake already happened there.
-            //
-            // No literal fallback: the value is already validated against the
-            // live (or last-cached) site list, so it is either resolvable or
-            // genuinely unknown. Sending a guess is what silently stranded
-            // gear — a guess that fails to resolve looks exactly like a
-            // deliberate no-op, whereas omitting it is honest, and the
-            // who_where step warns the tech when it comes to that.
-            transitToShortCode: returnShopShortCode || undefined,
-            transportedById: user?.id ?? null,
-            items: woItems,
-          }
-          await db.shopWorkOrders.put({
-            id: woId,
-            workOrderNumber: 'Pending...',
-            status: 'intake',
-            companyId: customer?.id || '',
-            companyName: customer?.name || '',
-            isInternal: false,
-            poNumber: null,
-            afeNumber: null,
-            intakeDate: now,
-            intakeNotes: woPayload.intakeNotes,
-            intakeById: null,
-            intakeByName: undefined,
-            intakeSiteId: woPayload.intakeSiteId,
-            sourceLocationId: location.pad?.id ?? null,
-            returnLocationId: null,
-            promisedDate: null,
-            priority: 5,
-            completedDate: null,
-            returnedDate: null,
-            totalItems: woItems.length,
-            completedItems: 0,
-            primaryCategory: woPayload.primaryCategory,
-            notes: null,
-            dropOffContactName: null,
-            dropOffContactPhone: null,
-            dropOffContactEmail: null,
-            dropOffContactPreferred: null,
-            pickupContactName: null,
-            pickupContactPhone: null,
-            pickupContactEmail: null,
-            pickupContactPreferred: null,
-            pickupSignedByName: null,
-            pickupSignature: null,
-            pickupSignedAt: null,
-            pickupNotes: null,
-            createdAt: now,
-            updatedAt: now,
-            _offlineStatus: 'pending',
-          } as OfflineShopWorkOrder)
-          await db.mutationQueue.add({
-            table: 'shopWorkOrders',
-            action: 'create',
-            entityId: woId,
-            payload: woPayload,
-            createdAt: now,
-            status: 'pending',
-            retryCount: 0,
-          })
-        }
-      }
+      await saveFieldInspectionSubmission(ticketId, now)
 
       //    IH test record mutations
       if ((workType === 'ih_testing' || d3HasIh) && ihTestRecords.length > 0) {
@@ -3633,7 +3763,7 @@ export function TicketWizard() {
               cardNumber: rec.cardNumber || undefined,
               cardExpiryDate: rec.cardExpiryDate || undefined,
               notes: rec.notes || undefined,
-              trainedAt: rec.trainedAt || now,
+              trainedAt: serviceDate ? `${serviceDate}T00:00:00.000Z` : rec.trainedAt || now,
             },
             createdAt: now,
             status: 'pending',
@@ -3642,6 +3772,9 @@ export function TicketWizard() {
         }
       }
 
+      }
+      if (workType === 'training' || serviceType === 'inspection') await persistTicketBatch(ticketId, true, now, persist)
+      else await persist()
       await clearDraft()
       navigate('/tickets')
     } catch (err: unknown) {
@@ -3652,10 +3785,186 @@ export function TicketWizard() {
     }
   }
 
+  async function saveFieldInspectionSubmission(ticketId: string, now: string) {
+    //    Field inspection records (ShopWork Wave 4): PASS → locked ledger record
+    //    (visual-only field bill); FAIL → spawn a Shop WO carrying field context.
+    if (serviceType === 'inspection' && inspectionRecords.length > 0) {
+      const passRecords = inspectionRecords.filter(r => r.outcome === 'pass' && !fieldInspectionSubmittedIds.has(r.id))
+      const failRecords = inspectionRecords.filter(r => r.outcome !== 'pass' && !fieldInspectionSubmittedIds.has(r.id))
+
+      for (const rec of passRecords) {
+        await db.equipmentInspections.put({ ...rec, ticketId, lockedAt: now, _offlineStatus: 'pending' })
+        await db.mutationQueue.add({
+          table: 'equipmentInspections',
+          action: 'create',
+          entityId: rec.id,
+          // Created already-locked so sync replay runs flow-back + BlueLion enqueue.
+          payload: {
+            id: rec.id,
+            ticketId,
+            shopItemId: null,
+            serializedEquipmentId: rec.serializedEquipmentId ?? null,
+            serialNumber: rec.serialNumber,
+            category: rec.category,
+            outcome: rec.outcome,
+            serviceActions: rec.serviceActions,
+            data: rec.data,
+            partsReplaced: rec.partsReplaced ?? null,
+            notes: rec.notes ?? null,
+            customerApprovedName: rec.customerApprovedName ?? null,
+            customerApprovedSignature: rec.customerApprovedSignature ?? null,
+            customerApprovedAt: rec.customerApprovedAt ?? null,
+            inspectedAt: rec.inspectedAt ?? now,
+            lockedAt: now,
+          },
+          createdAt: now,
+          status: 'pending',
+          retryCount: 0,
+        })
+      }
+
+      // FAIL units write NO ledger record (§4) — the fail survives as Shop WO
+      // intake context. Spawn ONE WO; the shop re-inspects as the authority.
+      if (failRecords.length > 0) {
+        // Record identities survive offline ticket remapping and retries.
+        const woId = uuidv5('servicepro:field-shop:' + failRecords.map(r => r.id).sort().join('|'), uuidv5.URL)
+        const woItems = failRecords.map(r => {
+          const d = (r.data ?? {}) as Record<string, any>
+          const isFex = r.category === 'fire_extinguisher'
+          // Best-effort human label: FEX brand/type/size, else make/model
+          // (gas monitors, SCBA), else nothing.
+          const description =
+            [d.brand, d.type, d.size].filter(Boolean).join(' ').trim()
+            || [d.make, d.model].filter(Boolean).join(' ').trim()
+            || null
+          return {
+            serializedEquipmentId: r.serializedEquipmentId ?? null,
+            serialNumber: r.serialNumber,
+            equipmentCategory: INSP_TO_SHOP_CATEGORY[r.category] ?? 'other',
+            serviceType: 'inspection',
+            // Carry the unit identity captured in the field so the shop sees a
+            // real unit, not a bare serial (was dropped pre-fix — only serial +
+            // category survived). FEX brand/size/type map to dedicated columns;
+            // everything captured rides along in customData for the shop.
+            fexBrand: isFex ? (d.brand || null) : null,
+            fexSize: isFex ? (d.size || null) : null,
+            fexType: isFex ? (d.type || null) : null,
+            equipmentDescription: description,
+            customData: {
+              fieldInspection: d,
+              // Failed field results are intake context, not a locked ledger
+              // record. Keep the full account so the shop can see why it failed.
+              fieldInspectionRecord: {
+                id: r.id, sourceTicketOfflineId: ticketId, outcome: r.outcome,
+                serviceActions: r.serviceActions, inspectedAt: r.inspectedAt,
+                notes: r.notes ?? null, partsReplaced: r.partsReplaced ?? null,
+                customerApprovedName: r.customerApprovedName ?? null,
+              },
+            },
+            reportedIssue: [`Field inspection FAILED ${now.slice(0, 10)} (outcome: ${r.outcome.replace(/_/g, ' ')}). Re-inspect.`, r.notes?.trim()].filter(Boolean).join(' '),
+          }
+        })
+        // A field-spawned WO has no shop drop-off/pickup contact yet — the tech
+        // carried it in. Send a lenient drop-off (the inspecting tech) and flag
+        // contacts optional so the shared create helper doesn't reject it (the
+        // missing contacts were why the WO synced with zero items pre-fix).
+        const techName = user?.name || user?.id || 'Field Tech'
+        const woPayload = {
+          id: woId,
+          companyId: customer?.id || '',
+          isInternal: false,
+          poNumber: billingRefs.find(r => r.type === 'po' && r.value.trim())?.value || poNumber || null,
+          afeNumber: billingRefs.find(r => r.type === 'afe' && r.value.trim())?.value || null,
+          intakeDate: now,
+          intakeNotes: `Auto-spawned from a field inspection — ${failRecords.length} unit(s) failed and were sent in for shop service.`,
+          primaryCategory: woItems[0]?.equipmentCategory ?? null,
+          priority: 5,
+          intakeSiteId: getActiveSiteId() ?? '',
+          sourceLocationId: location.pad?.id ?? null,
+          // Contacts are optional for field-spawned WOs; record the tech as the
+          // drop-off so the shop knows who brought it in.
+          contactsOptional: true,
+          dropOffContact: { name: techName, preferred: 'call' },
+          // Auto-transit to the selected return shop, transported by the
+          // inspecting tech. The server resolves the destination by short
+          // code, leaves the items "in transit" until that shop receives
+          // them, and no-ops when intake already happened there.
+          //
+          // No literal fallback: the value is already validated against the
+          // live (or last-cached) site list, so it is either resolvable or
+          // genuinely unknown. Sending a guess is what silently stranded
+          // gear — a guess that fails to resolve looks exactly like a
+          // deliberate no-op, whereas omitting it is honest, and the
+          // who_where step warns the tech when it comes to that.
+          transitToShortCode: returnShopShortCode || undefined,
+          transportedById: user?.id ?? null,
+          items: woItems,
+        }
+        await db.shopWorkOrders.put({
+          id: woId,
+          workOrderNumber: 'Pending...',
+          status: 'intake',
+          companyId: customer?.id || '',
+          companyName: customer?.name || '',
+          isInternal: false,
+          poNumber: woPayload.poNumber,
+          afeNumber: woPayload.afeNumber,
+          intakeDate: now,
+          intakeNotes: woPayload.intakeNotes,
+          intakeById: null,
+          intakeByName: undefined,
+          intakeSiteId: woPayload.intakeSiteId,
+          sourceLocationId: location.pad?.id ?? null,
+          returnLocationId: null,
+          promisedDate: null,
+          priority: 5,
+          completedDate: null,
+          returnedDate: null,
+          totalItems: woItems.length,
+          completedItems: 0,
+          primaryCategory: woPayload.primaryCategory,
+          notes: null,
+          dropOffContactName: null,
+          dropOffContactPhone: null,
+          dropOffContactEmail: null,
+          dropOffContactPreferred: null,
+          pickupContactName: null,
+          pickupContactPhone: null,
+          pickupContactEmail: null,
+          pickupContactPreferred: null,
+          pickupSignedByName: null,
+          pickupSignature: null,
+          pickupSignedAt: null,
+          pickupNotes: null,
+          createdAt: now,
+          updatedAt: now,
+          _offlineStatus: 'pending',
+        } as OfflineShopWorkOrder)
+        await db.mutationQueue.add({
+          table: 'shopWorkOrders',
+          action: 'create',
+          entityId: woId,
+          payload: woPayload,
+          createdAt: now,
+          status: 'pending',
+          retryCount: 0,
+        })
+      }
+    }
+  }
+
   // ---- Edit mode save ----
 
   async function handleSaveEdit(targetStatus?: string) {
     if (!editTicketId) return
+    if (targetStatus === 'supervisor_review' && serviceType === 'inspection') {
+      const billingError = fieldInspectionBillingError(inspectionRecords)
+      if (billingError) { setError(billingError); return }
+    }
+    if (targetStatus === 'supervisor_review' && (!arrivedAt || !departedAt)) {
+      setError('Arrival and departure times are required before submit.')
+      return
+    }
     // Customer is mandatory — guard the edit/re-entry path too. If an offline
     // reopen couldn't resolve the customer, this forces a re-selection instead
     // of re-saving a customer-less ticket.
@@ -3676,12 +3985,22 @@ export function TicketWizard() {
     try {
       const now = new Date().toISOString()
       const status = targetStatus || originalStatus
-      const payload = buildTicketPayload()
+      const payload = buildTicketPayload(status === 'supervisor_review')
+      // 'dispatched' belongs here: a tech can Save Changes before Start Work,
+      // and without a fresh snapshot the dispatcher's original one is restored
+      // over the saved lines and times on the next open.
+      if (['draft', 'dispatched', 'in_progress', 'on_hold'].includes(status)) {
+        payload.customData = { ...payload.customData, wizardDraft: { version: 1, step, techSaved: true, data: {
+          ...getWizardData(),
+          originalTrainingRosterIds: trainingRosterRecords.map(row => row.id),
+        } } }
+      }
 
+      const persist = async () => {
       // 1. Update local ticket in Dexie
       await db.tickets.update(editTicketId, {
         ...payload,
-        locationDisplay: [location.pad?.name, wellsDisplayLabel()].filter(Boolean).join(' > ') || customer?.name || '',
+        locationDisplay: locationBreadcrumb(),
         status,
         updatedAt: now,
         _offlineStatus: 'pending' as const,
@@ -3694,7 +4013,7 @@ export function TicketWizard() {
       //    customer-less ticket): re-selecting the customer here rewrites the
       //    queued payload so it can finally land, instead of leaving a dead
       //    create + a doomed update stuck in the queue.
-      const ticketPayload = { ...payload, status, customerRepSignature: signature || undefined }
+      const ticketPayload = { ...payload, status: (workType === 'training' || serviceType === 'inspection') && status === 'supervisor_review' ? 'in_progress' : status, customerRepSignature: signature || undefined }
       const pendingCreate = (
         await db.mutationQueue.where('entityId').equals(editTicketId).toArray()
       ).find(m => m.table === 'tickets' && m.action === 'create' && m.status !== 'done')
@@ -3773,7 +4092,7 @@ export function TicketWizard() {
               sortOrder: i, serialNumberInstalled: item.serialNumberInstalled || undefined,
               serialNumberRemoved: item.serialNumberRemoved || undefined,
               testResult: item.testResult || undefined, calGasLotNumber: item.calGasLotNumber || undefined,
-              notes: item.notes || undefined, customData: priceLevelCustomData(item),
+              notes: item.notes || null, customData: priceLevelCustomData(item),
             },
             createdAt: now, status: 'pending' as const, retryCount: 0,
           })
@@ -3850,6 +4169,9 @@ export function TicketWizard() {
           ticketId: editTicketId,
           workPointId: rec.workPointId || undefined,
           workPointName: rec.workPointName,
+          verified: rec.verified ?? false,
+          dateVerified: rec.dateVerified || null,
+          verificationUpdate: rec.verificationUpdate,
           airSystemType: rec.airSystemType || undefined,
           reelSerialNumber: rec.reelSerialNumber || undefined,
           standSerialNumber: rec.standSerialNumber || undefined,
@@ -3902,6 +4224,11 @@ export function TicketWizard() {
           }
         }
       }
+
+      if (serviceType === 'inspection' && status === 'supervisor_review') await saveFieldInspectionSubmission(editTicketId, now)
+
+      // Saved gas drafts and corrections need the same service ledger as new submissions.
+      if (serviceType === 'gas_detection' || d3HasGas) await saveGasDetectionEdits(editTicketId, now)
 
       // 6. Diff IH test records: create / update / delete
       if (workType === 'ih_testing' || d3HasIh) {
@@ -3963,7 +4290,7 @@ export function TicketWizard() {
           cardNumber: rec.cardNumber || undefined,
           cardExpiryDate: rec.cardExpiryDate || undefined,
           notes: rec.notes || undefined,
-          trainedAt: rec.trainedAt || now,
+          trainedAt: serviceDate ? `${serviceDate}T00:00:00.000Z` : rec.trainedAt || now,
         })
 
         for (const rec of trainingRosterRecords) {
@@ -3988,7 +4315,7 @@ export function TicketWizard() {
             await db.trainingRosterRecords.delete(oldId)
             await db.mutationQueue.add({
               table: 'trainingRosterRecords' as const, action: 'delete' as const, entityId: oldId,
-              payload: {}, createdAt: now, status: 'pending' as const, retryCount: 0,
+              payload: { ticketId: editTicketId }, createdAt: now, status: 'pending' as const, retryCount: 0,
             })
           }
         }
@@ -4030,6 +4357,9 @@ export function TicketWizard() {
         })
       }
 
+      }
+      if (workType === 'training' || serviceType === 'inspection') await persistTicketBatch(editTicketId, status === 'supervisor_review', now, persist)
+      else await persist()
       await clearDraft()
       navigate(`/tickets/${editTicketId}`)
     } catch (err: unknown) {
@@ -4091,7 +4421,7 @@ export function TicketWizard() {
       const server: any[] = Array.isArray(t?.trainingRosterRecords) ? t.trainingRosterRecords : []
       const have = new Set(trainingRosterRecords.map(r => r.id))
       const mapped: TrainingRosterDraftRecord[] = server
-        .filter(r => r?.id && !have.has(r.id))
+        .filter(r => r?.id && !have.has(r.id) && !originalTrainingRosterIds.has(r.id))
         .map(r => ({
           id: r.id,
           ticketId: editTicketId,
@@ -4111,9 +4441,11 @@ export function TicketWizard() {
           trainedAt: r.trainedAt || new Date().toISOString(),
         }))
       if (mapped.length > 0) {
-        setTrainingRosterRecords(prev => [...prev, ...mapped])
-        setOriginalTrainingRosterIds(prev => new Set([...prev, ...mapped.map(m => m.id)]))
+        setTrainingRosterRecords(prev => [...prev, ...mapped.filter(row => !prev.some(current => current.id === row.id))])
       }
+      // Rows restored from a wizard draft may already be visible but still
+      // need their server identity so edits update instead of recreating them.
+      setOriginalTrainingRosterIds(prev => new Set([...prev, ...server.filter(r => r?.id).map(r => r.id)]))
       setSigninNewCount(mapped.length)
     } catch {
       setSigninError('Could not refresh sign-ins — check your connection.')
@@ -4132,7 +4464,7 @@ export function TicketWizard() {
       // ADR-0013: the work type came from /tickets/start, so backing out of
       // the first step goes back THERE to re-pick it. This wizard no longer
       // owns a work-type screen of its own.
-      navigate('/tickets/start')
+      navigate(dispatchMode ? '/tickets/start?dispatch=1' : '/tickets/start')
     } else {
       setStep(step - 1)
     }
@@ -4152,7 +4484,7 @@ export function TicketWizard() {
         </button>
         <div className="flex-1">
           <h1 className="text-xl font-bold text-slate-900">
-            {`${isEditMode ? 'Edit' : 'New'} ${activeConfig?.label || 'Ticket'}`}
+            {`${dispatchMode ? 'Dispatch' : isEditMode ? 'Edit' : 'New'} ${activeConfig?.label || 'Ticket'}`}
           </h1>
           {step > 0 && totalSteps > 0 && (
             <p className="text-sm text-slate-500">Step {step} of {totalSteps}</p>
@@ -4193,8 +4525,8 @@ export function TicketWizard() {
       {currentStepId === 'd3_services' && (
         <div className="space-y-6">
           <div>
-            <h2 className="text-lg font-semibold text-slate-900">D3 work performed</h2>
-            <p className="text-sm text-slate-500 mt-1">Pick every service handled on this visit. Air System New Install stays as its own Air System ticket.</p>
+            <h2 className="text-lg font-semibold text-slate-900">{dispatchMode ? 'D3 work to dispatch' : 'D3 work performed'}</h2>
+            <p className="text-sm text-slate-500 mt-1">{dispatchMode ? 'Pick every service planned for this visit.' : 'Pick every service handled on this visit.'} Air System New Install stays as its own Air System ticket.</p>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
@@ -4389,7 +4721,8 @@ export function TicketWizard() {
             allActive
           />
 
-          {showsSiteSignEvidence && (
+          {dispatchMode && requiresSiteSignEvidence && <p className="rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">The assigned technician must capture a GPS-tagged site-sign photo before submitting this visit.</p>}
+          {!dispatchMode && showsSiteSignEvidence && (
             <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 space-y-3">
               <div>
                 <h3 className="font-medium text-amber-950">
@@ -4417,15 +4750,23 @@ export function TicketWizard() {
                 checked={rigPresent}
                 onChange={e => {
                   setRigPresent(e.target.checked)
-                  if (!e.target.checked) setPresentRig(null)
+                  if (!e.target.checked) setRigNumber('')
                 }}
                 className="rounded"
               />
-              Rig present
+              Include Rig Number?
             </label>
             {rigPresent && (
               <div className="mt-2">
-                <MobileAssetPicker kind="rig" value={presentRig} onChange={setPresentRig} />
+                <input
+                  type="text"
+                  value={rigNumber}
+                  maxLength={40}
+                  onChange={e => setRigNumber(e.target.value)}
+                  placeholder="Rig number"
+                  aria-label="Rig number"
+                  className="w-full sm:max-w-xs px-3 py-2.5 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                />
               </div>
             )}
           </div>
@@ -4484,7 +4825,7 @@ export function TicketWizard() {
 
           {serviceType === 'on_site_services' && (
             <div>
-              {(!serviceFromPath || showServicePickers) && (
+              {(!serviceFromPath || showServicePickers || !onSiteSubtype) && (
                 <>
                   <label className="block text-sm font-medium text-slate-700 mb-2">
                     On-site work <span className="text-red-500">*</span>
@@ -4508,17 +4849,16 @@ export function TicketWizard() {
                   </div>
                 </>
               )}
-              {/* Hoisted rental picker for Manned Trailer — this is THE most
-                  important field on the page when manned_trailer is selected. */}
+              {/* Keep rental daily-log linking near the Manned Trailer selection. */}
               {onSiteSubtype === 'manned_trailer' && (
                 <div className={cn(
                   'mt-3 p-3 rounded-lg border-2',
                   linkedRentalId
                     ? 'border-emerald-200 bg-emerald-50/50'
-                    : 'border-amber-300 bg-amber-50',
+                    : 'border-slate-200 bg-slate-50',
                 )}>
                   <label className="block text-sm font-semibold text-slate-800 mb-1.5">
-                    Link to Rental {linkedRentalId ? '✓' : <span className="text-red-600">*</span>}
+                    Link to Rental {linkedRentalId ? '✓' : <span className="text-slate-500">(optional)</span>}
                   </label>
                   {activeRentals.length > 0 ? (
                     <select
@@ -4530,7 +4870,7 @@ export function TicketWizard() {
                       }}
                       className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white"
                     >
-                      <option value="">- pick a rental job -</option>
+                      <option value="">No rental agreement — bill separately</option>
                       {activeRentals.map(r => (
                         <option key={r.id} value={r.id}>
                           {rentalJobOptionLabel(r)}
@@ -4543,10 +4883,9 @@ export function TicketWizard() {
                     </p>
                   )}
                   {!linkedRentalId && (
-                    <p className="mt-2 text-xs text-amber-700">
-                      Manned Trailer tickets <strong>should</strong> link to a rental contract so the
-                      shift writes into the rental's daily log. You can submit anyway and a field sup
-                      can retro-link during approval.
+                    <p className="mt-2 text-xs text-slate-600">
+                      Continue without a rental agreement to bill this ticket separately.
+                      Link an agreement when this shift belongs in a rental's daily log.
                     </p>
                   )}
                   {linkedRentalId && (
@@ -4746,7 +5085,7 @@ export function TicketWizard() {
               className="w-4 h-4 accent-blue-600"
             />
             <span className="text-sm font-medium text-slate-700">Emergency Call-out</span>
-            <span className="text-xs text-slate-500">adds $150 call-out fee to invoice</span>
+            <span className="text-xs text-slate-500">{dispatchMode ? 'set the fee on the assignment step' : 'call-out fee is included in billing; review its charge line'}</span>
           </label>
 
           <div>
@@ -4770,9 +5109,9 @@ export function TicketWizard() {
             />
           </div>
 
-          {/* Linked rental dropdown — only shows when customer has active rentals,
-              and skipped here when Manned Trailer hoisted its own picker above. */}
-          {activeRentals.length > 0 && !(serviceType === 'on_site_services' && onSiteSubtype === 'manned_trailer') && (
+          {/* D4 services can bill separately even with no active rentals.
+              Manned Trailer has its own picker above. */}
+          {(activeRentals.length > 0 || (division === 'D4' && workType === 'field_service' && (serviceType === 'on_site_services' || serviceType === 'general'))) && !(serviceType === 'on_site_services' && onSiteSubtype === 'manned_trailer') && (
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">
                 Link to Rental <span className="text-slate-400">(optional — for cal visits, service calls)</span>
@@ -4786,7 +5125,7 @@ export function TicketWizard() {
                 }}
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white"
               >
-                <option value="">None</option>
+                <option value="">No rental agreement — bill separately</option>
                 {activeRentals.map(r => (
                   <option key={r.id} value={r.id}>
                     {rentalJobOptionLabel(r)}
@@ -4796,6 +5135,11 @@ export function TicketWizard() {
               {linkedRentalId && (
                 <p className="text-xs text-blue-600 mt-1">
                   Charges from this ticket will be pulled into the rental's next invoice.
+                </p>
+              )}
+              {!linkedRentalId && division === 'D4' && (
+                <p className="text-xs text-slate-600 mt-1">
+                  Continue without a rental agreement to bill this ticket separately.
                 </p>
               )}
             </div>
@@ -4815,7 +5159,10 @@ export function TicketWizard() {
             <AirSystemInspectionEditor records={airSystemRecords} onChange={setAirSystemRecords} wellIds={location.wells.map(w => w.id)} padId={location.pad?.id} />
           )}
           {serviceType === 'inspection' && (
-            <FieldInspectionCapture records={inspectionRecords} onChange={setInspectionRecords} ticketId={offlineId} />
+            <FieldInspectionCapture records={inspectionRecords} submittedIds={fieldInspectionSubmittedIds} onChange={records => {
+              setInspectionRecords(records)
+              setLineItems(lines => fieldInspectionBillingLines(lines, records))
+            }} ticketId={offlineId} />
           )}
           {(serviceType === 'cascade_air' || d3HasAir) && cascadeAirSubtypes.has('air_fill') && (
             <div className="bg-white rounded-lg border border-slate-200 p-4 space-y-3">
@@ -5348,14 +5695,13 @@ export function TicketWizard() {
           ) : (
             <>
               {(serviceType === 'cascade_air' || d3HasAir) && (
-                // The inspection editor records what was FOUND; it says nothing
-                // about hours driven or miles run, and the inspection itself is
-                // usually its own charge. This editor used to be hidden on a
-                // pure inspection, which left the seeded labor + mileage stuck
-                // at qty 1 with no way to correct them.
+                // Inspection findings and charges are separate: the default
+                // inspection fee stays editable, with extra charges available.
                 <h3 className="text-sm font-semibold text-slate-700">Charges <span className="text-slate-400 font-normal">(inspection, labor, mileage, parts, fill fee)</span></h3>
               )}
-              <LineItemEditor items={lineItems} onChange={setLineItems} serviceType={serviceType} division={pickerDivision} priceLevels={priceLevels} />
+              <LineItemEditor items={serviceType === 'inspection' ? lineItems.filter(line => !line.fieldInspectionId) : lineItems}
+                onChange={lines => setLineItems(serviceType === 'inspection' ? fieldInspectionBillingLines(lines, inspectionRecords) : lines)}
+                serviceType={serviceType} division={pickerDivision} priceLevels={priceLevels} />
             </>
           )}
         </div>
@@ -5376,7 +5722,9 @@ export function TicketWizard() {
               <p><span className="text-slate-500">Location:</span> <span className="font-medium">
                 {[location.pad?.name, wellsDisplayLabel()].filter(Boolean).join(' > ')}
               </span></p>
-              <p><span className="text-slate-500">Service:</span> <span className="font-medium">{serviceType.replace('_', ' ')}</span></p>
+              <p><span className="text-slate-500">Service:</span> <span className="font-medium">{workType === 'd3_combined'
+                ? d3CombinedServicesArr.map(s => ({ air: 'Air System', ih: 'IH Testing', gas: 'Gas Detection' })[s]).join(' + ')
+                : serviceType.replace('_', ' ')}</span></p>
               <p><span className="text-slate-500">Date:</span> <span className="font-medium">{serviceDate}</span></p>
               <p><span className="text-slate-500">Items:</span> <span className="font-medium">
                 {serviceType === 'cascade_air' && cascadeAirSubtypes.size > 0
@@ -5862,7 +6210,7 @@ export function TicketWizard() {
                       const reader = new FileReader()
                       reader.onload = () => {
                         setOccDailyCalFiles(prev => [...prev, {
-                          id: `cal_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+                          id: uuidv4(),
                           fileName: file.name,
                           mimeType: file.type || 'application/octet-stream',
                           dataUrl: String(reader.result),
@@ -5927,7 +6275,8 @@ export function TicketWizard() {
             allActive
           />
 
-          {showsSiteSignEvidence && (
+          {dispatchMode && requiresSiteSignEvidence && <p className="rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">The assigned technician must capture a GPS-tagged site-sign photo before submitting this visit.</p>}
+          {!dispatchMode && showsSiteSignEvidence && (
             <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 space-y-3">
               <div>
                 <h3 className="font-medium text-amber-950">
@@ -6018,7 +6367,7 @@ export function TicketWizard() {
             />
             <div>
               <p className="font-medium text-sm text-amber-900">Call-Out</p>
-              <p className="text-xs text-amber-700">Emergency / not on regular route — adds $150 call-out fee to billing</p>
+              <p className="text-xs text-amber-700">Emergency / not on regular route — call-out fee is included in billing; review its charge line</p>
             </div>
           </label>
         </div>
@@ -6429,6 +6778,14 @@ export function TicketWizard() {
             </p>
           </div>
 
+          <div>
+            <TimestampField label="Deployment date and time *" value={deploymentAt} onChange={setDeploymentAt} />
+            <p className="text-xs text-slate-500 mt-2">
+              Defaults to now. Edit to record when the equipment was deployed, even if you enter it later.
+              {' '}Times are shown in your device’s timezone ({Intl.DateTimeFormat().resolvedOptions().timeZone}).
+            </p>
+          </div>
+
           {/* ADR-0017: division came from the path — Dickinson on/off only. */}
           {division && (
             <DivisionSelector
@@ -6453,7 +6810,7 @@ export function TicketWizard() {
               </div>
             ) : (
               <div className="space-y-2">
-                {startJobCandidates.map(r => {
+                {startJobCandidates.filter(r => !searchParams.get('deployTicket') || r.id === searchParams.get('rentalId')).map(r => {
                   const selected = selectedStartJobRentalId === r.id
                   return (
                     <button
@@ -6509,7 +6866,7 @@ export function TicketWizard() {
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold text-slate-900">Equipment</h2>
-            <span className="text-sm text-slate-500">{rentalItems.length} item{rentalItems.length !== 1 ? 's' : ''}</span>
+            <span className="text-sm text-slate-500">{rentalLines.length} item{rentalLines.length !== 1 ? 's' : ''}</span>
           </div>
 
           {/* #19 Equipment already on the job (active rentals) */}
@@ -6531,7 +6888,7 @@ export function TicketWizard() {
               {deployComposition.trailer && (
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-slate-700">Trailer ({deployComposition.trailer.manned ? 'Manned' : 'Unmanned'})</span>
-                  <span className="text-xs text-slate-400">scan the trailer</span>
+                  <span className="text-xs text-slate-400">enter trailer details</span>
                 </div>
               )}
               {deployMonitorLines.map(l => (
@@ -6541,14 +6898,14 @@ export function TicketWizard() {
                     'text-xs font-medium px-2 py-0.5 rounded-full',
                     l.met ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700',
                   )}>
-                    {l.scanned} / {l.qty} scanned{l.scanned > l.qty ? ' (extra)' : ''}
+                    {l.entered} / {l.qty} entered{l.entered > l.qty ? ' (extra)' : ''}
                   </span>
                 </div>
               ))}
               {(deployComposition.other || []).map(o => (
                 <div key={o.id} className="flex items-center justify-between text-sm">
                   <span className="text-slate-700">{o.qty > 1 ? `${o.qty}× ` : ''}{o.label}</span>
-                  <span className="text-xs text-slate-400">scan if serialized</span>
+                  <span className="text-xs text-slate-400">enter equipment details</span>
                 </div>
               ))}
               {!deployMonitorsMet && (
@@ -6558,7 +6915,7 @@ export function TicketWizard() {
           )}
 
           {/* Package baseline — what this customer's package covers, counted
-              against what's actually been scanned. The tech's job here is to
+              against what's actually been entered. The tech's job here is to
               see at a glance that the load is right; anything over the baseline
               is called out as billable so nobody is surprised on the invoice. */}
           {deployDiffRows.length > 0 && (
@@ -6618,193 +6975,26 @@ export function TicketWizard() {
             </div>
           )}
 
-          {/* Equipment list */}
-          {rentalItems.length > 0 && (
-            <div className="space-y-2">
-              {rentalItems.map((item, idx) => (
-                <div key={item.id} className="bg-white rounded-lg border border-slate-200 p-4">
-                  <div className="flex items-start gap-3">
-                    <span className="text-sm font-mono text-slate-400 mt-0.5">{idx + 1}.</span>
-                    <div className="flex-1 min-w-0">
-                      <p className="font-medium text-sm text-slate-900 flex items-center gap-2">
-                        {item.productName || 'Unknown Product'}
-                        {item.deployInspection && !item.deployInspection.coveredBy && (
-                          <span className={cn(
-                            'text-[10px] font-semibold px-1.5 py-0.5 rounded-full',
-                            item.deployInspection.flagged ? 'bg-amber-100 text-amber-800' : 'bg-green-100 text-green-700',
-                          )}>
-                            {item.deployInspection.flagged ? 'INSPECTED — FLAGGED' : 'INSPECTED'}
-                          </span>
-                        )}
-                      </p>
-                      <p className="text-xs text-slate-500 font-mono">{item.serialNumber}</p>
-                      {item.deployInspection?.flagged && item.deployInspection.notes && (
-                        <p className="text-xs text-amber-700 mt-0.5">{item.deployInspection.notes}</p>
-                      )}
-                      {deployPriced ? (
-                        <p className="text-xs text-slate-400 mt-2 italic">Billed via the dispatch order — tracked for return only</p>
-                      ) : (
-                        <div className="flex items-center gap-2 mt-2">
-                          <DollarSign className="w-3 h-3 text-slate-400" />
-                          <input
-                            type="number"
-                            value={item.rate ?? ''}
-                            onChange={e => {
-                              const val = e.target.value ? parseFloat(e.target.value) : null
-                              setRentalItems(prev => prev.map((it, i) => i === idx ? { ...it, rate: val } : it))
-                            }}
-                            placeholder="Rate"
-                            className="w-24 px-2 py-1 border border-slate-200 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
-                          />
-                          <span className="text-xs text-slate-500">/ {item.rateType || rentalBillingRateType}</span>
-                        </div>
-                      )}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setRentalItems(prev => prev.filter((_, i) => i !== idx))}
-                      className="p-1 text-slate-400 hover:text-red-500"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-              ))}
+          <p className="text-sm text-slate-500">Enter the equipment going out. Test date uses MM/DD/YYYY and also accepts text.</p>
+          {rentalLines.map((item, index) => <div key={item.id} className="bg-white border rounded-lg p-4 space-y-3">
+            <div className="flex justify-between"><span className="text-sm font-medium">Equipment {index + 1}</span>
+              <button type="button" aria-label="Remove equipment" onClick={() => setRentalItems(prev => removeRentalDeployment(prev, item.id))}><X className="w-4 h-4" /></button>
             </div>
-          )}
-
-          {/* Add equipment buttons */}
-          <div className="flex gap-3">
-            <button
-              type="button"
-              onClick={() => setShowEquipmentScanner(true)}
-              className="flex-1 flex items-center justify-center gap-2 py-3 border-2 border-dashed border-slate-300 rounded-lg text-sm font-medium text-slate-600 hover:border-blue-400 hover:text-blue-600 transition-colors"
-            >
-              <Package className="w-5 h-5" />
-              Add Equipment
-            </button>
-          </div>
-
-          {rentalItems.length === 0 && (
-            <p className="text-sm text-slate-400 text-center py-4">
-              Scan or search for equipment to add to this rental agreement.
-            </p>
-          )}
-
-          {/* Equipment Scanner Modal — allowCreate: a serial not on file can be
-              added on the fly (#21); it lands flagged for office review. */}
-          {showEquipmentScanner && (
-            <EquipmentScanner
-              filterStatus="available"
-              allowCreate
-              onEquipmentFound={async (equip: ScannedEquipment) => {
-                // Get the default rate for this product based on billing rate type
-                const getRate = (prod: { defaultRentalRateDaily?: number | null; defaultRentalRateWeekly?: number | null; defaultRentalRateMonthly?: number | null }) => {
-                  if (rentalBillingRateType === 'daily') return prod.defaultRentalRateDaily ?? null
-                  if (rentalBillingRateType === 'weekly') return prod.defaultRentalRateWeekly ?? null
-                  if (rentalBillingRateType === 'monthly') return prod.defaultRentalRateMonthly ?? null
-                  return null
-                }
-
-                // Check for duplicates
-                if (rentalItems.some(item => item.serializedEquipmentId === equip.id)) {
-                  setShowEquipmentScanner(false)
-                  return
-                }
-
-                const newItems: OfflineRentalAgreementItem[] = []
-
-                // Add the scanned equipment itself
-                newItems.push({
-                  id: uuidv4(),
-                  rentalAgreementId: '',
-                  productId: equip.productId,
-                  productName: equip.product.name,
-                  serializedEquipmentId: equip.id,
-                  serialNumber: equip.serialNumber,
-                  rate: getRate(equip.product),
-                  rateType: rentalBillingRateType,
-                  deployedDate: serviceDate,
-                  returnedDate: null,
-                  status: 'deployed',
-                })
-
-                // Auto-expand assemblies: fetch children from API and add them
-                if (equip.product.isAssembly) {
-                  try {
-                    const childRes = await api.get<{ data: Array<{
-                      id: string; serialNumber: string; productId: string; status: string;
-                      product: { id: string; partNumber: string; name: string; category: string }
-                    }> }>(`/equipment/${equip.id}/children`)
-                    for (const child of childRes.data) {
-                      if (child.status !== 'available') continue
-                      if (rentalItems.some(item => item.serializedEquipmentId === child.id)) continue
-                      // Look up child product rates from Dexie
-                      const childProd = await db.products.get(child.productId)
-                      newItems.push({
-                        id: uuidv4(),
-                        rentalAgreementId: '',
-                        productId: child.productId,
-                        productName: child.product.name,
-                        serializedEquipmentId: child.id,
-                        serialNumber: child.serialNumber,
-                        rate: childProd ? getRate(childProd) : null,
-                        rateType: rentalBillingRateType,
-                        deployedDate: serviceDate,
-                        returnedDate: null,
-                        status: 'deployed',
-                      })
-                    }
-                  } catch {
-                    // Children fetch failed — just add the parent
-                  }
-                }
-
-                // #20 QA gate: the scanned unit waits for its required
-                // inspection before it lands on the job. Children of an
-                // assembly are covered by the parent's inspection.
-                setShowEquipmentScanner(false)
-                setPendingDeploy({
-                  items: newItems,
-                  category: resolveDeployCategory(equip.product),
-                  name: equip.product.name,
-                  serial: equip.serialNumber,
-                })
-              }}
-              onClose={() => setShowEquipmentScanner(false)}
-            />
-          )}
-
-          {/* #20 Required deploy inspection — flagged answers need a note but don't block */}
-          {pendingDeploy && (
-            <DeployInspectionModal
-              equipmentName={pendingDeploy.name}
-              serialNumber={pendingDeploy.serial}
-              category={pendingDeploy.category}
-              inspectedBy={user?.name || null}
-              onComplete={result => {
-                const [parent, ...children] = pendingDeploy.items
-                const stamped: OfflineRentalAgreementItem[] = [
-                  { ...parent, deployInspection: result },
-                  ...children.map(c => ({
-                    ...c,
-                    deployInspection: {
-                      category: 'general' as const,
-                      answers: {},
-                      flagged: false,
-                      notes: '',
-                      inspectedAt: result.inspectedAt,
-                      inspectedBy: result.inspectedBy,
-                      coveredBy: parent.id,
-                    },
-                  })),
-                ]
-                setRentalItems(prev => [...prev, ...stamped])
-                setPendingDeploy(null)
-              }}
-              onCancel={() => setPendingDeploy(null)}
-            />
-          )}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {(['serialNumber', 'productName', 'testDate'] as const).map(field => <label key={field} className="text-sm font-medium text-slate-700">
+                {field === 'serialNumber' ? 'Serial *' : field === 'productName' ? 'Type *' : 'Test date *'}
+                <input type="text" value={item[field] || ''} placeholder={field === 'testDate' ? 'MM/DD/YYYY' : ''}
+                  onBlur={e => { if (field === 'testDate') setRentalItems(prev => prev.map(row => row.id === item.id ? { ...row, testDate: formatEquipmentTestDate(e.target.value) } : row)) }}
+                  onChange={e => setRentalItems(prev => prev.map(row => row.id === item.id ? { ...row, manualEntry: true, [field]: e.target.value } : row))}
+                  className="block w-full mt-1 p-2 border rounded-lg" />
+              </label>)}
+            </div>
+          </div>)}
+          <button type="button" onClick={() => setRentalItems(prev => [...prev, {
+            id: uuidv4(), rentalAgreementId: selectedStartJobRentalId || '', productId: '', productName: '',
+            serializedEquipmentId: '', serialNumber: '', testDate: '', manualEntry: true, rate: 0,
+            rateType: rentalBillingRateType, deployedDate: '', returnedDate: null, status: 'deployed',
+          }])} className="w-full py-3 border-2 border-dashed rounded-lg text-sm font-medium">Add equipment</button>
         </div>
       )}
 
@@ -6923,6 +7113,13 @@ export function TicketWizard() {
       {/* ============================================================ */}
       {/* RENTAL: Review                                               */}
       {/* ============================================================ */}
+      {currentStepId === 'rn_billing' && (
+        <div className="space-y-4">
+          <h2 className="text-lg font-semibold">Billing — Labor &amp; Mileage</h2>
+          <p className="text-sm text-slate-600">Enter deployment hours and miles. Charges bill with this job in the rental sweep.</p>
+          {rentalBillingReady ? <LineItemEditor items={lineItems} onChange={setLineItems} serviceType="general" division={4} priceLevels={priceLevels} /> : <p className="text-sm text-slate-500">Loading billing defaults…</p>}
+        </div>
+      )}
       {currentStepId === 'rn_review' && (
         <div className="space-y-6">
           {/* Summary */}
@@ -6938,7 +7135,7 @@ export function TicketWizard() {
                   {[location.pad?.name, wellsDisplayLabel()].filter(Boolean).join(' > ')}
                 </span></p>
               )}
-              <p><span className="text-slate-500">Start Date:</span> <span className="font-medium">{serviceDate}</span></p>
+              <p><span className="text-slate-500">Deployment:</span> <span className="font-medium">{deploymentAt ? new Date(deploymentAt).toLocaleString() : 'Date and time required'}</span></p>
               <p><span className="text-slate-500">Billing:</span> <span className="font-medium capitalize">{rentalBillingRateType}</span></p>
               <p>
                 <span className="text-slate-500">Type:</span>{' '}
@@ -6948,7 +7145,7 @@ export function TicketWizard() {
                 {rentalIsRigJob && <span className="ml-2 text-xs px-1.5 py-0.5 bg-emerald-100 text-emerald-700 rounded-full font-medium">Rig Job</span>}
                 {rentalMonitorsIncluded && <span className="ml-2 text-xs px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded-full font-medium">Monitors</span>}
               </p>
-              <p><span className="text-slate-500">Equipment:</span> <span className="font-medium">{rentalItems.length} item{rentalItems.length !== 1 ? 's' : ''}</span></p>
+              <p><span className="text-slate-500">Equipment:</span> <span className="font-medium">{rentalLines.length} item{rentalLines.length !== 1 ? 's' : ''}</span></p>
               {poNumber && <p><span className="text-slate-500">PO:</span> <span className="font-medium">{poNumber}</span></p>}
               {rentalAfeNumber && <p><span className="text-slate-500">AFE:</span> <span className="font-medium">{rentalAfeNumber}</span></p>}
               {rentalLiabilityAcknowledged && (
@@ -6972,11 +7169,11 @@ export function TicketWizard() {
           <div className="bg-white rounded-lg border border-slate-200 p-4">
             <h3 className="font-medium text-slate-900 mb-2">Equipment</h3>
             <div className="space-y-1">
-              {rentalItems.map((item, i) => (
+              {rentalLines.map((item, i) => (
                 <div key={item.id} className="flex items-center gap-2 text-sm py-1">
                   <span className="text-slate-400 font-mono w-5">{i + 1}.</span>
-                  <span className="flex-1">{item.productName} <span className="text-slate-400 font-mono text-xs">({item.serialNumber})</span></span>
-                  {item.rate != null && (
+                  <span className="flex-1">{item.productName} <span className="text-slate-400 font-mono text-xs">({item.serialNumber})</span>{item.testDate && <span className="block text-xs text-slate-500">Test date: {item.testDate}</span>}</span>
+                  {!item.manualEntry && item.rate != null && (
                     <span className="text-slate-500">${item.rate}/{item.rateType?.charAt(0) || rentalBillingRateType.charAt(0)}</span>
                   )}
                 </div>
@@ -6994,6 +7191,38 @@ export function TicketWizard() {
         </div>
       )}
 
+      {currentStepId === 'dispatch_review' && <div className="space-y-5">
+        <h2 className="text-lg font-semibold">Assignment &amp; prefilled charges</h2>
+        <p className="text-sm text-slate-600">{customer?.name} · {activeConfig?.label}. The tech will enter on-site work, results, inspections, and completion times.</p>
+        <label className="block text-sm font-medium">Assigned user
+          <TechCombobox techs={dispatchTechs} value={dispatchTechId} onChange={setDispatchTechId} />
+        </label>
+        {dispatchUsersError && <p role="alert" className="text-red-700">{dispatchUsersError}</p>}
+        <label className="block text-sm font-medium">RingCentral field dispatch
+          <select value={dispatchNotificationDivision || (division === 'D3' ? 'D3' : 'D4')} onChange={e => setDispatchNotificationDivision(e.target.value as 'D3' | 'D4')} className="block w-full mt-1 rounded-lg border p-2">
+            <option value="D3">D3</option><option value="D4">D4</option>
+          </select>
+        </label>
+        <DivisionSelector division={division} isDickinson={isDickinson} onChange={(d, dickinson) => { setDivision(d); setIsDickinson(dickinson) }} fixedDivision={division ?? undefined} />
+        <label className="block text-sm font-medium">Service date<input type="date" value={serviceDate} onChange={e => setServiceDate(e.target.value)} className="block w-full mt-1 rounded-lg border p-2" /></label>
+        {workType === 'air_fill' && <>
+          <label className="block text-sm font-medium">Truck / unit<input value={airFillLocationText} onChange={e => setAirFillLocationText(e.target.value)} className="block w-full mt-1 rounded-lg border p-2" /></label>
+          <label className="block text-sm font-medium">Driver name<input value={driverName} onChange={e => setDriverName(e.target.value)} className="block w-full mt-1 rounded-lg border p-2" /></label>
+        </>}
+        <label className="flex gap-2 text-sm"><input type="checkbox" checked={isCallOut} onChange={e => setIsCallOut(e.target.checked)} />Emergency callout fee</label>
+        {isCallOut && !lineItems.some(line => line.partNumber === '148') && <label className="block text-sm font-medium">Callout fee ($)<input type="number" min="0" step="0.01" value={dispatchCalloutFee} onChange={e => setDispatchCalloutFee(e.target.value)} className="block w-full mt-1 rounded-lg border p-2" /></label>}
+        <label className="block text-sm font-medium">Dispatch instructions<textarea rows={3} value={dispatchNotes} onChange={e => setDispatchNotes(e.target.value)} className="block w-full mt-1 rounded-lg border p-2" /></label>
+        {!!activeRentals.length && <label className="block text-sm font-medium">Attach to rental agreement (optional)
+          <select value={linkedRentalId || ''} onChange={e => {
+            const rental = activeRentals.find(row => row.id === e.target.value)
+            if (rental) void applyRentalJobToWizard(rental, 'link')
+            else setLinkedRentalId(null)
+          }} className="block w-full mt-1 rounded-lg border p-2"><option value="">No rental agreement</option>{activeRentals.map(rental => <option key={rental.id} value={rental.id}>{rentalJobOptionLabel(rental)}</option>)}</select>
+        </label>}
+        {linkedRentalId && <p className="text-sm text-blue-700">Attached to rental agreement. Charges bill with this rental.</p>}
+        <LineItemEditor items={lineItems} onChange={setLineItems} serviceType={serviceType} division={pickerDivision} priceLevels={priceLevels} setupOnly />
+      </div>}
+
       {/* ============================================================ */}
       {/* Navigation Footer                                            */}
       {/* ============================================================ */}
@@ -7003,7 +7232,7 @@ export function TicketWizard() {
               once a customer is chosen (server rejects customer-less creates).
               Excluded for the rental flow, which activates an agreement instead
               of creating a normal ticket. */}
-          {!isEditMode && step >= 1 && !!customer && workType !== 'rental' && (
+          {!dispatchMode && !isEditMode && step >= 1 && !!customer && workType !== 'rental' && (
             <button
               onClick={handleSaveDraft}
               disabled={saving}
@@ -7018,11 +7247,6 @@ export function TicketWizard() {
 
           {/* A greyed-out Next with no explanation is a dead end in the field —
               say what's missing. */}
-          {currentStepId === 'who_where' && !canAdvance() && (
-            <p className="self-center text-xs text-amber-700 text-right max-w-xs">
-              {whoWhereBlocker()}
-            </p>
-          )}
           {currentStepId === 'line_items' && !canAdvance() && (
             <p className="self-center text-xs text-amber-700 text-right max-w-xs">
               {workType === 'd3_combined' ? d3CombinedBlocker() : lineItemsBlocker()}
@@ -7048,6 +7272,9 @@ export function TicketWizard() {
               Next
               <ArrowRight className="w-4 h-4" />
             </button>
+          ) : dispatchMode ? (
+            <button type="button" onClick={() => void handleDispatchCallout()} disabled={saving || !canAdvance()}
+              className="px-6 py-3 rounded-lg bg-blue-700 text-white font-medium disabled:opacity-50">{saving ? 'Dispatching…' : 'Create & Dispatch'}</button>
           ) : isEditMode ? (
             <>
               <button
@@ -7072,7 +7299,7 @@ export function TicketWizard() {
           ) : workType === 'rental' ? (
             <button
               onClick={submitRentalAgreement}
-              disabled={saving}
+              disabled={saving || !deploymentAt}
               className="flex items-center gap-2 px-6 py-3 bg-green-700 text-white rounded-lg hover:bg-green-600 transition-colors font-medium disabled:opacity-50"
             >
               <Check className="w-5 h-5" />

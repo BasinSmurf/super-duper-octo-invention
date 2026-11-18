@@ -1,11 +1,29 @@
+import { jobAttachmentUnits, createJobAttachments, deleteStoredAttachment } from '../services/jobAttachments.js';
+import { mergeManualRentalEquipment } from '../services/manualRentalEquipment.js';
+import { saveManualRentalVisit } from '../services/manualRentalVisit.js';
+import { assertShopSerialsCollected } from '../services/shopSerials.js';
+import { appendRentalEventLog } from '../services/rentalEventLog.js';
+import { assertShopBinsAvailable } from '../services/shopBins.js';
+import { withRental, deployRentalItem, returnRentalItem, closeRental } from '../services/rentalLifecycle.js';
+import { ticketFields, validateTicketInput, editableTicket, assertTicketWriteAccess, assertDraftDeletion, assertOfflineStatus, mutateTicketLine } from '../services/ticketWritePolicy.js';
+import { prepareTicketCustomerChange } from '../services/ticketCustomerChange.js';
+import { isTrainingRosterReplay } from '../utils/trainingRosterReplay.js';
+import { allowedFields, objectBody, validateRentalInput, numberValue, validDate } from '../services/writeValidation.js';
+import { safeErrorMessage } from '../middleware/errorHandler.js';
 import { randomUUID } from 'crypto';
+import { createSyncTicket, resolveSyncTicketId } from '../services/syncTicketIdentity.js';
+import { assertSyncApprovalRole } from '../services/syncApproval.js';
+import { roleHasCapability } from '../services/permissions.js';
+import { applyWorkPointVerification, verificationUpdate as parseVerificationUpdate } from '../services/workPointVerification.js';
 import { basename } from 'node:path';
+import { v5 as uuidv5 } from 'uuid';
 import { Router, Request, Response } from 'express';
 import { Prisma } from '../db.js';
 import type { AttachmentKind, ShopItemStatus } from '../db.js';
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { enrichCustomData } from '../utils/notesExtraction.js';
+import { preserveTicketOrigin } from '../utils/ticketOrigin.js';
 import { computeBillingGroupKey } from '../utils/billingGroupKey.js';
 import { flatOverridesFromPayload } from '../services/billingRefs.js';
 import { selectBillingProfile } from '../services/billingProfileSelector.js';
@@ -14,14 +32,13 @@ import { shouldRecordOnly, recordTicketAsRentalLog } from '../services/rentalTic
 import { defaultDivisionForWork } from '../utils/qbClass.js';
 import { buildLocationDisplay } from '../utils/locationDisplay.js';
 import { runAndCacheReviewSignal } from '../services/ticketReviewRules.js';
-import { getFileStore, ticketKey } from '../services/fileStore.js';
+import { getFileStore } from '../services/fileStore.js';
 import {
   attachmentKey,
   ingestAttachmentBytes,
-  removeAttachmentBytes,
   ChecksumMismatchError,
 } from '../services/attachmentStore.js';
-import { createShopWorkOrderWithItems } from '../services/shopWoCreate.js';
+import { createShopWorkOrderWithItems, validateShopIntakeItems } from '../services/shopWoCreate.js';
 import { CREDIT_HOLD_MESSAGE, assertShopReturnAllowed } from '../utils/companyGuards.js';
 import { applyInspectionOutcome } from '../services/equipmentLifecycle.js';
 import { routeShopItemFromInspection } from '../services/inspectionRouting.js';
@@ -90,7 +107,7 @@ const WRITABLE_TABLES: ReadonlySet<string> = new Set([
 // DMR cleanup/consolidation). Distinct from WRITABLE_TABLES because pads are
 // still read-only reference data from the client's perspective; this only
 // controls whether we compute+send allIds so the client can prune orphans.
-const PRUNABLE_TABLES: ReadonlySet<string> = new Set([...WRITABLE_TABLES, 'pads', 'priceLevels']);
+const PRUNABLE_TABLES: ReadonlySet<string> = new Set([...WRITABLE_TABLES, 'pads', 'priceLevels', 'products']);
 
 type SyncTable = (typeof ALLOWED_TABLES)[number];
 
@@ -118,7 +135,7 @@ function buildQuery(table: SyncTable, since: Date | null, userId: string, role: 
           billingProfiles: {
             where: { isActive: true },
             select: {
-              id: true, requiresPo: true, requiresAfe: true,
+              id: true, requiresPo: true, requiresAfe: true, afeNumberSource: true,
               defaultPoNumber: true, defaultAfeNumber: true, defaultCostCenter: true,
               appliesToTicketTypes: true, appliesToDivisions: true,
               effectiveFrom: true, effectiveTo: true,
@@ -284,8 +301,10 @@ function buildQuery(table: SyncTable, since: Date | null, userId: string, role: 
         where,
         select: {
           id: true, ticketNumber: true, ticketType: true, serviceSubtype: true,
+          offlineId: true, offlineCreated: true,
           status: true, companyId: true, fieldId: true, padId: true,
           wellId: true, facilityId: true, workPointId: true, locationDisplay: true,
+          rejectionReason: true, createdById: true, createdBy: { select: { id: true, name: true } }, assignedTech: { select: { id: true, name: true } },
           assignedTechId: true, serviceDate: true, arrivalTime: true,
           departureTime: true, afeNumber: true, poNumber: true,
           costCenter: true, billingRefs: true,
@@ -314,7 +333,7 @@ function buildQuery(table: SyncTable, since: Date | null, userId: string, role: 
           liabilityAcknowledged: true, liabilitySignedByName: true,
           liabilitySignature: true, liabilitySignedAt: true,
           siteContactName: true, siteContactPhone: true, siteContactEmail: true,
-          pics: true, composition: true,
+          pics: true, composition: true, billingPolicy: true,
           createdAt: true, updatedAt: true,
           company: { select: { name: true } },
         },
@@ -332,6 +351,7 @@ function buildQuery(table: SyncTable, since: Date | null, userId: string, role: 
           id: true, rentalAgreementId: true, productId: true,
           serializedEquipmentId: true, rate: true, rateType: true,
           deployedDate: true, returnedDate: true, status: true,
+          deployInspection: true,
           product: { select: { name: true } },
           serializedEquipment: { select: { serialNumber: true } },
         },
@@ -510,6 +530,8 @@ function buildAllIds(table: SyncTable, userId: string, role: string): Promise<{ 
       return prisma.shopTransferEvent.findMany({ select: { id: true } });
     case 'pads':
       return prisma.pad.findMany({ select: { id: true } });
+    case 'products':
+      return prisma.product.findMany({ select: { id: true } });
     case 'priceLevels':
       // A level deleted in QB has to disappear from the device too — a stale
       // contract price cached forever is worse than no contract price.
@@ -599,6 +621,8 @@ interface MutationRequest {
   action: 'create' | 'update' | 'delete';
   entityId: string;
   offlineId?: string | null;
+  expectedStatus?: any;
+  expectedUpdatedAt?: Date;
   payload: Record<string, unknown>;
 }
 
@@ -614,6 +638,7 @@ syncRouter.post('/push', async (req: Request, res: Response, next) => {
       queueId: number;
       status: 'ok' | 'error';
       serverId?: string;
+      ticketId?: string;
       error?: string;
       warnings?: string[];
     }> = [];
@@ -621,6 +646,7 @@ syncRouter.post('/push', async (req: Request, res: Response, next) => {
     // Track offline ID → server ID remaps so child records (line items,
     // fit test records) can resolve foreign keys within a single push batch
     const idRemaps = new Map<string, string>();
+    const submittedHere = new Set<string>();
 
     // Track tickets that landed in supervisor_review during this batch.
     // The rules engine runs once per ticket AFTER the whole batch commits
@@ -680,11 +706,96 @@ syncRouter.post('/push', async (req: Request, res: Response, next) => {
       }
 
       try {
-        const result = await processMutation(mut, userId);
+        if (mut.table === 'tickets' && mut.action !== 'delete') {
+          assertSyncApprovalRole(req.user!.role, mut.payload);
+        }
+        // Persisted identity covers retries after the parent left this batch.
+        if (mut.table !== 'tickets' && typeof mut.payload.ticketId === 'string' && mut.payload.ticketId) {
+          mut.payload = { ...mut.payload, ticketId: await resolveSyncTicketId(prisma, mut.payload.ticketId) };
+        }
+        if (mut.table === 'tickets' && mut.action !== 'create') {
+          mut.entityId = await resolveSyncTicketId(prisma, mut.entityId);
+        }
+        objectBody(mut.payload);
+        if (!['create', 'update', 'delete'].includes(mut.action)) throw new AppError(400, 'Invalid mutation action');
+        const childModels: Record<string, string> = { ticketLineItems: 'ticketLineItem', ticketAttachments: 'ticketAttachment', fitTestRecords: 'fitTestRecord', airSystemRecords: 'airSystemInspection', ihTestRecords: 'ihTestRecord', gasDetectionRecords: 'gasDetectionRecord', trainingRosterRecords: 'trainingRosterRecord' };
+        if (mut.table === 'tickets') {
+          const { _offlineStatus, offlineCreated, offlineId, status, ...data } = mut.payload as any;
+          allowedFields(data, ticketFields);
+          if (mut.action !== 'delete') await validateTicketInput(mut.payload, mut.action === 'create');
+          if (mut.action === 'create') {
+            if (!['field_tech', 'dispatch', 'field_super', 'platform_admin', 'trainer', 'train_admin'].includes(req.user!.role)) throw new AppError(403, 'Ticket creation is not permitted');
+            if (data.assignedTechId && data.assignedTechId !== userId && !['dispatch', 'field_super', 'platform_admin'].includes(req.user!.role)) throw new AppError(403, 'Cannot assign work to another user');
+            assertOfflineStatus(null, status || 'draft', req.user!.role);
+          }
+          else {
+            const current = await editableTicket(mut.entityId, req.user!, status === 'supervisor_review');
+            if (mut.action !== 'delete') await validateTicketInput({ ...data, ticketType: data.ticketType ?? current.ticketType, serviceSubtype: data.serviceSubtype ?? current.serviceSubtype });
+            mut.expectedStatus = current.status;
+            mut.expectedUpdatedAt = current.updatedAt;
+            if (mut.action === 'delete') assertDraftDeletion(current);
+            assertOfflineStatus(current.status, status, req.user!.role);
+            if (mut.action === 'update') await prepareTicketCustomerChange(current, mut.payload);
+            if (data.assignedTechId && data.assignedTechId !== current.assignedTechId && !['dispatch', 'field_super', 'platform_admin'].includes(req.user!.role)) throw new AppError(403, 'Cannot reassign this ticket');
+          }
+        }
+        if (mut.table === 'rentalAgreements' && mut.action === 'create') validateRentalInput(mut.payload, true);
+        if (mut.table === 'rentalAgreements' && mut.payload.equipmentVisit) {
+          if (mut.action !== 'update' || !roleHasCapability(req.user!.role, 'tickets:create')) throw new AppError(403, 'Ticket creation is not permitted');
+        }
+        if (mut.table === 'fitTestRecords' && mut.action !== 'delete') {
+          if (mut.action === 'create' || mut.payload.employeeName !== undefined) {
+            if (typeof mut.payload.employeeName !== 'string' || !mut.payload.employeeName.trim()) throw new AppError(400, 'Employee name is required');
+          }
+          if (mut.payload.fitFactor != null) numberValue(mut.payload.fitFactor, 'fitFactor', 0, 1000000);
+          if (mut.payload.testDate != null) validDate(mut.payload.testDate, 'testDate');
+        }
+        const model = childModels[mut.table];
+        let parentId = mut.payload.ticketId as string | undefined;
+        if (model) {
+          // Older PhotoCapture clients restarted their counter on reload. Give
+          // colliding creates a stable ticket-scoped identity so a lost ack can
+          // be retried without moving or overwriting the other ticket's photo.
+          if (mut.table === 'ticketAttachments' && mut.action === 'create' && parentId && /^photo_\d+$/.test(mut.entityId)) {
+            const legacy = await prisma.ticketAttachment.findUnique({ where: { id: mut.entityId } });
+            if (legacy && legacy.ticketId !== parentId) {
+              mut.entityId = uuidv5(`ticketAttachment:${parentId}:${mut.entityId}`, uuidv5.URL);
+              mut.payload = { ...mut.payload, id: mut.entityId };
+            }
+          }
+          const existing = await (prisma as any)[model].findUnique({ where: { id: mut.entityId } });
+          // A successful roster removal may be replayed after the response was
+          // lost, including old outbox entries without a parent ID. There is
+          // nothing left to mutate; acknowledge the retry. Live rows still go
+          // through the ownership and ticket-lock checks below.
+          if (mut.table === 'trainingRosterRecords' && mut.action === 'delete' && !existing) {
+            results.push({ queueId: mut.queueId, status: 'ok', serverId: mut.entityId });
+            continue;
+          }
+          if (existing && parentId && parentId !== existing.ticketId) throw new AppError(409, 'Child record belongs to another ticket');
+          parentId = existing?.ticketId || parentId;
+          if (!parentId) throw new AppError(400, 'ticketId is required');
+          if (mut.table === 'trainingRosterRecords' && mut.action === 'update' && existing && isTrainingRosterReplay(existing, mut.payload)) {
+            assertTicketWriteAccess(await prisma.serviceTicket.findUnique({ where: { id: parentId } }), req.user!);
+            results.push({ queueId: mut.queueId, status: 'ok', serverId: mut.entityId, ticketId: parentId });
+            continue;
+          }
+          await editableTicket(parentId, req.user!, submittedHere.has(parentId) || mut.action === 'create');
+          if (mut.table === 'ticketLineItems' && mut.action !== 'delete') {
+            const { ticketId, _offlineStatus, ...line } = mut.payload as any;
+            mut.payload = { ...line, ticketId: parentId };
+          }
+        }
+        const { ticketId: _lineParent, _offlineStatus: _lineOffline, ...lineData } = mut.payload as any;
+        const result: MutationResult = mut.table === 'ticketLineItems'
+          ? await mutateTicketLine(parentId!, mut.action, mut.entityId, lineData, req.user!, submittedHere.has(parentId!) || mut.action === 'create')
+          : await processMutation(mut, userId, req.user!.role);
+        if (mut.table === 'tickets' && mut.payload.status === 'supervisor_review') submittedHere.add(result.id);
         results.push({
           queueId: mut.queueId,
           status: 'ok',
           serverId: result.id,
+          ...(mut.table !== 'tickets' && typeof mut.payload.ticketId === 'string' ? { ticketId: mut.payload.ticketId } : {}),
           ...(result.warnings?.length ? { warnings: result.warnings } : {}),
         });
         // Warnings ride the 'ok' result so the device still clears the queue,
@@ -731,7 +842,7 @@ syncRouter.post('/push', async (req: Request, res: Response, next) => {
         // "→ ERROR:" with nothing after it — a failing mutation retrying every
         // cycle, forever, with no way to tell what or why. Name the mutation
         // and fall back through the other fields the error actually carries.
-        const message = err instanceof Error ? err.message : String(err);
+        const message = safeErrorMessage(err);
         const detail = [
           e?.name,
           e?.code ? `code=${e.code}` : null,
@@ -797,12 +908,10 @@ syncRouter.post('/push', async (req: Request, res: Response, next) => {
  */
 type MutationResult = { id: string; warnings?: string[] };
 
-async function processMutation(mut: MutationRequest, userId: string): Promise<MutationResult> {
+async function processMutation(mut: MutationRequest, userId: string, role: string): Promise<MutationResult> {
   switch (mut.table) {
     case 'tickets':
       return processTicketMutation(mut, userId);
-    case 'ticketLineItems':
-      return processLineItemMutation(mut, userId);
     case 'ticketAttachments':
       return processAttachmentMutation(mut);
     // 'equipmentInspectionAttachments' is the pre-unification table name. A
@@ -815,7 +924,7 @@ async function processMutation(mut: MutationRequest, userId: string): Promise<Mu
     case 'fitTestRecords':
       return processFitTestMutation(mut, userId);
     case 'airSystemRecords':
-      return processAirSystemMutation(mut, userId);
+      return processAirSystemMutation(mut, userId, role);
     case 'ihTestRecords':
       return processIhTestMutation(mut, userId);
     case 'gasDetectionRecords':
@@ -858,6 +967,13 @@ async function maybeWriteRentalDailyLogFromTicket(ticket: {
   createdById: string | null;
 }): Promise<void> {
   const cd = ticket.customData as any;
+  if (['rental_deploy', 'rental_return', 'rental_swap'].includes(cd?.workType)) {
+    if (ticket.linkedRentalAgreementId) await prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM rental_agreements WHERE id = ${ticket.linkedRentalAgreementId} FOR UPDATE`;
+      await appendRentalEventLog(tx, ticket);
+    });
+    return;
+  }
   if (cd?.onSiteSubtype !== 'manned_trailer') return;
   if (!ticket.linkedRentalAgreementId) return;
 
@@ -1088,7 +1204,8 @@ async function maybeCreateWorkPointFromTicket(ticket: {
 
 async function processTicketMutation(mut: MutationRequest, userId: string): Promise<{ id: string }> {
   // Strip client-only fields
-  const { _offlineStatus, offlineCreated, offlineId, ...payload } = mut.payload as any;
+  const { _offlineStatus, offlineCreated, offlineId: payloadOfflineId, ...payload } = mut.payload as any;
+  const offlineId = payloadOfflineId || mut.offlineId || mut.entityId;
 
   switch (mut.action) {
     case 'create': {
@@ -1214,8 +1331,7 @@ async function processTicketMutation(mut: MutationRequest, userId: string): Prom
         serviceDate: resolvedServiceDate,
       });
 
-      const ticket = await prisma.serviceTicket.create({
-        data: {
+      const { ticket, created } = await createSyncTicket(prisma, {
           ...cleanPayload,
           offlineId: offlineId || undefined,
           ticketNumber,
@@ -1225,8 +1341,12 @@ async function processTicketMutation(mut: MutationRequest, userId: string): Prom
           departureTime: payload.departureTime ? new Date(payload.departureTime) : undefined,
           createdById: userId,
           status: payload.status || 'draft',
-        },
       });
+
+      if (!created) {
+        if (['rental_deploy', 'rental_return', 'rental_swap'].includes((ticket.customData as any)?.workType)) await maybeWriteRentalDailyLogFromTicket(ticket);
+        return { id: ticket.id };
+      }
 
       // Phase B Cascade Air > New Install: mint a WorkPoint at this location
       // so future inspections / cal visits can find this system in the picker.
@@ -1241,6 +1361,9 @@ async function processTicketMutation(mut: MutationRequest, userId: string): Prom
         );
         // Non-fatal — ticket still landed; ops can mint the workpoint manually.
       }
+
+      // Equipment visits must leave their job log even when a sync retry is needed.
+      if (['rental_deploy', 'rental_return', 'rental_swap'].includes((ticket.customData as any)?.workType)) await maybeWriteRentalDailyLogFromTicket(ticket);
 
       // Phase B On-Site Services > Manned Trailer: mirror the shift into the
       // linked rental's daily log when one is set. Non-fatal.
@@ -1267,17 +1390,22 @@ async function processTicketMutation(mut: MutationRequest, userId: string): Prom
       return { id: ticket.id };
     }
     case 'update': {
-      // Re-extract gas/cylinder data when notes change
-      if (payload.workDescription !== undefined) {
+      if (payload.customData !== undefined || payload.workDescription !== undefined) {
         const existing = await prisma.serviceTicket.findUnique({
           where: { id: mut.entityId },
           select: { customData: true },
         });
-        const enriched = enrichCustomData(
-          payload.workDescription,
-          payload.customData ?? (existing?.customData as Record<string, any> | null),
-        );
-        if (enriched) payload.customData = enriched;
+        if (payload.customData !== undefined) {
+          payload.customData = preserveTicketOrigin(payload.customData, existing?.customData);
+        }
+        // Re-extract gas/cylinder data when notes change.
+        if (payload.workDescription !== undefined) {
+          const enriched = enrichCustomData(
+            payload.workDescription,
+            payload.customData ?? (existing?.customData as Record<string, any> | null),
+          );
+          if (enriched) payload.customData = enriched;
+        }
       }
 
       // #3 Keep flat po/afe/cost in sync when billingRefs is updated (server wins).
@@ -1309,7 +1437,7 @@ async function processTicketMutation(mut: MutationRequest, userId: string): Prom
       }
 
       const ticket = await prisma.serviceTicket.update({
-        where: { id: mut.entityId },
+        where: { id: mut.entityId, status: mut.expectedStatus, updatedAt: mut.expectedUpdatedAt },
         data: {
           ...payload,
           serviceDate: payload.serviceDate ? new Date(payload.serviceDate) : undefined,
@@ -1376,74 +1504,8 @@ async function processTicketMutation(mut: MutationRequest, userId: string): Prom
           where: { sourceTicketId: ticketId },
           data: { sourceTicketId: null, sourceTicketNumber: null },
         });
-        await tx.serviceTicket.delete({ where: { id: ticketId } });
+        await tx.serviceTicket.delete({ where: { id: ticketId, status: 'draft' } });
       });
-      return { id: mut.entityId };
-    }
-  }
-}
-
-async function processLineItemMutation(mut: MutationRequest, _userId: string): Promise<{ id: string }> {
-  const { _offlineStatus, sortOrder, ...payload } = mut.payload as any;
-
-  // The client sends `customData: null` to mean "this line carries no pricing
-  // provenance" — including to CLEAR a stamp a previous save left behind.
-  // Prisma won't take a bare null on a Json? column, so translate it rather
-  // than dropping the field, which would leave the stale stamp in place.
-  if (payload.customData === null) payload.customData = Prisma.DbNull;
-
-  switch (mut.action) {
-    case 'create': {
-      // Idempotency: a create for an id we already hold is normally a retry of
-      // one that succeeded. "Normally" is doing a lot of work there — client ids
-      // have not always been globally unique (a `temp_<counter>` scheme reset to
-      // 1 every page load), so an id match can mean a genuine collision with a
-      // different ticket's line. Returning early on that silently DROPS a billed
-      // line and reports success: no error, no retry, no log, revenue gone.
-      // Only skip when the existing row belongs to the same ticket.
-      const existing = await prisma.ticketLineItem.findUnique({
-        where: { id: mut.entityId },
-        select: { id: true, ticketId: true },
-      });
-      if (existing) {
-        if (!payload.ticketId || existing.ticketId === payload.ticketId) {
-          return { id: existing.id };
-        }
-        // Different ticket — a colliding id, not a retry. Never drop the line:
-        // mint a fresh id and keep it, loudly.
-        const fresh = randomUUID();
-        console.warn(
-          `[sync/push] line-item id collision: ${mut.entityId} already belongs to ticket ` +
-          `${existing.ticketId}, incoming is for ${payload.ticketId}. Creating as ${fresh} instead.`,
-        );
-        const item = await prisma.ticketLineItem.create({
-          data: {
-            ...payload,
-            id: fresh,
-            lineNumber: payload.lineNumber ?? sortOrder ?? 1,
-            sortOrder: sortOrder ?? payload.lineNumber ?? 1,
-          },
-        });
-        return { id: item.id };
-      }
-
-      // lineNumber is required — use sortOrder from client, or default to 1
-      const lineNumber = payload.lineNumber ?? sortOrder ?? 1;
-
-      const item = await prisma.ticketLineItem.create({
-        data: { ...payload, id: mut.entityId, lineNumber, sortOrder: sortOrder ?? lineNumber },
-      });
-      return { id: item.id };
-    }
-    case 'update': {
-      const item = await prisma.ticketLineItem.update({
-        where: { id: mut.entityId },
-        data: payload,
-      });
-      return { id: item.id };
-    }
-    case 'delete': {
-      await prisma.ticketLineItem.delete({ where: { id: mut.entityId } });
       return { id: mut.entityId };
     }
   }
@@ -1481,7 +1543,9 @@ async function processAttachmentMutation(mut: MutationRequest): Promise<{ id: st
           const fileName = (payload.fileName as string) || `${mut.entityId}.${ext}`;
           const ticketId = payload.ticketId as string;
           if (ticketId) {
-            const key = ticketKey(ticketId, fileName);
+            // User-selected reports often share a name (for example results.pdf).
+            // Keep their display names, but give each capture its own stored bytes.
+            const key = attachmentKey({ ticketId }, mut.entityId, fileName);
             const store = getFileStore();
             await store.write(key, buffer, mimeType);
             filePath = key;
@@ -1551,6 +1615,15 @@ async function processUnifiedAttachmentMutation(
         throw new Error('Attachment mutation needs exactly one parent id');
       }
 
+      const jobUnits = payload.workOrderId
+        ? await jobAttachmentUnits(payload.workOrderId, (payload.kind as AttachmentKind) || 'photo', payload.linkedShopItemIds)
+        : null;
+      if (jobUnits) {
+        parent.shopItemId = jobUnits[0].id;
+        parent.inspectionId = null;
+        parent.ticketId = null;
+      }
+
       const fileName = basename((payload.fileName as string) || `${mut.entityId}.bin`);
       const key = attachmentKey(parent, mut.entityId, fileName);
 
@@ -1568,44 +1641,38 @@ async function processUnifiedAttachmentMutation(
         throw err;
       }
 
-      const attachment = await prisma.attachment.create({
-        data: {
-          id: mut.entityId,
-          ...parent,
-          serialNumber: payload.kind === 'vendor_invoice' || payload.kind === 'packing_slip'
-            ? null : (payload.serialNumber as string) || null,
-          serializedEquipmentId: payload.kind === 'vendor_invoice' || payload.kind === 'packing_slip'
-            ? null : (payload.serializedEquipmentId as string) || null,
-          kind: (payload.kind as AttachmentKind) || 'photo',
-          fileName,
-          mimeType,
-          offlineBlobId: (payload.offlineBlobId as string) || null,
-          capturedAt: payload.capturedAt ? new Date(payload.capturedAt as string) : new Date(),
-          uploadedById: userId,
-          sha256: stored.sha256,
-          fileSizeBytes: stored.fileSizeBytes,
-          storageState: stored.storageState,
-          bufferKey: stored.bufferKey,
-          remoteKey: stored.remoteKey,
-          uploadedAt: stored.uploadedAt,
-        },
-      });
+      const attachmentData = {
+        id: mut.entityId,
+        ...parent,
+        serialNumber: payload.kind === 'vendor_invoice' || payload.kind === 'packing_slip'
+          ? null : (payload.serialNumber as string) || null,
+        serializedEquipmentId: payload.kind === 'vendor_invoice' || payload.kind === 'packing_slip'
+          ? null : (payload.serializedEquipmentId as string) || null,
+        kind: (payload.kind as AttachmentKind) || 'photo',
+        fileName,
+        mimeType,
+        offlineBlobId: (payload.offlineBlobId as string) || null,
+        capturedAt: payload.capturedAt ? new Date(payload.capturedAt as string) : new Date(),
+        uploadedById: userId,
+        sha256: stored.sha256,
+        fileSizeBytes: stored.fileSizeBytes,
+        storageState: stored.storageState,
+        bufferKey: stored.bufferKey,
+        remoteKey: stored.remoteKey,
+        uploadedAt: stored.uploadedAt,
+      };
+      const attachment = jobUnits
+        ? await createJobAttachments(attachmentData, jobUnits)
+        : await prisma.attachment.create({ data: attachmentData });
       // Same background VaultPRO push as the online route.
-      void enqueueAttachment(attachment.id).catch((e) =>
+      if (!jobUnits) void enqueueAttachment(attachment.id).catch((e) =>
         console.warn('[attachments] VaultPRO enqueue failed (non-fatal):', e),
       );
 
       return { id: attachment.id };
     }
     case 'delete': {
-      const existing = await prisma.attachment.findUnique({
-        where: { id: mut.entityId },
-        select: { bufferKey: true, remoteKey: true },
-      });
-      if (existing) {
-        await prisma.attachment.delete({ where: { id: mut.entityId } });
-        await removeAttachmentBytes(existing);
-      }
+      await deleteStoredAttachment(mut.entityId, payload.wholeJob === true);
       return { id: mut.entityId };
     }
     default:
@@ -1684,54 +1751,47 @@ async function processFitTestMutation(mut: MutationRequest, userId: string): Pro
   }
 }
 
-async function processAirSystemMutation(mut: MutationRequest, userId: string): Promise<{ id: string }> {
-  const {
-    _offlineStatus,
-    serviceActions,
-    cylinders,
-    ...payload
-  } = mut.payload as any;
+async function processAirSystemMutation(mut: MutationRequest, userId: string, role: string): Promise<{ id: string }> {
+  const { _offlineStatus, serviceActions, cylinders, verificationUpdate, dateVerified, ...payload } = mut.payload as any;
+  const action = verificationUpdate === undefined ? null : parseVerificationUpdate(verificationUpdate);
+  if (action && !payload.workPointId) throw new AppError(400, 'Verification requires a linked work point');
+  if (payload.verified !== undefined && typeof payload.verified !== 'boolean') throw new AppError(400, 'Verified must be a checkbox value');
+  const snapshotDate = dateVerified ? new Date(dateVerified) : null;
+  if (snapshotDate && !Number.isFinite(snapshotDate.getTime())) throw new AppError(400, 'Invalid verification date');
 
-  switch (mut.action) {
-    case 'create': {
-      const existing = await prisma.airSystemInspection.findUnique({ where: { id: mut.entityId }, select: { id: true } });
-      if (existing) return { id: existing.id };
-
-      const record = await prisma.airSystemInspection.create({
-        data: {
-          ...payload,
-          id: mut.entityId,
-          serviceActions: serviceActions ?? [],
-          cylinders: cylinders ?? [],
-          cascadeArrivalPsi: payload.cascadeArrivalPsi != null ? Number(payload.cascadeArrivalPsi) : undefined,
-          cascadeDeparturePsi: payload.cascadeDeparturePsi != null ? Number(payload.cascadeDeparturePsi) : undefined,
-          inspectedAt: payload.inspectedAt ? new Date(payload.inspectedAt) : new Date(),
-          inspectedById: userId,
-        },
-      });
-      return { id: record.id };
-    }
-    case 'update': {
-      const record = await prisma.airSystemInspection.update({
-        where: { id: mut.entityId },
-        data: {
-          ...payload,
-          serviceActions: serviceActions ?? undefined,
-          cylinders: cylinders ?? undefined,
-          cascadeArrivalPsi: payload.cascadeArrivalPsi != null ? Number(payload.cascadeArrivalPsi) : undefined,
-          cascadeDeparturePsi: payload.cascadeDeparturePsi != null ? Number(payload.cascadeDeparturePsi) : undefined,
-          inspectedAt: payload.inspectedAt ? new Date(payload.inspectedAt) : undefined,
-        },
-      });
-      return { id: record.id };
-    }
-    case 'delete': {
-      await prisma.airSystemInspection.delete({ where: { id: mut.entityId } });
+  return prisma.$transaction(async tx => {
+    if (mut.action === 'delete') {
+      await tx.airSystemInspection.delete({ where: { id: mut.entityId } });
       return { id: mut.entityId };
     }
-    default:
-      throw new Error(`Unsupported airSystemRecord action: ${mut.action}`);
-  }
+    if (!['create', 'update'].includes(mut.action)) throw new Error('Unsupported air system action');
+    if (mut.action === 'create') {
+      const existing = await tx.airSystemInspection.findUnique({ where: { id: mut.entityId }, select: { id: true } });
+      if (existing) return { id: existing.id };
+    }
+    if (action) {
+      const existing = mut.action === 'update' ? await tx.airSystemInspection.findUnique({ where: { id: mut.entityId } }) : null;
+      const ticket = await tx.serviceTicket.findUnique({ where: { id: existing?.ticketId || payload.ticketId } });
+      if (!ticket || ticket.status === 'void') throw new AppError(400, 'Verification requires an active ticket');
+      if (action.verified && !roleHasCapability(role, 'tickets:complete')) throw new AppError(403, 'Insufficient verification permissions');
+      if (ticket.assignedTechId !== userId && ticket.createdById !== userId && !roleHasCapability(role, 'tickets:edit_all')) throw new AppError(403, 'You can only verify work points on your tickets');
+    }
+    const data = {
+      ...payload,
+      dateVerified: action ? action.dateVerified : snapshotDate,
+      verified: action ? action.verified : payload.verified,
+      serviceActions: serviceActions ?? (mut.action === 'create' ? [] : undefined),
+      cylinders: cylinders ?? (mut.action === 'create' ? [] : undefined),
+      cascadeArrivalPsi: payload.cascadeArrivalPsi != null ? Number(payload.cascadeArrivalPsi) : undefined,
+      cascadeDeparturePsi: payload.cascadeDeparturePsi != null ? Number(payload.cascadeDeparturePsi) : undefined,
+      inspectedAt: payload.inspectedAt ? new Date(payload.inspectedAt) : (mut.action === 'create' ? new Date() : undefined),
+    };
+    const record = mut.action === 'create'
+      ? await tx.airSystemInspection.create({ data: { ...data, id: mut.entityId, inspectedById: userId } })
+      : await tx.airSystemInspection.update({ where: { id: mut.entityId }, data });
+    if (action) await applyWorkPointVerification(tx, record.workPointId!, verificationUpdate, userId, data);
+    return { id: record.id };
+  });
 }
 
 async function processIhTestMutation(mut: MutationRequest, userId: string): Promise<{ id: string }> {
@@ -1837,7 +1897,7 @@ async function processTrainingRosterMutation(mut: MutationRequest, userId: strin
       return { id: record.id };
     }
     case 'delete': {
-      await prisma.trainingRosterRecord.delete({ where: { id: mut.entityId } });
+      await prisma.trainingRosterRecord.deleteMany({ where: { id: mut.entityId } });
       return { id: mut.entityId };
     }
     default:
@@ -1846,6 +1906,10 @@ async function processTrainingRosterMutation(mut: MutationRequest, userId: strin
 }
 
 async function processRentalAgreementMutation(mut: MutationRequest, userId: string): Promise<{ id: string }> {
+  if (mut.action === 'update' && mut.payload.equipmentVisit) {
+    await saveManualRentalVisit(mut.entityId, mut.payload.equipmentVisit, userId);
+    return { id: mut.entityId };
+  }
   const { _offlineStatus, offlineId, companyName, createdAt, updatedAt, ...raw } = mut.payload as any;
 
   switch (mut.action) {
@@ -1921,7 +1985,23 @@ async function processRentalAgreementMutation(mut: MutationRequest, userId: stri
       return { id: agreement.id };
     }
     case 'update': {
-      const agreement = await prisma.rentalAgreement.update({
+      return withRental(mut.entityId, async (tx, existing) => {
+      // Offline close payloads send the pickup/end date, not the unchanged start.
+      // Validate against the saved rental while holding its lifecycle lock.
+      validateRentalInput({ startDate: existing.startDate, ...raw });
+      if (raw.composition && raw.manualEquipment === undefined && (existing.composition as any)?.manualEquipment) {
+        raw.composition = { ...raw.composition, manualEquipment: (existing.composition as any).manualEquipment };
+      }
+      if (raw.manualEquipment !== undefined) {
+        if (!['scheduled', 'active'].includes(existing.status)) throw new Error('Agreement is not active or scheduled');
+        raw.composition = mergeManualRentalEquipment({ ...(raw.composition || existing.composition as any || {}), manualEquipment: (existing.composition as any)?.manualEquipment || [] }, raw.manualEquipment);
+        if (raw.status === 'active' && existing.status === 'scheduled') await tx.rentalAgreement.update({ where: { id: existing.id }, data: { status: 'active' } });
+      }
+      if (raw.status && raw.status !== existing.status && !(raw.manualEquipment && raw.status === 'active' && existing.status === 'scheduled')) {
+        if (raw.status === 'completed' || raw.status === 'cancelled') await closeRental(tx, existing, raw.status, raw.notes, raw.endDate);
+        else throw new Error('Use online reopen or deploy to change rental status');
+      }
+      const agreement = await tx.rentalAgreement.update({
         where: { id: mut.entityId },
         data: {
           companyId: raw.companyId || undefined,
@@ -1932,9 +2012,9 @@ async function processRentalAgreementMutation(mut: MutationRequest, userId: stri
             ? (Array.isArray(raw.wellIds) ? raw.wellIds.filter((v: unknown) => typeof v === 'string' && v) : [])
             : undefined,
           facilityId: raw.facilityId,
-          status: raw.status || undefined,
+
           startDate: raw.startDate ? new Date(raw.startDate) : undefined,
-          endDate: raw.endDate ? new Date(raw.endDate) : undefined,
+          endDate: raw.status === 'completed' || raw.status === 'cancelled' ? undefined : raw.endDate ? new Date(raw.endDate) : undefined,
           billingRateType: raw.billingRateType || undefined,
           pickupType: raw.pickupType,
           poNumber: raw.poNumber,
@@ -1961,6 +2041,7 @@ async function processRentalAgreementMutation(mut: MutationRequest, userId: stri
         },
       });
       return { id: agreement.id };
+      });
     }
     case 'delete': {
       await prisma.rentalAgreement.delete({ where: { id: mut.entityId } });
@@ -1972,102 +2053,24 @@ async function processRentalAgreementMutation(mut: MutationRequest, userId: stri
 }
 
 async function processRentalAgreementItemMutation(mut: MutationRequest, _userId: string): Promise<{ id: string }> {
-  const { _offlineStatus, productName, serialNumber, createdAt, updatedAt, ...raw } = mut.payload as any;
-
-  switch (mut.action) {
-    case 'create': {
-      // Idempotency
-      const existing = await prisma.rentalAgreementItem.findUnique({ where: { id: mut.entityId }, select: { id: true } });
-      if (existing) return { id: existing.id };
-
-      // Validate rental agreement exists
-      if (!raw.rentalAgreementId) {
-        throw new Error(`Rental item create: rentalAgreementId is missing`);
+  const raw = mut.payload as any;
+  const existing = mut.action === 'create' ? null : await prisma.rentalAgreementItem.findUnique({ where: { id: mut.entityId } });
+  const rentalId = existing?.rentalAgreementId || raw.rentalAgreementId;
+  if (!rentalId) throw new Error('Rental item parent is missing');
+  if (existing && raw.rentalAgreementId && raw.rentalAgreementId !== existing.rentalAgreementId) throw new Error('Rental item belongs to a different agreement');
+  return withRental(rentalId, async (tx, rental) => {
+    if (mut.action === 'create') return deployRentalItem(tx, rental, { ...raw, id: mut.entityId });
+    if (mut.action === 'update') {
+      if (raw.status === 'returned') return returnRentalItem(tx, rental.id, mut.entityId, raw);
+      const current = await tx.rentalAgreementItem.findUniqueOrThrow({ where: { id: mut.entityId } });
+      if (raw.status && raw.status !== current.status || raw.returnedDate || raw.deployedDate && +new Date(raw.deployedDate) !== +current.deployedDate
+        || raw.rate != null && Number(raw.rate) !== Number(current.rate) || raw.rateType && raw.rateType !== current.rateType) {
+        throw new Error('Rental history correction requires an online correction; offline snapshots cannot change deployment history or rates');
       }
-      const agreement = await prisma.rentalAgreement.findUnique({
-        where: { id: raw.rentalAgreementId },
-        select: { id: true, companyId: true },
-      });
-      if (!agreement) {
-        throw new Error(`Rental item create: rental agreement ${raw.rentalAgreementId} not found — parent may not have synced yet`);
-      }
-
-      // Create the item with explicit fields
-      const item = await prisma.rentalAgreementItem.create({
-        data: {
-          id: mut.entityId,
-          rentalAgreementId: raw.rentalAgreementId,
-          productId: raw.productId,
-          serializedEquipmentId: raw.serializedEquipmentId,
-          rate: raw.rate != null ? raw.rate : undefined,
-          rateType: raw.rateType || 'daily',
-          deployedDate: raw.deployedDate ? new Date(raw.deployedDate) : new Date(),
-          returnedDate: raw.returnedDate ? new Date(raw.returnedDate) : undefined,
-          status: raw.status || 'deployed',
-          deployInspection: raw.deployInspection ?? undefined,
-        },
-      });
-
-      // Mark equipment as rented
-      try {
-        await prisma.serializedEquipment.update({
-          where: { id: raw.serializedEquipmentId },
-          data: {
-            status: 'rented',
-            currentRentalId: raw.rentalAgreementId,
-            currentCustomerId: agreement.companyId,
-          },
-        });
-      } catch (eqErr: any) {
-        console.warn(`[sync/push] Could not update equipment ${raw.serializedEquipmentId} to rented:`, eqErr.message);
-      }
-
-      return { id: item.id };
+      return current;
     }
-    case 'update': {
-      const item = await prisma.rentalAgreementItem.update({
-        where: { id: mut.entityId },
-        data: {
-          rate: raw.rate != null ? raw.rate : undefined,
-          rateType: raw.rateType || undefined,
-          deployedDate: raw.deployedDate ? new Date(raw.deployedDate) : undefined,
-          returnedDate: raw.returnedDate ? new Date(raw.returnedDate) : undefined,
-          status: raw.status || undefined,
-        },
-      });
-
-      // If status changed to 'returned', update equipment
-      if (raw.status === 'returned') {
-        await prisma.serializedEquipment.update({
-          where: { id: item.serializedEquipmentId },
-          data: {
-            status: 'available',
-            currentRentalId: null,
-            currentCustomerId: null,
-          },
-        });
-      }
-
-      return { id: item.id };
-    }
-    case 'delete': {
-      const item = await prisma.rentalAgreementItem.findUnique({
-        where: { id: mut.entityId },
-        select: { serializedEquipmentId: true },
-      });
-      await prisma.rentalAgreementItem.delete({ where: { id: mut.entityId } });
-      // Restore equipment to available
-      if (item) {
-        await prisma.serializedEquipment.update({
-          where: { id: item.serializedEquipmentId },
-          data: { status: 'available', currentRentalId: null, currentCustomerId: null },
-        });
-      }
-      return { id: mut.entityId };
-    }
-    default:
-      throw new Error(`Unsupported rentalAgreementItem action: ${mut.action}`);
-  }
+    throw new Error('Rental deployment history cannot be deleted; return the equipment instead');
+  });
 }
 
 async function processRentalDailyLogMutation(mut: MutationRequest, userId: string): Promise<{ id: string }> {
@@ -2189,6 +2192,7 @@ async function processShopWorkOrderMutation(mut: MutationRequest, userId: string
       return { id: result.id };
     }
     case 'update': {
+      for (const key of ['status', 'paidAtDropVia', 'lightspeedTxnNumber', 'isInternal', 'companyId']) if (payload[key] !== undefined) throw new AppError(400, 'Use the work-order workflow endpoint to change ' + key);
       // WO customData contains server-owned void/waiver decisions. Offline
       // edits must never clear or forge them (item customData is separate).
       delete payload.customData;
@@ -2206,8 +2210,7 @@ async function processShopWorkOrderMutation(mut: MutationRequest, userId: string
       return { id: wo.id };
     }
     case 'delete': {
-      await prisma.shopWorkOrder.delete({ where: { id: mut.entityId } });
-      return { id: mut.entityId };
+      throw new AppError(409, 'Use the work-order void workflow instead of deleting through sync');
     }
     default:
       throw new Error(`Unsupported shopWorkOrder action: ${mut.action}`);
@@ -2233,7 +2236,12 @@ async function processShopWorkOrderItemMutation(mut: MutationRequest, userId: st
           : undefined)
         ?? (await fallbackSiteId());
 
-      const item = await prisma.shopWorkOrderItem.create({
+      const item = await prisma.$transaction(async tx => {
+        await validateShopIntakeItems(tx, [payload]);
+        await assertShopBinsAvailable(tx, [payload], payload.workOrderId);
+        const order = await tx.shopWorkOrder.findUnique({ where: { id: payload.workOrderId }, select: { status: true } });
+        if (!order || order.status === 'closed') throw new AppError(409, 'Work order is missing or closed');
+        return tx.shopWorkOrderItem.create({
         data: {
           ...payload,
           id: mut.entityId,
@@ -2262,6 +2270,7 @@ async function processShopWorkOrderItemMutation(mut: MutationRequest, userId: st
         },
       });
 
+      });
       return { id: item.id };
     }
     case 'update': {
@@ -2312,6 +2321,21 @@ async function processShopWorkOrderItemMutation(mut: MutationRequest, userId: st
       // online 409, reached without ever failing a sync.
       let qaDivertNote: string | null = null;
       let qaDivertFrom: ShopItemStatus | null = null;
+      if (['shop_complete', 'returned', 'condemned'].includes(payload.status)) {
+        const current = await prisma.shopWorkOrderItem.findUnique({ where: { id: mut.entityId } });
+        if (current) {
+          try {
+            await assertShopSerialsCollected(prisma, current.workOrderId, [current.id]);
+          } catch (error) {
+            if (!(error instanceof AppError)) throw error;
+            qaDivertFrom = current.status;
+            payload.status = current.status;
+            delete payload.returnedAt;
+            delete payload.returnMethod;
+            qaDivertNote = `Offline closing withheld — ${error.message}`;
+          }
+        }
+      }
       if (payload.status === 'shop_complete') {
         const current = await prisma.shopWorkOrderItem.findUnique({
           where: { id: mut.entityId },
@@ -2342,7 +2366,16 @@ async function processShopWorkOrderItemMutation(mut: MutationRequest, userId: st
         }
       }
 
-      const item = await prisma.shopWorkOrderItem.update({
+      const item = await prisma.$transaction(async tx => {
+        if (payload.customData !== undefined || payload.equipmentCategory !== undefined) {
+          const current = await tx.shopWorkOrderItem.findUnique({ where: { id: mut.entityId } });
+          if (!current) throw new AppError(404, 'Shop item not found');
+          await assertShopBinsAvailable(tx, [{
+            equipmentCategory: payload.equipmentCategory ?? current.equipmentCategory,
+            customData: payload.customData ?? current.customData,
+          }], current.workOrderId);
+        }
+        return tx.shopWorkOrderItem.update({
         where: { id: mut.entityId },
         data: {
           ...payload,
@@ -2357,6 +2390,7 @@ async function processShopWorkOrderItemMutation(mut: MutationRequest, userId: st
           returnedAt: payload.returnedAt ? new Date(payload.returnedAt) : undefined,
           estimatedCost: payload.estimatedCost != null ? payload.estimatedCost : undefined,
         },
+      });
       });
       // The divert is recorded on the unit's own status log rather than logged
       // and forgotten. The board's unit history already renders this, so the

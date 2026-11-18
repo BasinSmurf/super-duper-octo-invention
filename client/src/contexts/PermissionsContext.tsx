@@ -66,7 +66,7 @@ export function PermissionsProvider({ children }: { children: ReactNode }) {
         can,
         matrix: data?.matrix ?? {},
         catalog: data?.catalog ?? [],
-        roles: data?.roles ?? ['field_tech', 'dispatch', 'field_super', 'billing_ar', 'trainer', 'train_admin', 'boss', 'platform_admin'],
+        roles: data?.roles ?? ['field_tech', 'dispatch', 'field_super', 'billing_ar', 'ar_supervisor', 'trainer', 'train_admin', 'boss', 'platform_admin'],
         defaults: data?.defaults ?? {},
         loading,
         reload,

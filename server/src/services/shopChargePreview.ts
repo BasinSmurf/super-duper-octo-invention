@@ -1,4 +1,4 @@
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { getLaborProduct, getMileageProduct } from '../utils/servicePartMap.js';
 import { SHOP_DIVISION } from '../utils/qbClass.js';
 import { resolveInvoiceRules } from './billingRules.js';
@@ -25,7 +25,7 @@ export async function priceShopCharges(order: {
       line.partNumber = labor.partNumber;
     }
   }
-  const all = [...built, ...buildWoExtraLines(order.billingExtras as WoBillingExtras, built.length + 1, travel)];
+  const all = [...built, ...buildWoExtraLines(order.billingExtras as WoBillingExtras, built.length + 1, travel, labor)];
   const ids = [...new Set(all.map(l => l.productId).filter((id): id is string => !!id))];
   const products = await prisma.product.findMany({ where: { id: { in: ids } }, select: { id: true, qbItemListId: true, qbItemFullName: true } });
   const byId = new Map(products.map(p => [p.id, p]));

@@ -1,3 +1,4 @@
+import { DmrAmbiguityChoices } from '@/components/DmrAmbiguityChoices'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
@@ -20,9 +21,8 @@ import {
   AlertCircle,
   AlertTriangle,
   FileSpreadsheet,
+  CloudDownload,
   Layers,
-  Link2,
-  PlusCircle,
 } from 'lucide-react'
 
 // ── Types ──
@@ -62,6 +62,14 @@ interface ImportResult {
   deduped?: { renamed: number; groupsMerged: number; duplicatesRemoved: number }
   errorSamples?: string[]
   importDate: string
+  // Only on "Get newest from DMR":
+  sourceLastModified?: string | null
+  wellStatus?: {
+    activeWellsChecked: number
+    statusUpdated: number
+    statusChanges: Record<string, number>
+    unmappedStatusSkipped: number
+  }
 }
 
 interface PadOption {
@@ -99,6 +107,7 @@ export function DmrBrowserPage() {
   const [importOpen, setImportOpen] = useState(false)
   const [importStatus, setImportStatus] = useState<ImportStatus | null>(null)
   const [uploading, setUploading] = useState(false)
+  const [fetchingLatest, setFetchingLatest] = useState(false)
   const [importResult, setImportResult] = useState<ImportResult | null>(null)
   const [importError, setImportError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -229,6 +238,22 @@ export function DmrBrowserPage() {
     } finally {
       setUploading(false)
       if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
+
+  // ── Get newest: server downloads OGD_Wells.zip from the ND DMR and upserts ──
+  async function handleFetchLatest() {
+    setFetchingLatest(true)
+    setImportError(null)
+    setImportResult(null)
+    try {
+      const result = await api.post<ImportResult>('/locations/dmr/import/fetch-latest')
+      setImportResult(result)
+      loadImportStatus()
+    } catch (e: any) {
+      setImportError(e.message || 'Fetch from DMR failed')
+    } finally {
+      setFetchingLatest(false)
     }
   }
 
@@ -392,12 +417,13 @@ export function DmrBrowserPage() {
           >
             <div className="flex items-center gap-2">
               <Upload className="w-4 h-4 text-slate-400" />
-              <span className="text-sm font-medium text-slate-700">CSV Import</span>
+              <span className="text-sm font-medium text-slate-700">DMR Import</span>
               {importStatus && (
                 <span className="text-xs text-slate-400 ml-2">
                   {importStatus.totalRecords.toLocaleString()} records
+                  {/* date-only column (UTC midnight) — render in UTC or it reads a day early */}
                   {importStatus.lastImportDate && (
-                    <> &middot; Last: {new Date(importStatus.lastImportDate).toLocaleDateString()}</>
+                    <> &middot; Last: {new Date(importStatus.lastImportDate).toLocaleDateString(undefined, { timeZone: 'UTC' })}</>
                   )}
                 </span>
               )}
@@ -430,6 +456,32 @@ export function DmrBrowserPage() {
                 </div>
               )}
 
+              {/* Get newest straight from the state */}
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={handleFetchLatest}
+                  disabled={fetchingLatest || uploading}
+                  className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {fetchingLatest ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <CloudDownload className="w-4 h-4" />
+                  )}
+                  {fetchingLatest ? 'Getting newest...' : 'Get newest from DMR'}
+                </button>
+                <span className="text-xs text-slate-400">
+                  Downloads the current OGD_Wells file from the ND DMR. New wells are added; existing ones (and statuses on active wells) are updated.
+                </span>
+              </div>
+
+              {fetchingLatest && (
+                <div className="flex items-center gap-2 text-sm text-emerald-700">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Downloading and importing ~44k wells from the DMR... usually under a minute.
+                </div>
+              )}
+
               {/* Upload */}
               <div className="flex items-center gap-3">
                 <input
@@ -444,7 +496,7 @@ export function DmrBrowserPage() {
                 />
                 <button
                   onClick={() => fileInputRef.current?.click()}
-                  disabled={uploading}
+                  disabled={uploading || fetchingLatest}
                   className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 >
                   {uploading ? (
@@ -509,6 +561,24 @@ export function DmrBrowserPage() {
                       <p className="mt-2 text-xs text-slate-600">Cleanup: {parts.join(', ')}</p>
                     ) : null
                   })()}
+                  {importResult.sourceLastModified && (
+                    <p className="mt-2 text-xs text-slate-600">
+                      DMR file published {new Date(importResult.sourceLastModified).toLocaleString()}
+                    </p>
+                  )}
+                  {importResult.wellStatus && (
+                    <p className="mt-1 text-xs text-slate-600">
+                      Active wells: {importResult.wellStatus.statusUpdated.toLocaleString()} status
+                      {importResult.wellStatus.statusUpdated === 1 ? '' : 'es'} updated
+                      {importResult.wellStatus.statusUpdated > 0 && (
+                        <> ({Object.entries(importResult.wellStatus.statusChanges).map(([s, n]) => `${n} → ${s}`).join(', ')})</>
+                      )}
+                      {' '}of {importResult.wellStatus.activeWellsChecked.toLocaleString()} checked
+                      {importResult.wellStatus.unmappedStatusSkipped > 0 && (
+                        <>; {importResult.wellStatus.unmappedStatusSkipped} left as-is (DMR code we don&apos;t map)</>
+                      )}
+                    </p>
+                  )}
                   {importResult.errorSamples && importResult.errorSamples.length > 0 && (
                     <div className="mt-2 text-xs text-red-600">
                       <p className="font-medium">Errors:</p>
@@ -855,35 +925,7 @@ export function DmrBrowserPage() {
                     return (
                       <div key={a.dmrWellId} className="border border-amber-100 rounded-lg p-2.5">
                         <p className="text-xs font-medium text-slate-800">{a.wellName || '(unnamed)'} <span className="text-slate-400 font-mono">{a.apiNumber}</span></p>
-                        <div className="mt-1.5 space-y-1">
-                          {a.candidates.map(c => {
-                            const isChosen = chosen?.action === 'link' && chosen.wellId === c.id
-                            return (
-                              <button key={c.id} onClick={() => pickResolution(a.dmrWellId, { action: 'link', wellId: c.id })}
-                                className={`w-full flex items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs border ${
-                                  isChosen ? 'border-blue-400 bg-blue-50' : 'border-slate-200 hover:border-slate-300'
-                                }`}>
-                                <span className="min-w-0 truncate">
-                                  <span className="font-medium text-slate-800">{c.wellName}</span>
-                                  {c.exact && <span className="ml-1 text-green-600 font-medium">exact name match</span>}
-                                  <span className="text-slate-400"> · {c.padName || c.fieldName || 'unattached'} · {c.operatorName || 'no operator'}</span>
-                                </span>
-                                <span className={`inline-flex items-center gap-1 shrink-0 ${isChosen ? 'text-blue-600' : 'text-slate-400'}`}>
-                                  <Link2 className="w-3 h-3" /> Same well
-                                </span>
-                              </button>
-                            )
-                          })}
-                          <button onClick={() => pickResolution(a.dmrWellId, { action: 'create' })}
-                            className={`w-full flex items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs border ${
-                              chosen?.action === 'create' ? 'border-blue-400 bg-blue-50' : 'border-slate-200 hover:border-slate-300'
-                            }`}>
-                            <span className="text-slate-600">None of these — different well</span>
-                            <span className={`inline-flex items-center gap-1 shrink-0 ${chosen?.action === 'create' ? 'text-blue-600' : 'text-slate-400'}`}>
-                              <PlusCircle className="w-3 h-3" /> Create new
-                            </span>
-                          </button>
-                        </div>
+                        <DmrAmbiguityChoices candidates={a.candidates} chosen={chosen} onChange={resolution => pickResolution(a.dmrWellId, resolution)} />
                       </div>
                     )
                   })}

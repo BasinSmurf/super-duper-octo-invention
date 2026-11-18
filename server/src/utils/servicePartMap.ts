@@ -22,7 +22,7 @@
  *   4. null = no default (tech must pick a product manually)
  */
 
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { divisionLaborPartNumber, divisionMileagePartNumber, divisionNumber } from './partNumber.js';
 import type { ServiceDivision } from '../db.js';
 

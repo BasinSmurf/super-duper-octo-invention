@@ -50,7 +50,7 @@ interface Props {
   onGenerated: () => void
 }
 
-export function GenerateTicketsModal({ routeId, routeName, remainingStops: _remainingStops, onClose, onGenerated }: Props) {
+export function GenerateTicketsModal({ routeId, routeName, onClose, onGenerated }: Props) {
   const [techs, setTechs] = useState<Tech[]>([])
   const [stops, setStops] = useState<RouteDetailResponse['stops']>([])
   const [stopsLoading, setStopsLoading] = useState(true)

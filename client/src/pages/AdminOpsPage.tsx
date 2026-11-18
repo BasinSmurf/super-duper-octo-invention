@@ -4,6 +4,7 @@ import { api } from '@/lib/api'
 import { cn } from '@/lib/cn'
 import { useAuth } from '@/contexts/AuthContext'
 import { CustomerSearch } from '@/components/CustomerSearch'
+import { NovaraOpsCard } from '@/components/NovaraOpsCard'
 import type { QbDivision } from '@/lib/qbDivision'
 import {
   Activity,
@@ -166,22 +167,28 @@ export function AdminOpsPage() {
   const [dickinsonFilter, setDickinsonFilter] = useState<'' | 'true' | 'false'>('')
   const [portalPreviewCustomer, setPortalPreviewCustomer] = useState<PortalPreviewCustomer | null>(null)
   const loadingRef = useRef(false)
+  const jobsLoadingRef = useRef(false)
   const canPreviewPortal = user?.role === 'platform_admin'
 
   async function load() {
     if (loadingRef.current) return // drop overlapping polls
     loadingRef.current = true
+    // A slow history request must not hold the health summary behind a spinner
+    // or prevent its next poll. Keep at most one jobs request in flight.
+    if (!jobsLoadingRef.current) {
+      jobsLoadingRef.current = true
+      void api.get<JobsResponse>('/admin/jobs')
+        .then(jobsRes => setJobs(jobsRes.jobs ?? []))
+        .catch(() => { /* Preserve the last known jobs during a transient failure. */ })
+        .finally(() => { jobsLoadingRef.current = false })
+    }
     try {
       const params = new URLSearchParams()
       if (divisionFilter) params.set('division', divisionFilter)
       if (dickinsonFilter) params.set('dickinson', dickinsonFilter)
       const qs = params.toString()
-      const [summary, jobsRes] = await Promise.all([
-        api.get<OpsSummary>(`/admin/ops/summary${qs ? `?${qs}` : ''}`),
-        api.get<JobsResponse>('/admin/jobs').catch(() => ({ jobs: [] as JobInfo[] })),
-      ])
+      const summary = await api.get<OpsSummary>(`/admin/ops/summary${qs ? `?${qs}` : ''}`)
       setData(summary)
-      setJobs(jobsRes.jobs ?? [])
       setError(null)
       setLastLoadedAt(new Date())
     } catch (e: any) {
@@ -413,6 +420,9 @@ export function AdminOpsPage() {
           <div className="mt-3 pt-3 border-t border-slate-100">
             <QbSalesTaxReconcile />
           </div>
+          <div className="mt-3 pt-3 border-t border-slate-100">
+            <QbCustomerReview />
+          </div>
         </Card>
 
         {/* Enverus */}
@@ -492,6 +502,8 @@ export function AdminOpsPage() {
             )}
           </Card>
         )}
+
+        <NovaraOpsCard refreshedAt={lastLoadedAt} onChanged={load} />
 
         {/* Background Jobs */}
         <Card
@@ -844,6 +856,14 @@ function GankNowButtons() {
         >
           {busy === 'price-levels' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
           Price levels
+        </button>
+        <button
+          onClick={() => trigger('customers', '/admin/qb/sync-customers')}
+          disabled={busy !== null}
+          className="px-3 py-1.5 text-xs font-medium rounded border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 disabled:opacity-50 inline-flex items-center gap-1"
+        >
+          {busy === 'customers' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+          Customers
         </button>
       </div>
       {result && (
@@ -1507,6 +1527,193 @@ function QbSalesTaxReconcile() {
                 ))}
               </div>
             </>
+          )}
+          {result && (
+            <p className={cn('text-[11px]', result.kind === 'ok' ? 'text-emerald-700' : 'text-red-700')}>
+              {result.msg}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+interface QbCustomerRow {
+  id: string
+  qbListId: string
+  fullName: string
+  name: string
+  sublevel: number
+  isActive: boolean
+  ignored: boolean
+  city: string | null
+  state: string | null
+  phone: string | null
+  suggestions: Array<{ id: string; name: string }>
+}
+
+interface QbCustomerReviewData {
+  lastPulledAt: string | null
+  qbCustomerCount: number
+  linkedCount: number
+  unmatchedCount: number
+  unmatched: QbCustomerRow[]
+}
+
+type LinkTarget = Parameters<typeof CustomerSearch>[0]['value']
+
+/**
+ * QuickBooks customers that no Sundog company is linked to. The pull links
+ * exact-name matches and creates active top-level customers on its own;
+ * whatever it skips (jobs, ambiguous names) lands here for a person to link to
+ * an existing customer, create, or ignore.
+ */
+function QbCustomerReview() {
+  const [open, setOpen] = useState(false)
+  const [data, setData] = useState<QbCustomerReviewData | null>(null)
+  const [showJobs, setShowJobs] = useState(false)
+  const [busy, setBusy] = useState<string | null>(null)
+  const [linking, setLinking] = useState<string | null>(null)
+  const [target, setTarget] = useState<LinkTarget>(null)
+  const [result, setResult] = useState<{ kind: 'ok' | 'err'; msg: string } | null>(null)
+
+  async function load(jobs = showJobs) {
+    try {
+      setData(await api.get<QbCustomerReviewData>(`/admin/qb/customers${jobs ? '?jobs=1' : ''}`))
+    } catch (e: any) {
+      setResult({ kind: 'err', msg: e?.message || 'Failed to load' })
+    }
+  }
+
+  function toggle() {
+    const next = !open
+    setOpen(next)
+    if (next && data === null) load()
+  }
+
+  async function act(row: QbCustomerRow, label: string, run: () => Promise<unknown>, done: string) {
+    setBusy(row.id)
+    setResult(null)
+    try {
+      await run()
+      setLinking(null)
+      setTarget(null)
+      setResult({ kind: 'ok', msg: `${row.fullName}: ${done}` })
+      await load()
+    } catch (e: any) {
+      setResult({ kind: 'err', msg: `${row.fullName}: ${e?.message || `${label} failed`}` })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const btn = 'px-2 py-0.5 text-[11px] font-medium rounded border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 disabled:opacity-50'
+
+  return (
+    <div>
+      <button onClick={toggle} className="flex items-center justify-between w-full text-left">
+        <span className="text-xs font-medium text-slate-500 uppercase tracking-wide">
+          QuickBooks customers not in Sundog
+          {data && data.unmatchedCount > 0 && <span className="text-amber-600"> · {data.unmatchedCount}</span>}
+        </span>
+        <span className="text-xs text-blue-600">{open ? 'hide' : 'show'}</span>
+      </button>
+
+      {open && (
+        <div className="mt-2 space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[11px] text-slate-500">
+              {data?.lastPulledAt
+                ? `Pulled ${fmtTime(data.lastPulledAt)} · ${data.linkedCount} of ${data.qbCustomerCount} linked`
+                : 'Customer list not pulled yet — use "Customers" under Sync now, then run the Web Connector'}
+            </p>
+            <label className="text-[11px] text-slate-500 inline-flex items-center gap-1 shrink-0">
+              <input
+                type="checkbox"
+                checked={showJobs}
+                onChange={e => { setShowJobs(e.target.checked); load(e.target.checked) }}
+              />
+              Show jobs
+            </label>
+          </div>
+
+          {data === null ? (
+            <p className="text-xs text-slate-400 py-1">Loading…</p>
+          ) : data.unmatched.length === 0 ? (
+            <p className="text-xs text-slate-400 py-1">Nothing to review.</p>
+          ) : (
+            <div className="space-y-1.5 max-h-80 overflow-y-auto">
+              {data.unmatched.map(row => (
+                <div key={row.id} className="px-2 py-1.5 rounded border border-slate-100 bg-slate-50">
+                  <div className="flex items-center gap-2">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-medium text-slate-700 truncate" title={row.fullName}>{row.fullName}</p>
+                      <p className="text-[10px] text-slate-400 truncate">
+                        {[row.city, row.state].filter(Boolean).join(', ') || row.phone || 'no address in QuickBooks'}
+                      </p>
+                    </div>
+                    {busy === row.id ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-400" />
+                    ) : (
+                      <div className="flex gap-1 shrink-0">
+                        <button
+                          className={btn}
+                          disabled={busy !== null}
+                          onClick={() => { setLinking(linking === row.id ? null : row.id); setTarget(null) }}
+                        >
+                          Link…
+                        </button>
+                        <button
+                          className={btn}
+                          disabled={busy !== null}
+                          onClick={() => act(row, 'Create', () => api.post(`/admin/qb/customers/${row.id}/create-company`, {}), 'customer created')}
+                        >
+                          Create
+                        </button>
+                        <button
+                          className={btn}
+                          disabled={busy !== null}
+                          onClick={() => act(row, 'Ignore', () => api.patch(`/admin/qb/customers/${row.id}`, { ignored: true }), 'ignored')}
+                        >
+                          Ignore
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  {row.suggestions.length > 0 && busy !== row.id && (
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                      <span className="text-[10px] text-slate-500">Looks like:</span>
+                      {row.suggestions.map(s => (
+                        <button
+                          key={s.id}
+                          className="px-2 py-0.5 text-[11px] font-medium rounded border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 disabled:opacity-50"
+                          disabled={busy !== null}
+                          onClick={() => act(row, 'Link', () => api.post(`/admin/qb/customers/${row.id}/link`, { companyId: s.id }), `linked to ${s.name}`)}
+                        >
+                          Link to {s.name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {linking === row.id && (
+                    <div className="mt-2 space-y-1.5">
+                      <CustomerSearch value={target} onChange={setTarget} />
+                      <button
+                        className={btn}
+                        disabled={!target || busy !== null}
+                        onClick={() => act(row, 'Link', () => api.post(`/admin/qb/customers/${row.id}/link`, { companyId: target!.id }), `linked to ${target!.name}`)}
+                      >
+                        Link to {target?.name ?? 'selected customer'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+              {data.unmatchedCount > data.unmatched.length && (
+                <p className="text-[11px] text-slate-400">Showing {data.unmatched.length} of {data.unmatchedCount}.</p>
+              )}
+            </div>
           )}
           {result && (
             <p className={cn('text-[11px]', result.kind === 'ok' ? 'text-emerald-700' : 'text-red-700')}>

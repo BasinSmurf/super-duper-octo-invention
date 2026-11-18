@@ -97,9 +97,7 @@ export function DirectSalePage() {
           i.productId === product.id ? { ...i, quantity: i.quantity + 1 } : i
         )
       }
-      // Products (physical goods) default taxable; services do not.
-      // category === 'service' → not taxable; everything else → taxable
-      const isTaxable = product.category !== 'service'
+      const isTaxable = product.isTaxable === true
       return [...prev, {
         productId: product.id,
         name: product.name,

@@ -1,8 +1,10 @@
-import { useState, useEffect } from 'react'
+import { useSync } from '@/contexts/SyncContext'
+import type { ManualRentalEquipment } from '@/lib/db-types'
+import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { v4 as uuidv4 } from 'uuid'
 import { db } from '@/lib/db'
-import { api } from '@/lib/api'
+import { api, ApiError } from '@/lib/api'
 import { cn } from '@/lib/cn'
 import { useAuth } from '@/contexts/AuthContext'
 import { hasPermission } from '@/lib/permissions'
@@ -10,6 +12,9 @@ import { usePermissions } from '@/contexts/PermissionsContext'
 import { ConfirmDestructiveDialog } from '@/components/ConfirmDestructiveDialog'
 import { rateUnitAbbrev, rateUnitLong, hasRate } from '@/lib/rentalRates'
 import { CustomerSearch } from '@/components/CustomerSearch'
+import { ProductSearch } from '@/components/ProductSearch'
+import { useCompanyPriceLevels } from '@/lib/priceLevels'
+import { loadRentalMonitors, rentalCatalogRate, repriceRentalRows, type RentalCatalogProduct } from '@/lib/rentalCatalog'
 import { LocationPicker, type LocationSelection } from '@/components/LocationPicker'
 import { DeployInspectionModal } from '@/components/DeployInspectionModal'
 import { resolveDeployCategory, type DeployInspectionResult } from '@/lib/deployChecklist'
@@ -17,6 +22,9 @@ import { RentalInspectionEditor, type InspectionData } from '@/components/Rental
 import { EquipmentScanner, type ScannedEquipment } from '@/components/EquipmentScanner'
 import { LiveClock } from '@/components/LiveClock'
 import { JobTypePillRow } from '@/components/JobTypePills'
+import { RentalBillingSettings } from '@/components/RentalBillingSettings'
+import { BomExtrasEditor } from '@/components/BomExtrasEditor'
+import { type RentalBom, EQUIP_CAT_LABEL, bomDisplayName, bomPackageLine, netAlreadyLined, switchPackageComposition } from '@/lib/rentalBom'
 import {
   ArrowLeft,
   Package,
@@ -57,12 +65,21 @@ interface EditForm {
   scName: string; scPhone: string; scEmail: string
   compTouched: boolean
   trailerOn: boolean; trailerManned: boolean; trailerRate: number | null
-  monitors: { id: string; productId: string; productName: string; qty: number; rate: number | null }[]
-  other: { id: string; label: string; qty: number; rate: number | null }[]
+  monitors: { id: string; productId: string; productName: string; qty: number; rate: number | null; manualRate?: boolean }[]
+  other: { id: string; label: string; productId?: string | null; catalogProduct?: RentalCatalogProduct; qty: number; rate: number | null; manualRate?: boolean }[]
   rig: boolean
+  // On-job package switch. undefined = keep the package the rental has;
+  // a package id = move to that variant; null = drop the package entirely.
+  // Takes effect from effectiveDate as a new composition window, so days
+  // already on the old package keep billing at the old package's rate.
+  packageId?: string | null
+  effectiveDate: string
+  compositionCorrection: boolean
   pics: RentalPic[]
   reason: string
 }
+
+const centralToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
 
 interface LinkedTicket {
   id: string
@@ -106,6 +123,7 @@ export function RentalDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { user } = useAuth()
+  const { syncState, enabled: offlineEnabled } = useSync()
   const { can } = usePermissions()
   const canEdit = hasPermission(user?.role, 'rentals:edit')
   const [deleteOpen, setDeleteOpen] = useState(false)
@@ -124,22 +142,33 @@ export function RentalDetailPage() {
     }
   }
   const [agreement, setAgreement] = useState<AgreementDetail | null>(null)
+  const agreementLoadRequest = useRef(0)
   // #1 Edit-with-reason: field_super / billing_ar / boss / admin can correct
   // ANYTHING on an existing rental. The reason is appended to notes as an
   // informal audit line.
   const [edit, setEdit] = useState<EditForm | null>(null)
   const [savingEdit, setSavingEdit] = useState(false)
-  const [monitorProducts, setMonitorProducts] = useState<{ id: string; name: string }[]>([])
+  const [monitorProducts, setMonitorProducts] = useState<RentalCatalogProduct[]>([])
+  // The customer's saved packages, for the on-job "Change package" picker.
+  const [customerPackages, setCustomerPackages] = useState<RentalBom[]>([])
+  const { levels: editPriceLevels } = useCompanyPriceLevels(edit?.customer?.id)
+  useEffect(() => {
+    setEdit(previous => previous ? { ...previous,
+      monitors: repriceRentalRows(previous.monitors, monitorProducts, previous.rateType, editPriceLevels),
+      other: previous.other.map(row => row.catalogProduct && !row.manualRate
+        ? { ...row, rate: rentalCatalogRate(row.catalogProduct, previous.rateType, editPriceLevels) } : row),
+    } : previous)
+  }, [edit?.rateType, monitorProducts, editPriceLevels])
   const patchEdit = (p: Partial<EditForm>) => setEdit(prev => prev ? { ...prev, ...p } : prev)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [linkedInvoices, setLinkedInvoices] = useState<LinkedInvoice[]>([])
   const [returningItem, setReturningItem] = useState<OfflineRentalAgreementItem | null>(null)
   const [completing, setCompleting] = useState(false)
-  // "Return All" flow: queue of items to inspect one at a time
-  const [returnAllQueue, setReturnAllQueue] = useState<OfflineRentalAgreementItem[]>([])
-  const [returnAllInspections, setReturnAllInspections] = useState<Map<string, InspectionData>>(new Map())
+  const [returnDate, setReturnDate] = useState(() => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()))
+  const [finalBillReady, setFinalBillReady] = useState(false)
   // #2 Redeploy / Add Gear: each scan posts a dated deployment event.
+  const [replacesItemId, setReplacesItemId] = useState('')
   const [showRedeploy, setShowRedeploy] = useState(false)
   const [showRedeployScanner, setShowRedeployScanner] = useState(false)
   const [redeployDate, setRedeployDate] = useState(() => {
@@ -151,17 +180,22 @@ export function RentalDetailPage() {
   const [pendingGear, setPendingGear] = useState<ScannedEquipment | null>(null)
 
   useEffect(() => {
-    if (id) loadAgreement(id)
-  }, [id])
-
-  useEffect(() => {
     if (!id) return
     api.get<{ data: LinkedInvoice[] }>(`/invoices?rentalAgreementId=${id}`)
       .then(res => setLinkedInvoices(res.data || []))
       .catch(() => setLinkedInvoices([]))
   }, [id])
 
+  useEffect(() => {
+    if (!id) return
+    const refresh = () => { void loadAgreement(id) }
+    window.addEventListener('focus', refresh)
+    return () => window.removeEventListener('focus', refresh)
+  }, [id, syncState.lastSyncedAt])
+  useEffect(() => { if (id) void loadAgreement(id) }, [id, syncState.lastSyncedAt])
+
   async function loadAgreement(agreementId: string) {
+    const request = ++agreementLoadRequest.current
     try {
       // Try Dexie first
       const local = await db.rentalAgreements.get(agreementId)
@@ -184,10 +218,12 @@ export function RentalDetailPage() {
             }
           })
         )
-        setAgreement({ ...local, items: enrichedItems })
+        if (request === agreementLoadRequest.current) setAgreement({ ...local, items: enrichedItems })
         setLoading(false)
       }
 
+      // Pending local deployment owns the visible state until the outbox lands.
+      if (local?._offlineStatus === 'pending') { setLoading(false); return }
       // Try API for fresh data
       try {
         const apiData = await api.get<any>(`/rentals/${agreementId}`)
@@ -203,11 +239,13 @@ export function RentalDetailPage() {
             fieldName: apiData.field?.name || null,
             padName: apiData.pad?.name || null,
             wellName: apiData.well?.wellName || null,
+            visitEquipment: apiData.visitEquipment,
             status: apiData.status,
             pickupType: apiData.pickupType || 'dispatch',
             startDate: apiData.startDate,
             endDate: apiData.endDate,
             billingRateType: apiData.billingRateType,
+            billingPolicy: apiData.billingPolicy,
             billingCadence: apiData.billingCadence || 'monthly',
             isFullyBilled: apiData.isFullyBilled ?? false,
             lastBilledThrough: apiData.lastBilledThrough ?? null,
@@ -258,7 +296,7 @@ export function RentalDetailPage() {
               assignedTechName: t.assignedTech?.name || null,
             })),
           }
-          setAgreement(detail)
+          if (request === agreementLoadRequest.current) setAgreement(detail)
         }
       } catch {
         // Offline — use local data
@@ -291,14 +329,11 @@ export function RentalDetailPage() {
         wells: wells.map(w => ({ id: w.id, wellName: w.wellName || '', padId: w.padId || '' })),
       }
     } catch { /* picker starts empty */ }
-    // Monitor catalog for composition line edits.
-    try {
-      const prods = await db.products
-        .where('category').anyOf('monitor_personal', 'monitor_area')
-        .filter(p => p.isActive !== false)
-        .toArray()
-      setMonitorProducts(prods.map(p => ({ id: p.id, name: p.name })).sort((a, b) => a.name.localeCompare(b.name)))
-    } catch { setMonitorProducts([]) }
+    // Use the same QB catalog and pricing as new à la carte rentals.
+    try { setMonitorProducts(await loadRentalMonitors()) }
+    catch { setMonitorProducts([]) }
+    try { setCustomerPackages(await api.get<RentalBom[]>(`/companies/${agreement.companyId}/rental-boms`) || []) }
+    catch { setCustomerPackages([]) }
 
     const comp = agreement.composition
     setEdit({
@@ -317,12 +352,55 @@ export function RentalDetailPage() {
       trailerOn: !!comp?.trailer,
       trailerManned: comp?.trailer?.manned ?? true,
       trailerRate: comp?.trailer?.rate ?? null,
-      monitors: (comp?.gasMonitors || []).map(g => ({ id: g.id, productId: g.productId, productName: g.productName || '', qty: g.qty, rate: g.rate ?? null })),
-      other: (comp?.other || []).map(o => ({ id: o.id, label: o.label, qty: o.qty, rate: o.rate ?? null })),
+      monitors: (comp?.gasMonitors || []).map(g => ({ id: g.id, productId: g.productId, productName: g.productName || '', qty: g.qty, rate: g.rate ?? null, manualRate: true })),
+      other: (comp?.other || []).map(o => ({ id: o.id, productId: o.productId, label: o.label, qty: o.qty, rate: o.rate ?? null, manualRate: true })),
       rig: !!comp?.drillingRig,
+      packageId: undefined,
+      effectiveDate: centralToday(),
+      compositionCorrection: false,
       pics: (agreement.pics || []).map(p => ({ ...p })),
       reason: '',
     })
+  }
+
+  // The package the edit would switch TO (undefined = no switch requested).
+  const switchTarget = edit?.packageId ? customerPackages.find(b => b.id === edit.packageId) ?? null : null
+
+  /**
+   * The package-related composition fields for the next window. Without a
+   * switch they carry through untouched (rebuilding without them would
+   * silently delete a charge). With one, the roster, the package line, and the
+   * over-baseline extras are all rebuilt against the new package — extras are
+   * re-diffed from what's on site NOW, so gear the new package covers stops
+   * billing as an overage on the switch date.
+   */
+  function packageFieldsForSave(): Record<string, unknown> {
+    const comp = agreement?.composition
+    if (!edit || edit.packageId === undefined) {
+      return {
+        ...(comp?.bom ? { bom: comp.bom } : {}),
+        ...(comp?.bomType ? { bomType: comp.bomType } : {}),
+        ...(comp?.bomPackage ? { bomPackage: comp.bomPackage } : {}),
+        ...(comp?.bomExtras ? { bomExtras: comp.bomExtras } : {}),
+      }
+    }
+    if (edit.packageId === null || !switchTarget) return {}
+    // On site now, minus gear already carried on its own priced line.
+    const onSite = (agreement?.items || [])
+      .filter(i => !i.returnedDate && i.status !== 'returned')
+      .map(i => i.productCategory || null)
+    const lined = new Map<string, number>()
+    for (const m of edit.monitors) {
+      const cat = monitorProducts.find(p => p.id === m.productId)?.category
+      if (cat) lined.set(cat, (lined.get(cat) || 0) + (m.qty || 1))
+    }
+    const next = switchPackageComposition(switchTarget, edit.rateType, netAlreadyLined(onSite, lined))
+    return {
+      bom: next.bom,
+      bomType: next.bomType,
+      ...(next.bomPackage ? { bomPackage: next.bomPackage } : {}),
+      ...(next.bomExtras.length ? { bomExtras: next.bomExtras } : {}),
+    }
   }
 
   // #5 When the composition is being edited, every present line needs a rate
@@ -330,6 +408,7 @@ export function RentalDetailPage() {
   // rather than AR hitting the server's fail-loud guard at invoice time.
   function compositionEditIncomplete(): boolean {
     if (!edit?.compTouched) return false
+    if (switchTarget && !hasRate(bomPackageLine(switchTarget, edit.rateType)?.rate)) return true
     return (edit.trailerOn && !hasRate(edit.trailerRate))
       || edit.monitors.some(m => m.productId && !hasRate(m.rate))
       || edit.other.some(o => o.label.trim() && !hasRate(o.rate))
@@ -381,21 +460,20 @@ export function RentalDetailPage() {
     // Composition: only rebuild when touched — never silently flip a legacy
     // per-item rental onto composition billing.
     if (edit.compTouched) {
+      payload.effectiveDate = edit.effectiveDate || centralToday()
+      payload.compositionCorrection = edit.compositionCorrection
+      payload.reason = edit.reason.trim()
       payload.composition = {
+        ...(agreement.composition?.manualEquipment ? { manualEquipment: agreement.composition.manualEquipment } : {}),
         trailer: edit.trailerOn ? { manned: edit.trailerManned, rate: edit.trailerRate } : null,
         gasMonitors: edit.monitors.filter(m => m.productId).map(m => ({
           id: m.id, productId: m.productId, productName: m.productName, qty: m.qty || 1, rate: m.rate,
         })),
-        other: edit.other.filter(o => o.label.trim()).map(o => ({ id: o.id, label: o.label.trim(), qty: o.qty || 1, rate: o.rate })),
+        other: edit.other.filter(o => o.label.trim()).map(o => ({ id: o.id, productId: o.productId, label: o.label.trim(), qty: o.qty || 1, rate: o.rate })),
         drillingRig: edit.rig,
-        // Carried through untouched: the package roster, its billable line, and
-        // any over-baseline extras the tech's deploy resolved. None of them are
-        // editable here, and rebuilding without them would silently delete a
-        // charge (previously the roster survived only on rig jobs).
-        ...(agreement.composition?.bom ? { bom: agreement.composition.bom } : {}),
-        ...(agreement.composition?.bomType ? { bomType: agreement.composition.bomType } : {}),
-        ...(agreement.composition?.bomPackage ? { bomPackage: agreement.composition.bomPackage } : {}),
-        ...(agreement.composition?.bomExtras ? { bomExtras: agreement.composition.bomExtras } : {}),
+        // The package roster, its billable line, and the over-baseline extras:
+        // carried through untouched unless the package is being switched.
+        ...packageFieldsForSave(),
       }
     }
 
@@ -416,83 +494,49 @@ export function RentalDetailPage() {
     setSavingEdit(false)
   }
 
+  async function persistReturnedItem(item: OfflineRentalAgreementItem, inspectionData: InspectionData) {
+    if (!id || !returnDate) throw new Error('Choose a return date')
+    let pending = false
+    try {
+      await api.patch(`/rentals/${id}/items/${item.id}/return`, { inspectionData, returnedDate: returnDate })
+    } catch (err) {
+      if (err instanceof ApiError && err.status >= 400 && err.status < 500) throw err
+      if (!offlineEnabled) throw new Error('Connect to the server to save this return. This account does not run offline sync.')
+      pending = true
+    }
+    const now = new Date().toISOString()
+    if (pending) await db.mutationQueue.add({ table: 'rentalAgreementItems', action: 'update', entityId: item.id,
+      payload: { status: 'returned', returnedDate: returnDate, inspectionData }, createdAt: now, status: 'pending', retryCount: 0 })
+    await db.rentalAgreementItems.update(item.id, { status: 'returned', returnedDate: returnDate,
+      _offlineStatus: pending ? 'pending' : 'synced' })
+    await db.equipment.update(item.serializedEquipmentId, { status: 'available', currentRentalId: null, currentCustomerId: null })
+  }
+
   async function handleReturnItem(item: OfflineRentalAgreementItem, inspectionData: InspectionData) {
     if (!agreement || !id) return
     try {
-      // Update local Dexie
-      await db.rentalAgreementItems.update(item.id, {
-        status: 'returned',
-        returnedDate: new Date().toISOString(),
-        _offlineStatus: 'pending',
-      })
-      await db.equipment.update(item.serializedEquipmentId, {
-        status: 'available',
-        currentRentalId: null,
-        currentCustomerId: null,
-      })
-
-      // Enqueue mutation
-      const now = new Date().toISOString()
-      await db.mutationQueue.add({
-        table: 'rentalAgreementItems',
-        action: 'update',
-        entityId: item.id,
-        payload: {
-          status: 'returned',
-          returnedDate: now,
-        },
-        createdAt: now,
-        status: 'pending',
-        retryCount: 0,
-      })
-
-      // Try API call directly too for immediate feedback
-      try {
-        await api.patch(`/rentals/${id}/items/${item.id}/return`, { inspectionData })
-      } catch {
-        // Will sync later via mutation queue
-      }
-
-      // Check if this was the last deployed item — auto-complete the agreement
-      const remainingDeployed = agreement.items.filter(
-        i => i.status === 'deployed' && i.id !== item.id
-      ).length
-      if (remainingDeployed === 0) {
-        await completeAgreement()
-      }
-
-      // Reload
+      await persistReturnedItem(item, inspectionData)
+      if (agreement.items.filter(i => i.status === 'deployed' && i.id !== item.id).length === 0 && (agreement.composition?.manualEquipment || []).every(row => row.status === 'returned')) await completeAgreement()
       setReturningItem(null)
-      loadAgreement(id)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to return item')
-    }
+      await loadAgreement(id)
+    } catch (err) { setError(err instanceof Error ? err.message : 'Failed to return item') }
   }
 
-  // Shared: mark the agreement itself as completed (no item returns)
   async function completeAgreement() {
-    if (!id) return
+    if (!id || !returnDate) throw new Error('Choose a close date')
     const now = new Date().toISOString()
-    await db.rentalAgreements.update(id, {
-      status: 'completed',
-      endDate: now,
-      updatedAt: now,
-      _offlineStatus: 'pending',
-    })
-    await db.mutationQueue.add({
-      table: 'rentalAgreements',
-      action: 'update',
-      entityId: id,
-      payload: { status: 'completed', endDate: now },
-      createdAt: now,
-      status: 'pending',
-      retryCount: 0,
-    })
-    try {
-      await api.patch(`/rentals/${id}/complete`, {})
-    } catch {
-      // Will sync later
+    let pending = false
+    try { await api.patch(`/rentals/${id}/complete`, { endDate: returnDate }) }
+    catch (err) {
+      if (err instanceof ApiError && err.status >= 400 && err.status < 500) throw err
+      if (!offlineEnabled) throw new Error('Connect to the server to save this return. This account does not run offline sync.')
+      pending = true
     }
+    if (pending) await db.mutationQueue.add({ table: 'rentalAgreements', action: 'update', entityId: id,
+      payload: { status: 'completed', endDate: returnDate }, createdAt: now, status: 'pending', retryCount: 0 })
+    await db.rentalAgreements.update(id, { status: 'completed', endDate: returnDate, updatedAt: now,
+      _offlineStatus: pending ? 'pending' : 'synced' })
+    setFinalBillReady(!pending)
   }
 
   // #2 Redeploy: add a scanned piece of gear as a dated deployment event.
@@ -520,11 +564,13 @@ export function RentalDetailPage() {
       if (agreement.billingRateType === 'monthly') return prod.defaultRentalRateMonthly ?? null
       return null
     }
+    const itemId = uuidv4()
     setAddingGear(true)
     setError('')
     try {
       // ONLINE path — post the parent, then any available assembly children.
       const parentItem = await api.post<{ id: string }>(`/rentals/${id}/items`, {
+        id: itemId, replacesItemId: replacesItemId || undefined,
         serializedEquipmentId: equip.id,
         productId: equip.productId,
         rate: getRate(equip.product),
@@ -563,10 +609,13 @@ export function RentalDetailPage() {
       }
       setShowRedeploy(false)
       loadAgreement(id)
-    } catch {
+    } catch (error) {
+      if (error instanceof ApiError && error.status < 500) {
+        setError(error.message)
+        return
+      }
       // OFFLINE fallback — parent only, via Dexie + queued create.
       try {
-        const itemId = uuidv4()
         const now = new Date().toISOString()
         await db.rentalAgreementItems.add({
           id: itemId,
@@ -592,6 +641,8 @@ export function RentalDetailPage() {
           action: 'create',
           entityId: itemId,
           payload: {
+            replacesItemId: replacesItemId || undefined,
+            deployInspection: inspection,
             rentalAgreementId: id,
             productId: equip.productId,
             serializedEquipmentId: equip.id,
@@ -615,67 +666,6 @@ export function RentalDetailPage() {
     }
   }
 
-  // "Return All & Complete" — start the inspection queue for each deployed item
-  function handleComplete() {
-    if (!agreement) return
-    const deployedItems = agreement.items.filter(i => i.status === 'deployed')
-    if (deployedItems.length === 0) return
-    setReturnAllInspections(new Map())
-    setReturnAllQueue(deployedItems)
-    // Open inspection for the first item
-    setReturningItem(deployedItems[0])
-  }
-
-  // Called when an inspection completes during "Return All" flow
-  async function handleReturnAllItemInspected(item: OfflineRentalAgreementItem, inspectionData: InspectionData) {
-    if (!agreement || !id) return
-
-    // Return this item
-    const now = new Date().toISOString()
-    await db.rentalAgreementItems.update(item.id, {
-      status: 'returned',
-      returnedDate: now,
-      _offlineStatus: 'pending',
-    })
-    await db.equipment.update(item.serializedEquipmentId, {
-      status: 'available',
-      currentRentalId: null,
-      currentCustomerId: null,
-    })
-    await db.mutationQueue.add({
-      table: 'rentalAgreementItems',
-      action: 'update',
-      entityId: item.id,
-      payload: { status: 'returned', returnedDate: now },
-      createdAt: now,
-      status: 'pending',
-      retryCount: 0,
-    })
-    try {
-      await api.patch(`/rentals/${id}/items/${item.id}/return`, { inspectionData })
-    } catch { /* sync later */ }
-
-    // Track this inspection
-    const updated = new Map(returnAllInspections)
-    updated.set(item.id, inspectionData)
-    setReturnAllInspections(updated)
-
-    // Find the next un-inspected item in the queue
-    const remaining = returnAllQueue.filter(qi => !updated.has(qi.id))
-    if (remaining.length > 0) {
-      // Show inspection for next item
-      setReturningItem(remaining[0])
-    } else {
-      // All items inspected & returned — complete the agreement
-      setCompleting(true)
-      setReturningItem(null)
-      setReturnAllQueue([])
-      await completeAgreement()
-      setCompleting(false)
-      loadAgreement(id)
-    }
-  }
-
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -695,6 +685,12 @@ export function RentalDetailPage() {
     )
   }
 
+  const visitEquipment: ManualRentalEquipment[] = agreement.visitEquipment || [
+    ...(agreement.composition?.manualEquipment || []),
+    ...agreement.items.map(item => ({ id: item.id, serial: item.serialNumber || '', type: item.productName || 'Equipment', testDate: item.deployInspection?.testDate || '',
+      deployedAt: item.deployedDate, status: item.status === 'returned' ? 'returned' as const : 'deployed' as const, returnedAt: item.returnedDate || undefined })),
+  ]
+  const deployedVisitCount = visitEquipment.filter(item => item.status !== 'returned').length
   const deployedCount = agreement.items.filter(i => i.status === 'deployed').length
   const returnedCount = agreement.items.filter(i => i.status === 'returned').length
 
@@ -928,6 +924,90 @@ export function RentalDetailPage() {
               Ordered Composition
               <span className="font-normal text-slate-400"> — rates are per {rateUnitLong(edit.rateType)}; these drive the invoice</span>
             </p>
+            {agreement.pickupType !== 'walk_in' && (customerPackages.length > 0 || agreement.composition?.bomPackage) && (() => {
+              const current = agreement.composition?.bomPackage
+              const nextLine = switchTarget ? bomPackageLine(switchTarget, edit.rateType) : null
+              const preview = edit.packageId ? packageFieldsForSave() as { bomExtras?: { label: string; qty?: number; rate?: number | null }[] } : null
+              return (
+                <div className="rounded-lg bg-slate-50 border border-slate-200 p-2.5 space-y-2">
+                  <label className="block text-xs font-medium text-slate-600">
+                    Package
+                    <select
+                      aria-label="Rental package"
+                      value={edit.packageId === undefined ? '__keep' : edit.packageId === null ? '__none' : edit.packageId}
+                      onChange={e => {
+                        const v = e.target.value
+                        const packageId = v === '__keep' ? undefined : v === '__none' ? null : v
+                        const target = packageId ? customerPackages.find(b => b.id === packageId) : null
+                        // A trailer the new package covers rides inside its line
+                        // ($0, like dispatch); without a package it needs its own rate.
+                        const trailerRate = !edit.trailerOn ? edit.trailerRate
+                          : target?.packageProductId ? 0
+                          : packageId === null && edit.trailerRate === 0 ? null
+                          : edit.trailerRate
+                        patchEdit({ packageId, trailerRate, compTouched: true })
+                      }}
+                      className="mt-1 w-full px-2 py-1.5 border border-slate-300 rounded text-sm bg-white font-normal"
+                    >
+                      <option value="__keep">{current ? `Keep: ${current.label}${typeof current.rate === 'number' ? ` @ $${current.rate}/${rateUnitAbbrev(edit.rateType)}` : ''}` : 'Keep: no package'}</option>
+                      {customerPackages.map(b => {
+                        const line = bomPackageLine(b, edit.rateType)
+                        return (
+                          <option key={b.id} value={b.id}>
+                            {bomDisplayName(b)}{typeof line?.rate === 'number' ? ` — $${line.rate}/${rateUnitAbbrev(edit.rateType)}` : ' — no rate'}
+                          </option>
+                        )
+                      })}
+                      {current && <option value="__none">No package — bill items individually</option>}
+                    </select>
+                  </label>
+                  {edit.packageId !== undefined && (
+                    <div className="text-xs text-slate-600 space-y-1">
+                      {switchTarget && nextLine && (
+                        <p>
+                          Bills as <span className="font-medium">{nextLine.label}</span>
+                          {typeof nextLine.rate === 'number'
+                            ? <> @ ${nextLine.rate}/{rateUnitAbbrev(edit.rateType)}{nextLine.priceLevel ? <span className="text-slate-400"> ({nextLine.priceLevel} price level)</span> : <span className="text-amber-600"> (list — not on this customer&rsquo;s price level)</span>}</>
+                            : <span className="text-red-600"> — no rate; bind a QB item on the customer&rsquo;s package first</span>}
+                        </p>
+                      )}
+                      {switchTarget && switchTarget.items.length > 0 && (
+                        <p className="text-slate-500">Includes {switchTarget.items.map(i => `${i.qty}× ${i.label || EQUIP_CAT_LABEL[i.equipmentCategory] || i.equipmentCategory}`).join(', ')}</p>
+                      )}
+                      {preview?.bomExtras?.length
+                        ? <p className="text-slate-500">Over the new package (re-checked against gear on site): {preview.bomExtras.map(x => `${x.qty ?? 1}× ${x.label}${typeof x.rate === 'number' ? ` @ $${x.rate}` : ' — unpriced'}`).join('; ')}</p>
+                        : switchTarget ? <p className="text-slate-400">Nothing on site beyond the new package.</p> : null}
+                      {switchTarget && (() => {
+                        // Gear the new package includes that is ALSO on its own
+                        // priced line would bill twice — the line isn't an overage.
+                        const included = new Set(switchTarget.items.map(i => i.equipmentCategory))
+                        const dup = edit.monitors.filter(m => m.productId && included.has(monitorProducts.find(p => p.id === m.productId)?.category || ''))
+                        return dup.length ? (
+                          <p className="text-amber-700">
+                            This package includes area monitors, and {dup.map(m => `${m.qty}× ${m.productName || 'monitor'}`).join(', ')} still bill on their own line below. Remove that line if the package covers them.
+                          </p>
+                        ) : null
+                      })()}
+                      {edit.packageId === null && <p className="text-amber-700">The package line, its contents, and its overages stop on the date below. Price the trailer and any gear individually.</p>}
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
+              <div className="space-y-2">
+              <label className="flex items-center gap-2 text-sm text-slate-700">
+                <input type="checkbox" checked={edit.compositionCorrection}
+                  onChange={e => patchEdit({ compositionCorrection: e.target.checked, compTouched: true })} />
+                Correct charges from the start of this rental
+              </label>
+              {edit.compositionCorrection ? <p className="text-xs text-amber-700">Billing will use these charges for every unbilled day, replacing earlier charge changes. Void or correct existing invoices first.</p> :
+              <label className="flex items-center justify-between gap-2 text-xs font-medium text-slate-600">
+                <span>Changes take effect <span className="font-normal text-slate-400">— earlier days keep billing as they were</span></span>
+                <input type="date" value={edit.effectiveDate} max={centralToday()}
+                  onChange={e => patchEdit({ effectiveDate: e.target.value })}
+                  className="px-2 py-1 border border-slate-300 rounded text-sm font-normal" />
+              </label>}
+              </div>
             {agreement.pickupType !== 'walk_in' && (
               <div>
                 <label className="flex items-center justify-between cursor-pointer">
@@ -960,13 +1040,13 @@ export function RentalDetailPage() {
                   onChange={e => {
                     const opt = monitorProducts.find(p => p.id === e.target.value)
                     patchEdit({
-                      monitors: edit.monitors.map((r, i) => i === idx ? { ...r, productId: e.target.value, productName: opt?.name || '' } : r),
+                      monitors: edit.monitors.map((r, i) => i === idx ? { ...r, productId: e.target.value, productName: opt?.name || '', rate: opt ? rentalCatalogRate(opt, edit.rateType, editPriceLevels) : null, manualRate: false } : r),
                       compTouched: true,
                     })
                   }}
                   className="flex-1 min-w-0 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white">
                   <option value="">— pick monitor type —</option>
-                  {monitorProducts.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  {monitorProducts.map(p => <option key={p.id} value={p.id}>{p.partNumber ? `${p.partNumber} — ` : ''}{p.name}</option>)}
                   {g.productId && !monitorProducts.some(p => p.id === g.productId) && (
                     <option value={g.productId}>{g.productName || 'Current selection'}</option>
                   )}
@@ -976,7 +1056,7 @@ export function RentalDetailPage() {
                   className="w-14 px-2 py-1.5 border border-slate-300 rounded text-sm" />
                 <span className="text-xs text-slate-400">$</span>
                 <input type="number" min={0} value={g.rate ?? ''} placeholder="rate"
-                  onChange={e => patchEdit({ monitors: edit.monitors.map((r, i) => i === idx ? { ...r, rate: e.target.value ? parseFloat(e.target.value) : null } : r), compTouched: true })}
+                  onChange={e => patchEdit({ monitors: edit.monitors.map((r, i) => i === idx ? { ...r, rate: e.target.value ? parseFloat(e.target.value) : null, manualRate: true } : r), compTouched: true })}
                   className="w-20 px-2 py-1.5 border border-slate-300 rounded text-sm" />
                 <button type="button" onClick={() => patchEdit({ monitors: edit.monitors.filter((_, i) => i !== idx), compTouched: true })}
                   className="text-slate-400 hover:text-red-600 px-1"><X className="w-4 h-4" /></button>
@@ -990,6 +1070,11 @@ export function RentalDetailPage() {
                 onClick={() => patchEdit({ other: [...edit.other, { id: uuidv4(), label: '', qty: 1, rate: null }], compTouched: true })}
                 className="text-sm font-medium text-blue-600 hover:text-blue-700">+ Other item</button>
             </div>
+            <ProductSearch division={4} priceLevels={editPriceLevels} placeholder="Search QB item or part # to add…"
+              onSelect={product => patchEdit({ other: [...edit.other, {
+                id: uuidv4(), productId: product.id, catalogProduct: product, label: product.name,
+                qty: 1, rate: rentalCatalogRate(product, edit.rateType, editPriceLevels), manualRate: false,
+              }], compTouched: true })} />
             {edit.other.map((o, idx) => (
               <div key={o.id} className="flex gap-2 items-center">
                 <input type="text" value={o.label} placeholder="Wind sock, signage, …"
@@ -1000,7 +1085,7 @@ export function RentalDetailPage() {
                   className="w-14 px-2 py-1.5 border border-slate-300 rounded text-sm" />
                 <span className="text-xs text-slate-400">$</span>
                 <input type="number" min={0} value={o.rate ?? ''} placeholder="rate"
-                  onChange={e => patchEdit({ other: edit.other.map((r, i) => i === idx ? { ...r, rate: e.target.value ? parseFloat(e.target.value) : null } : r), compTouched: true })}
+                  onChange={e => patchEdit({ other: edit.other.map((r, i) => i === idx ? { ...r, rate: e.target.value ? parseFloat(e.target.value) : null, manualRate: true } : r), compTouched: true })}
                   className="w-20 px-2 py-1.5 border border-slate-300 rounded text-sm" />
                 <button type="button" onClick={() => patchEdit({ other: edit.other.filter((_, i) => i !== idx), compTouched: true })}
                   className="text-slate-400 hover:text-red-600 px-1"><X className="w-4 h-4" /></button>
@@ -1083,6 +1168,17 @@ export function RentalDetailPage() {
         </div>
       )}
 
+      {visitEquipment.length > 0 && <div className="bg-white border rounded-lg p-4 mb-4">
+        <h2 className="font-semibold mb-2">Rental equipment</h2>
+        {agreement.status === 'active' && <div className="flex gap-4 mb-3 text-sm text-blue-700">
+          <button type="button" onClick={() => navigate(`/tickets/swap?rentalId=${agreement.id}`)}>Swap equipment</button>
+          <button type="button" onClick={() => navigate(`/rentals/return?rentalId=${agreement.id}&returnDate=${returnDate}`)}>Return / inspect selected equipment</button>
+        </div>}
+        <div className="overflow-x-auto"><table className="w-full text-sm text-left">
+          <thead><tr><th className="p-2">Serial</th><th className="p-2">Type</th><th className="p-2">Test date</th><th className="p-2">Status</th><th className="p-2">Inspection</th></tr></thead>
+          <tbody>{visitEquipment.map(item => <tr key={item.id} className="border-t"><td className="p-2">{item.serial}</td><td className="p-2">{item.type}</td><td className="p-2">{item.testDate}</td><td className="p-2">{item.status === 'returned' ? `Returned ${item.returnedAt}` : 'Deployed'}</td><td className="p-2">{item.returnInspectionId && <button className="text-blue-700" onClick={() => navigate(`/tickets/${item.returnInspectionId}`)}>View batch inspection</button>}</td></tr>)}</tbody>
+        </table></div>
+      </div>}
       {/* Info Card */}
       <div className="bg-white rounded-lg border border-slate-200 p-4 mb-4">
         <div className="grid grid-cols-2 gap-3 text-sm">
@@ -1126,6 +1222,15 @@ export function RentalDetailPage() {
       </div>
 
       {/* Site Contact Card */}
+      <RentalBillingSettings id={agreement.id} policy={agreement.billingPolicy}
+        canEdit={canEdit && agreement.status !== 'cancelled'} onSaved={() => loadAgreement(agreement.id)} />
+
+      {agreement.pickupType === 'walk_in' && <section className="mb-4 rounded-lg border bg-white p-4 text-sm">
+        <h3 className="font-semibold">Rented to</h3>
+        <p>{agreement.personCallingName || agreement.liabilitySignedByName || 'Contact not recorded'}</p>
+        {agreement.personCallingPhone && <p>{agreement.personCallingPhone}</p>}
+        <p className="text-slate-500">Bill to: {agreement.companyName}</p>
+      </section>}
       {agreement.siteContactName && (
         <div className="bg-white rounded-lg border border-slate-200 p-4 mb-4">
           <h3 className="text-sm font-medium text-slate-700 mb-2 flex items-center gap-2">
@@ -1155,7 +1260,7 @@ export function RentalDetailPage() {
         <div className="bg-white rounded-lg border border-slate-200 p-4 mb-4">
           <h3 className="text-sm font-medium text-slate-700 mb-2 flex items-center gap-2">
             <Package className="w-4 h-4 text-slate-400" />
-            Ordered
+            Rental charges
           </h3>
           <div className="space-y-1.5 text-sm text-slate-800">
             {(() => {
@@ -1180,22 +1285,18 @@ export function RentalDetailPage() {
                     <p>
                       {agreement.composition!.bomPackage.label}
                       {rateTag(agreement.composition!.bomPackage.rate)}
-                      <span className="text-xs text-slate-400"> — covers the baseline below</span>
+                      <span className="text-xs text-slate-400"> — package charge; listed baseline equipment is included</span>
                     </p>
                   )}
-                  {agreement.composition!.bomExtras?.map(e => (
-                    <p key={e.id}>
-                      {e.qty}× {e.label}{rateTag(e.rate)}
-                      <span className="text-xs text-blue-600"> — over baseline</span>
-                    </p>
-                  ))}
+                  <BomExtrasEditor id={agreement.id} extras={agreement.composition!.bomExtras || []} unit={unit}
+                    canEdit={canEdit && agreement.status !== 'cancelled'} onSaved={() => loadAgreement(agreement.id)} />
                 </>
               )
             })()}
             {(agreement.composition.bom?.length ?? 0) > 0 && (
               <div className="mt-1">
                 <p className="font-medium">
-                  {agreement.composition.drillingRig ? 'Drilling Rig BOM' : 'Package baseline'}
+                  {agreement.composition.drillingRig ? 'Drilling Rig BOM' : 'Included package equipment — no separate charge'}
                   <span className="font-normal text-xs text-slate-400"> — covered by the package, not charged individually</span>
                 </p>
                 <ul className="list-disc pl-5 text-xs text-slate-600">
@@ -1236,7 +1337,9 @@ export function RentalDetailPage() {
         </div>
       )}
 
-      {/* Equipment List */}
+      {/* Inventory records remain available beneath the shared visit equipment list. */}
+      <details className="mb-4 rounded-lg border border-slate-200 bg-white">
+      <summary className="cursor-pointer p-4 text-sm font-medium">Stock records and add gear</summary>
       <div className="bg-white rounded-lg border border-slate-200 mb-4">
         <div className="p-4 border-b border-slate-100">
           <div className="flex items-center justify-between">
@@ -1304,7 +1407,7 @@ export function RentalDetailPage() {
         </div>
 
         {/* #2 Redeploy / Add Gear — only while the rental is active */}
-        {agreement.status === 'active' && (
+        {['active', 'scheduled'].includes(agreement.status) && (
           <div className="p-4 border-t border-slate-100">
             {!showRedeploy ? (
               <button
@@ -1317,6 +1420,13 @@ export function RentalDetailPage() {
               </button>
             ) : (
               <div className="space-y-3">
+                <label className="block text-xs font-medium text-slate-600">Deployment purpose
+                  <select aria-label="Deployment purpose" value={replacesItemId} onChange={e => setReplacesItemId(e.target.value)} className="block border rounded-lg px-3 py-2 mt-1">
+                    <option value="">Additional equipment</option>
+                    {agreement.items.filter(i => i.status === 'deployed').map(i => <option key={i.id} value={i.id}>Replace {i.serialNumber || i.id}</option>)}
+                  </select>
+                </label>
+                {replacesItemId && <p className="text-xs text-slate-500">The original unit is returned on the deployment date. Only the replacement bills for that date. Scan the same product type.</p>}
                 <div>
                   <label className="block text-xs font-medium text-slate-600 mb-1">
                     Deployed date
@@ -1353,6 +1463,8 @@ export function RentalDetailPage() {
           </div>
         )}
       </div>
+
+      </details>
 
       {showRedeployScanner && (
         <EquipmentScanner
@@ -1432,7 +1544,7 @@ export function RentalDetailPage() {
               <button
                 key={inv.id}
                 type="button"
-                onClick={() => navigate(`/invoices/${inv.id}`)}
+                onClick={() => navigate(`/billing/${inv.id}`)}
                 className="w-full text-left border border-slate-200 rounded-lg p-2.5 hover:bg-slate-50 transition-colors flex items-center justify-between gap-2"
               >
                 <span className="text-sm font-medium text-slate-900">{inv.invoiceNumber}</span>
@@ -1508,33 +1620,42 @@ export function RentalDetailPage() {
         </div>
       )}
 
+      {finalBillReady && <div role="status" className="mt-6 rounded-lg border border-green-300 bg-green-50 p-4">
+        <p className="font-semibold">Rental closed — ready for final billing</p>
+        <p className="mt-1 text-sm">The remaining charges through {formatCalendarDateNumeric(returnDate)} need one final invoice.</p>
+        {hasPermission(user?.role, 'page:billing') && <button type="button" onClick={() => navigate('/billing?tab=rentals')} className="mt-2 text-sm font-medium text-blue-700 underline">Review final bill</button>}
+      </div>}
+      {agreement.status === 'active' && <label className="mt-6 block text-sm font-medium">Return / close date
+        <input type="date" value={returnDate} min={agreement.startDate.slice(0, 10)} max={new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())}
+          onInput={event => setReturnDate(event.currentTarget.value)} onChange={event => setReturnDate(event.target.value)} required className="ml-3 rounded border p-2" />
+      </label>}
       {/* Actions */}
-      {agreement.status === 'active' && deployedCount > 0 && (
+      {agreement.status === 'active' && deployedVisitCount > 0 && (
         <div className="mt-6">
           <button
             type="button"
-            onClick={handleComplete}
-            disabled={completing}
+            onClick={() => navigate(`/rentals/return?rentalId=${id}&returnDate=${returnDate}`)}
+            disabled={completing || !returnDate}
             className="w-full flex items-center justify-center gap-2 py-3 bg-slate-800 text-white rounded-lg font-medium hover:bg-slate-700 transition-colors disabled:opacity-50"
           >
             <CheckCircle2 className="w-5 h-5" />
-            {completing ? 'Completing...' : `Return All & Complete (${deployedCount} items)`}
+            {completing ? 'Completing...' : `Return All & Complete (${deployedVisitCount} items)`}
           </button>
         </div>
       )}
 
       {/* All items returned but agreement still active — offer to close */}
-      {agreement.status === 'active' && deployedCount === 0 && agreement.items.length > 0 && (
+      {agreement.status === 'active' && deployedVisitCount === 0 && visitEquipment.length > 0 && (
         <div className="mt-6">
           <button
             type="button"
             onClick={async () => {
               setCompleting(true)
-              await completeAgreement()
-              setCompleting(false)
-              loadAgreement(id!)
+              try { await completeAgreement(); await loadAgreement(id!) }
+              catch (err) { setError(err instanceof Error ? err.message : 'Failed to close rental') }
+              finally { setCompleting(false) }
             }}
-            disabled={completing}
+            disabled={completing || !returnDate}
             className="w-full flex items-center justify-center gap-2 py-3 bg-green-700 text-white rounded-lg font-medium hover:bg-green-600 transition-colors disabled:opacity-50"
           >
             <CheckCircle2 className="w-5 h-5" />
@@ -1545,24 +1666,18 @@ export function RentalDetailPage() {
 
       {/* Return Inspection Modal */}
       {returningItem && (
+        <div>
+        <label className="fixed top-3 left-1/2 z-[60] -translate-x-1/2 rounded bg-white p-2 shadow text-sm">Return date <input type="date" required value={returnDate} onInput={event => setReturnDate(event.currentTarget.value)} onChange={event => setReturnDate(event.target.value)} /></label>
         <RentalInspectionEditor
           key={returningItem.id}
           equipmentName={returningItem.productName || 'Equipment'}
           serialNumber={returningItem.serialNumber || ''}
-          headerNote={returnAllQueue.length > 0
-            ? `Item ${returnAllInspections.size + 1} of ${returnAllQueue.length}`
-            : undefined}
-          onComplete={(data: InspectionData) =>
-            returnAllQueue.length > 0
-              ? handleReturnAllItemInspected(returningItem, data)
-              : handleReturnItem(returningItem, data)
-          }
+          onComplete={(data: InspectionData) => handleReturnItem(returningItem, data)}
           onCancel={() => {
             setReturningItem(null)
-            setReturnAllQueue([])
-            setReturnAllInspections(new Map())
           }}
         />
+        </div>
       )}
     </div>
   )

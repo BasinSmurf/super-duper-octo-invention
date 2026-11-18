@@ -17,6 +17,7 @@
  */
 
 import type { TicketStatus, UserRole } from '../db.js';
+import { permissionDeniedMessage } from './permissionMessages.js';
 
 interface Transition {
   to: TicketStatus;
@@ -46,20 +47,20 @@ const TRANSITIONS: Record<string, Transition[]> = {
   ],
   supervisor_review: [
     { to: 'billing_queue', allowedRoles: ['field_super', 'platform_admin'] },
-    { to: 'awaiting_signature', allowedRoles: ['field_super', 'billing_ar', 'platform_admin'] }, // send for signature
+    { to: 'awaiting_signature', allowedRoles: ['field_super', 'billing_ar', 'ar_supervisor', 'platform_admin'] }, // send for signature
     { to: 'in_progress', allowedRoles: ['field_super', 'platform_admin'] }, // reject back
   ],
   awaiting_signature: [
-    { to: 'billing_queue', allowedRoles: ['billing_ar', 'platform_admin'] },     // signed (webhook or manual)
+    { to: 'billing_queue', allowedRoles: ['billing_ar', 'ar_supervisor', 'platform_admin'] },     // signed (webhook or manual)
     { to: 'supervisor_review', allowedRoles: ['field_super', 'platform_admin'] }, // cancel signature
   ],
   billing_queue: [
-    { to: 'invoiced', allowedRoles: ['billing_ar', 'platform_admin'] },
-    { to: 'supervisor_review', allowedRoles: ['billing_ar', 'platform_admin'] }, // kick back
+    { to: 'invoiced', allowedRoles: ['billing_ar', 'ar_supervisor', 'platform_admin'] },
+    { to: 'supervisor_review', allowedRoles: ['billing_ar', 'ar_supervisor', 'platform_admin'] }, // kick back
   ],
   invoiced: [
-    { to: 'closed', allowedRoles: ['billing_ar', 'platform_admin'] },
-    { to: 'billing_queue', allowedRoles: ['billing_ar', 'platform_admin'] }, // reopen for rebill
+    { to: 'closed', allowedRoles: ['billing_ar', 'ar_supervisor', 'platform_admin'] },
+    { to: 'billing_queue', allowedRoles: ['billing_ar', 'ar_supervisor', 'platform_admin'] }, // reopen for rebill
   ],
   closed: [
     { to: 'billing_queue', allowedRoles: ['platform_admin'] }, // emergency reopen
@@ -78,6 +79,22 @@ export function canTransition(
   if (!transition) return false;
 
   return transition.allowedRoles.includes(userRole);
+}
+
+/** Explain a denied transition using the same role list that enforces it. */
+export function transitionDeniedMessage(currentStatus: TicketStatus, targetStatus: TicketStatus): string {
+  const transition = TRANSITIONS[currentStatus]?.find(t => t.to === targetStatus);
+  const statusLabel = (status: string) => status.replace(/_/g, ' ');
+  if (!transition) return `Cannot move ticket from ${statusLabel(currentStatus)} to ${statusLabel(targetStatus)}. This status change is not allowed.`;
+  const actions: Record<string, string> = {
+    billing_queue: ['supervisor_review', 'completed'].includes(currentStatus) ? 'approve tickets' : 'return tickets to billing',
+    awaiting_signature: 'send tickets for signature',
+    invoiced: 'mark tickets invoiced', closed: 'close tickets',
+    in_progress: currentStatus === 'supervisor_review' ? 'return tickets to work' : 'start or reopen tickets',
+    supervisor_review: 'send tickets for review', dispatched: 'dispatch tickets',
+    completed: 'complete tickets', draft: 'return tickets to draft',
+  };
+  return permissionDeniedMessage(actions[targetStatus] ?? 'change ticket status', transition.allowedRoles);
 }
 
 export function getAvailableTransitions(

@@ -22,7 +22,7 @@
  * so it is swept — and marked, because "fires exactly once" is a requirement.
  */
 
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { runScheduledJob } from './jobs.js';
 import { heartbeat } from './supervisor.js';
 import { enqueueInspectionRecord, enqueueAttachment } from './blueLionEnqueue.js';

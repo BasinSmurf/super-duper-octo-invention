@@ -12,7 +12,7 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { authenticate } from '../middleware/auth.js';
 import { authenticateUserOrKiosk } from '../middleware/kioskAuth.js';

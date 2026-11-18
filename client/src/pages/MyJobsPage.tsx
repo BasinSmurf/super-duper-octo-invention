@@ -32,6 +32,8 @@ interface FieldTicket {
   ticketNumber: string | null
   ticketType: string
   serviceSubtype: string | null
+  linkedRentalAgreementId?: string | null
+  customData?: { workType?: string } | null
   status: string
   serviceDate: string
   locationDisplay: string | null
@@ -89,13 +91,13 @@ const TICKET_STATUS_COLOR: Record<string, string> = {
   in_progress: 'bg-amber-100 text-amber-700',
 }
 
-type Tab = 'field' | 'shop'
+type Tab = 'field' | 'shop' | 'rentals'
 
 export function MyJobsPage() {
   const navigate = useNavigate()
   const { user } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
-  const initialTab: Tab = searchParams.get('tab') === 'shop' ? 'shop' : 'field'
+  const initialTab: Tab = searchParams.get('tab') === 'shop' ? 'shop' : searchParams.get('tab') === 'rentals' ? 'rentals' : 'field'
   const [tab, setTabState] = useState<Tab>(initialTab)
 
   const [shopItems, setShopItems] = useState<ShopItem[]>([])
@@ -107,6 +109,11 @@ export function MyJobsPage() {
   // sync. Reactive via Dexie so a Save-then-return shows up without a refetch.
   const localDrafts = useLiveQuery(
     () => db.tickets.where('status').equals('draft').toArray(),
+    [],
+  )
+
+  const pendingDeployTickets = useLiveQuery(
+    () => db.tickets.filter(ticket => ticket.customData?.workType === 'rental_deploy' && ticket._offlineStatus === 'pending').toArray(),
     [],
   )
 
@@ -169,7 +176,9 @@ export function MyJobsPage() {
   )
   const localOnlyDrafts = myLocalDrafts.filter(d => !apiIds.has(d.id))
 
-  const apiRows: FieldRow[] = fieldTickets.map(t => ({
+  const rentalTickets = fieldTickets.filter(t => t.customData?.workType === 'rental_deploy'
+    && !(pendingDeployTickets || []).some(local => local.id === t.id && !['draft', 'dispatched', 'in_progress'].includes(local.status)))
+  const apiRows: FieldRow[] = fieldTickets.filter(t => t.customData?.workType !== 'rental_deploy').map(t => ({
     id: t.id,
     ticketNumber: t.ticketNumber,
     ticketType: t.ticketType,
@@ -189,13 +198,13 @@ export function MyJobsPage() {
     serviceDate: d.serviceDate,
     // Local Dexie tickets don't denormalize the company name; the location
     // display (set at save time) is the useful at-a-glance label here.
-    companyName: d.locationDisplay || 'Unsynced draft',
+    companyName: d.locationDisplay || 'Draft',
     locationDisplay: d.locationDisplay ?? null,
-    pending: true,
+    pending: d._offlineStatus === 'pending' || d._offlineStatus === 'error' || !d.ticketNumber,
   }))
 
   const wizardRows: FieldRow[] = (wizardDrafts || [])
-    .filter(d => !d.id.startsWith('edit-') && !!d.wizardData?.workType)
+    .filter(d => !d.id.startsWith('edit-') && !d.id.startsWith('deploy-') && !!d.wizardData?.workType)
     .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
     .map(d => {
       const w = d.wizardData
@@ -294,6 +303,9 @@ export function MyJobsPage() {
             <span className="ml-1.5 text-xs text-slate-400">({fieldCount})</span>
           )}
         </button>
+        <button onClick={() => setTab('rentals')} className={cn('px-4 py-2 rounded-md text-sm font-medium', tab === 'rentals' ? 'bg-white shadow-sm' : 'text-slate-500')}>
+          Rentals {!loadingField && rentalTickets.length > 0 && <span className="ml-1.5 text-xs text-slate-400">({rentalTickets.length})</span>}
+        </button>
         <button
           onClick={() => setTab('shop')}
           className={cn(
@@ -337,6 +349,15 @@ export function MyJobsPage() {
             )}
           </div>
         )
+      ) : tab === 'rentals' ? (
+        loadingField ? <div className="flex justify-center py-16"><Loader2 className="w-6 h-6 animate-spin text-slate-400" /></div>
+        : rentalTickets.length === 0 ? <p className="text-center py-12 text-slate-400">No rental deploy tickets assigned to you</p>
+        : <div className="space-y-2">{rentalTickets.map(ticket => <button key={ticket.id}
+            onClick={() => navigate(`/tickets/new?type=rental&division=D4&rentalId=${ticket.linkedRentalAgreementId}&deployTicket=${ticket.id}`)}
+            className="w-full text-left bg-white border rounded-lg p-4 hover:border-blue-400">
+            <p className="font-medium">{ticket.ticketNumber} · {ticket.company?.name}</p>
+            <p className="text-sm text-slate-500">Deploy · {ticket.locationDisplay || ticket.pad?.name || ticket.well?.wellName || 'Rental'} · {ticket.serviceDate?.slice(0, 10)}</p>
+          </button>)}</div>
       ) : loadingShop ? (
         <div className="flex justify-center py-16">
           <Loader2 className="w-6 h-6 text-slate-400 animate-spin" />

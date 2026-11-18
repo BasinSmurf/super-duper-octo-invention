@@ -1,6 +1,7 @@
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 import { SiteSwitcher } from '@/components/SiteSwitcher'
+import { CompanyBrand } from '@/components/CompanyBrand'
 import { BugReportButton } from '@/components/BugReportButton'
 import { PinSetupNag } from '@/components/PinSetupNag'
 import { useSync } from '@/contexts/SyncContext'
@@ -23,6 +24,7 @@ import {
   Send,
   LayoutDashboard,
   Settings,
+  Bell,
   Activity,
   CheckSquare,
   ListChecks,
@@ -136,6 +138,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: 'Admin',
     items: [
       { to: '/settings', label: 'Admin', icon: Settings, cap: 'page:admin' },
+      { to: '/admin/webhooks', label: 'Webhooks', icon: Bell, cap: 'system:config' },
       { to: '/admin/permissions', label: 'Permissions', icon: Shield, cap: 'page:permissions' },
       { to: '/admin/api-keys', label: 'API Keys', icon: KeyRound, cap: 'page:api_keys' },
       { to: '/admin/novara', label: 'Novara Sync', icon: ShieldCheck, cap: 'page:novara' },
@@ -220,15 +223,15 @@ export function AppShell() {
       {/* Sidebar */}
       <aside
         className={cn(
-          'fixed inset-y-0 left-0 z-50 w-64 bg-slate-900 text-white transform transition-transform lg:translate-x-0 lg:static lg:inset-0 flex flex-col',
+          'fixed inset-y-0 left-0 z-50 w-64 shrink-0 bg-slate-900 text-white transform transition-transform lg:translate-x-0 lg:static lg:inset-0 flex flex-col',
           sidebarOpen ? 'translate-x-0' : '-translate-x-full',
         )}
       >
-        <div className="flex items-center justify-between p-3 border-b border-slate-700 shrink-0">
-          <div className="rounded-lg bg-white/95 px-2.5 py-1.5 shadow-sm ring-1 ring-white/10">
-            <img src="/servicepro-logo.png" alt="Service Pro — Basin Safety" className="h-9 w-auto" />
+        <div className="flex items-center gap-2 p-3 border-b border-slate-700 shrink-0">
+          <div className="min-w-0 flex-1 rounded-lg bg-white/95 px-2.5 py-1.5 shadow-sm ring-1 ring-white/10">
+            <CompanyBrand containerClassName="w-full" className="h-auto w-full max-h-32 object-contain" />
           </div>
-          <button className="lg:hidden text-slate-400 hover:text-white" onClick={() => setSidebarOpen(false)}>
+          <button className="lg:hidden shrink-0 text-slate-400 hover:text-white" onClick={() => setSidebarOpen(false)}>
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -345,7 +348,7 @@ export function AppShell() {
           <button onClick={() => setSidebarOpen(true)} className="text-slate-600">
             <Menu className="w-6 h-6" />
           </button>
-          <img src="/servicepro-logo.png" alt="Service Pro" className="h-7 w-auto flex-1 object-contain object-left" />
+          <CompanyBrand className="h-7 max-w-44 object-contain object-left" />
           {/* Mobile online/offline indicator */}
           <div className="flex items-center gap-1.5">
             {syncState.pendingMutations > 0 && (

@@ -43,7 +43,8 @@ import {
 import { mapCategoryToAssetKind, humanizeSnake, splitName, toYmd } from './blueLionClassMap.js';
 import { resolveClassCode } from './courseCatalog.js';
 import { assetExternalId, ensureAssetRow } from './blueLionEnqueue.js';
-import { generateEquipmentInspectionPdf, pdfDocToBuffer } from './equipmentInspectionPdfGenerator.js';
+import { generateEquipmentInspectionPdf } from './equipmentInspectionPdfGenerator.js';
+import { pdfToBuffer } from '../utils/pdfToBuffer.js';
 import { readAttachmentBytes } from './attachmentStore.js';
 import { blueLionDocTypeForAttachmentKind } from './equipmentDocuments.js';
 import { toBlueLionChecklist } from './blueLionChecklist.js';
@@ -866,7 +867,7 @@ async function handleServiceRows(entries: Array<Parameters<typeof toRow>[0]>): P
   // condemn → one /documents upload per row (BlueLion accepts one file per request).
   for (const b of condemnRows) {
     try {
-      const doc = generateEquipmentInspectionPdf({
+      const doc = await generateEquipmentInspectionPdf({
         serialNumber: b.result.serial,
         category: b.result.category,
         outcome: b.result.outcome,
@@ -878,7 +879,7 @@ async function handleServiceRows(entries: Array<Parameters<typeof toRow>[0]>): P
         customer: b.result.customer,
         manualRefs: b.result.manualRefs,
       });
-      const fileBuffer = await pdfDocToBuffer(doc);
+      const fileBuffer = await pdfToBuffer(doc);
       const resp = await uploadDocument({
         externalId: b.row.externalId,
         docType: 'condemnation',
@@ -906,12 +907,9 @@ async function handleServiceRows(entries: Array<Parameters<typeof toRow>[0]>): P
  *
  * WHAT ACTUALLY GOES. BlueLion's docType vocabulary is narrower than ours --
  * services/equipmentDocuments.ts already learned this and maps only the types
- * BlueLion accepts. The same rule applies here: a UE report has a home
- * (`ultrasonic_exam`); a bench photo and a Posi-Check report do not, and
- * inventing a docType would mean guessing at a partner's API and collecting
- * 400s. Those stay ServicePRO-only records, which is a correct outcome under
- * §2 -- SP is the capture system of record and the immediate read path either
- * way. Widen the map in services/equipmentDocuments.ts once BlueLion confirms it.
+ * BlueLion accepts. UE reports, condition photos, flow-test reports and test
+ * paperwork have explicit mappings there. Billing and other unmapped documents
+ * stay ServicePRO-only; do not guess a partner docType for them.
  *
  * A row whose unit has no resolved assetId yet is LEFT PENDING, not failed.
  * That is the ordinary state of a freshly photographed unit: its `asset`

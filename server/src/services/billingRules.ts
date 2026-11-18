@@ -2,7 +2,7 @@
  * billingRules.ts — Wave 5 Slices 5A + 5C
  *
  * Centralized resolver for invoice-time billing rules. Today it owns:
- *   - Tier 1 reservation surcharge (5A)
+ *   - Tier 1 QuickBooks customer routing (5A)
  *   - Per-customer Price Level adjustments (5C)
  * Future rules (hazmat fees, per-customer markups, etc.) layer in here
  * without scattering `if (something) ...` checks across invoice routes.
@@ -15,21 +15,15 @@
  *   4. Resolver returns:
  *        - lineAdjustments[]: rate/amount changes to apply to existing
  *          line items by index (Price Level)
- *        - extraLines[]: net-new lines to append (Tier 1 fee)
+ *        - extraLines[]: net-new lines to append (reserved for future rules)
  *        - qbCustomerOverride: invoice-level QB customer swap
  *        - appliedRules[]: names of rules that fired (for audit)
  *   5. Caller applies adjustments, appends extras, recomputes subtotal,
  *      persists.
  *
- * Order of operations inside the resolver matters:
- *   1. Price Level adjustments apply FIRST (changes the line amounts)
- *   2. Tier 1 fee calculated on the post-adjustment subtotal
- *      (a 5% surcharge on a discounted invoice is 5% of the discounted
- *      total, not the gross)
+ * Price Level adjustments affect prices; Tier 1 only changes the QB customer.
  */
 
-const TIER1_FEE_RATE = 0.05;
-const TIER1_FEE_DESCRIPTION = 'Tier 1 reservation fee (5%)';
 // Default matches the actual QB Customer record ("Pale Horse Service Inc"
 // — singular Service, with Inc) so the QBWC override name lookup hits.
 // Tunable via TIER1_BILLING_CUSTOMER_NAME env var if QB ever renames it.
@@ -186,9 +180,6 @@ export function resolveInvoiceRules(ctx: BillingRuleContext): BillingRuleResult 
   // level that doesn't have a per-item rule. Results in lineAdjustments
   // entries the caller applies by index.
   //
-  // We build a working "current amounts" array so the Tier 1 calc downstream
-  // sees post-adjustment subtotals.
-  const adjustedAmounts = ctx.lineItems.map(li => li.amount || 0);
 
   if (ctx.priceLevels && ctx.priceLevels.length > 0) {
     for (let i = 0; i < ctx.lineItems.length; i++) {
@@ -209,7 +200,6 @@ export function resolveInvoiceRules(ctx: BillingRuleContext): BillingRuleResult 
         newAmount,
         source: resolved.source,
       });
-      adjustedAmounts[i] = newAmount;
       if (!appliedRules.includes('price_level_apply')) {
         appliedRules.push('price_level_apply');
       }
@@ -217,42 +207,12 @@ export function resolveInvoiceRules(ctx: BillingRuleContext): BillingRuleResult 
   }
 
   // ─────────────────────────────────────────────────────────────────────
-  // Rule (5A): Tier 1 reservation surcharge
-  // ─────────────────────────────────────────────────────────────────────
-  // Fires when ANY source ticket's pad OR well is flagged tier1. Adds a
-  // single 5% line on the post-adjustment subtotal of NON-skip lines. Sets
-  // the QB customer override to Pale Horse Services and marks the fee line
-  // qbSkip so it stays out of QB.
-  //
-  // Pad-or-well, not pad-only: almost every reservation well we service has
-  // no pad record at all, so a pad-only check silently skipped the fee on
-  // the bulk of Tier 1 work. Still ONE fee line per invoice no matter how
-  // many of the source tickets (or how many of their pads/wells) qualify.
-  const tier1Tickets = ctx.tickets.filter(t => t.pad?.tier1 === true || t.well?.tier1 === true);
-  if (tier1Tickets.length > 0) {
-    const billableSubtotal = ctx.lineItems
-      .reduce((sum, li, i) => (li.qbSkip ? sum : sum + adjustedAmounts[i]!), 0);
-    const feeAmount = round2(billableSubtotal * TIER1_FEE_RATE);
-    if (feeAmount > 0) {
-      extraLines.push({
-        description: TIER1_FEE_DESCRIPTION,
-        productId: null,
-        partNumber: null,
-        quantity: 1,
-        unitOfMeasure: 'EA',
-        rate: feeAmount,
-        amount: feeAmount,
-        isTaxable: false,
-        sourceTicketId: tier1Tickets[0]!.id,
-        sourceTicketNumber: tier1Tickets[0]!.ticketNumber,
-        qbItemListId: null,
-        qbItemFullName: null,
-        qbSkip: true,
-        notes: `Auto-applied: ${tier1Tickets.length} Tier 1 ticket${tier1Tickets.length === 1 ? '' : 's'}`,
-      });
-      qbCustomerOverride = TIER1_OVERRIDE_CUSTOMER;
-      appliedRules.push('tier1_reservation_fee');
-    }
+  // Rule (5A): Tier 1 billed customer override
+  // Tier 1 changes the QuickBooks billed customer only. SP retains the
+  // operator and negotiated prices; reservation work carries no surcharge.
+  if (ctx.tickets.some(t => t.pad?.tier1 === true || t.well?.tier1 === true)) {
+    qbCustomerOverride = TIER1_OVERRIDE_CUSTOMER;
+    appliedRules.push('tier1_customer_override');
   }
 
   return { lineAdjustments, extraLines, qbCustomerOverride, appliedRules };

@@ -11,7 +11,7 @@
 # ──────────────────────────────────────────────
 
 # ── Stage 1: build ────────────────────────────
-FROM node:22-alpine AS build
+FROM node:22.23.4-alpine AS build
 
 WORKDIR /app
 
@@ -30,6 +30,7 @@ RUN --mount=type=cache,target=/root/.npm \
 # exist first and the generated client is compiled by our own tsc below.
 COPY tsconfig.json ./
 COPY src ./src/
+COPY scripts/copy-runtime-assets.cjs ./scripts/copy-runtime-assets.cjs
 
 # Generate Prisma client into src/generated/prisma.
 # `generate` only reads the schema and never connects, but loading
@@ -47,7 +48,7 @@ RUN NODE_OPTIONS=--max-old-space-size=4096 npm run build
 RUN npm prune --omit=dev
 
 # ── Stage 2: production runtime ───────────────
-FROM node:22-alpine AS runtime
+FROM node:22.23.4-alpine AS runtime
 
 WORKDIR /app
 
@@ -78,10 +79,14 @@ RUN --mount=type=cache,target=/root/.npm \
 
 # Copy compiled JS from build stage
 COPY --from=build /app/dist ./dist/
+COPY openapi ./openapi/
 
 # Entrypoint script: runs `prisma migrate deploy` then exec's the API.
 # Idempotent — safe to run on every restart.
 COPY --chmod=755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+# Windows checkouts must not turn /bin/sh into the nonexistent /bin/sh + CR.
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
+ && /bin/sh -n /usr/local/bin/docker-entrypoint.sh
 
 # Create uploads + logs + file-store directories.
 # Every path that gets a named volume in compose MUST exist here and be owned by
@@ -89,7 +94,7 @@ COPY --chmod=755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 # as USER node — so an unlisted path means silent EACCES on every write. That is
 # what happened to /app/data/storage: the file store (bug-report screenshots,
 # equipment documents, ticket PDFs) could not write a single byte in prod.
-RUN mkdir -p /app/uploads /app/logs /app/data/storage \
+RUN mkdir -p /app/uploads /app/logs /app/data/storage /app/data/attachment-buffer \
  && chown -R node:node /app/uploads /app/logs /app/data
 
 # Don't run as root

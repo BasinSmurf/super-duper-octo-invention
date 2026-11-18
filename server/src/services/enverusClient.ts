@@ -692,6 +692,7 @@ export async function pollReceiptById(itemId: string) {
   return enverusRequest({
     method: 'GET',
     path: `/supply-chain/v1/receipts/${itemId}`,
+    queryParams: { $select: '*', $expand: 'lineItems/validationErrors' },
   });
 }
 

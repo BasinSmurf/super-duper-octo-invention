@@ -29,20 +29,20 @@ const TRANSITIONS: Record<string, Transition[]> = {
   ],
   supervisor_review: [
     { to: 'billing_queue', allowedRoles: ['field_super', 'platform_admin'] },
-    { to: 'awaiting_signature', allowedRoles: ['field_super', 'billing_ar', 'platform_admin'] },
+    { to: 'awaiting_signature', allowedRoles: ['field_super', 'billing_ar', 'ar_supervisor', 'platform_admin'] },
     { to: 'in_progress', allowedRoles: ['field_super', 'platform_admin'] },
   ],
   awaiting_signature: [
-    { to: 'billing_queue', allowedRoles: ['billing_ar', 'platform_admin'] },
+    { to: 'billing_queue', allowedRoles: ['billing_ar', 'ar_supervisor', 'platform_admin'] },
     { to: 'supervisor_review', allowedRoles: ['field_super', 'platform_admin'] },
   ],
   billing_queue: [
-    { to: 'invoiced', allowedRoles: ['billing_ar', 'platform_admin'] },
-    { to: 'supervisor_review', allowedRoles: ['billing_ar', 'platform_admin'] },
+    { to: 'invoiced', allowedRoles: ['billing_ar', 'ar_supervisor', 'platform_admin'] },
+    { to: 'supervisor_review', allowedRoles: ['billing_ar', 'ar_supervisor', 'platform_admin'] },
   ],
   invoiced: [
-    { to: 'closed', allowedRoles: ['billing_ar', 'platform_admin'] },
-    { to: 'billing_queue', allowedRoles: ['billing_ar', 'platform_admin'] },
+    { to: 'closed', allowedRoles: ['billing_ar', 'ar_supervisor', 'platform_admin'] },
+    { to: 'billing_queue', allowedRoles: ['billing_ar', 'ar_supervisor', 'platform_admin'] },
   ],
   closed: [
     { to: 'billing_queue', allowedRoles: ['platform_admin'] },
@@ -64,13 +64,13 @@ export function canEditTicket(status: string, userRole: string, isOwnTicket: boo
   if (userRole === 'field_tech') {
     return isOwnTicket && ['draft', 'in_progress'].includes(status)
   }
-  // Supervisors and admins can edit draft/in_progress/completed
+  // Supervisors and admins can correct active and completed work.
   if (['field_super', 'platform_admin'].includes(userRole)) {
-    return ['draft', 'in_progress', 'completed'].includes(status)
+    return ['draft', 'dispatched', 'in_progress', 'completed'].includes(status)
   }
-  // Dispatch can edit draft tickets
+  // Dispatch corrects customer/job details while work is active, too.
   if (userRole === 'dispatch') {
-    return status === 'draft'
+    return ['draft', 'dispatched', 'in_progress'].includes(status)
   }
   return false
 }

@@ -15,7 +15,7 @@
  */
 
 import { google } from 'googleapis';
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import type { UserRole } from '../db.js';
 
 let _authClient: any = null;

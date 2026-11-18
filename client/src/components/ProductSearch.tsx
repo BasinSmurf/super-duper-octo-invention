@@ -9,8 +9,12 @@ interface Product {
   partNumber: string
   name: string
   category: string
+  productType?: string
   unitOfMeasure: string | null
   defaultSellPrice: number | null
+  defaultRentalRateDaily?: number | null
+  defaultRentalRateWeekly?: number | null
+  defaultRentalRateMonthly?: number | null
   /** QB ListID — what a customer's contract pricebook matches on. */
   qbItemListId?: string | null
 }
@@ -78,8 +82,12 @@ async function searchProducts(query: string, division?: number | null): Promise<
           partNumber: p.partNumber,
           name: p.name,
           category: p.category,
+          productType: p.productType,
           unitOfMeasure: p.unitOfMeasure ?? null,
           defaultSellPrice: p.defaultSellPrice != null ? Number(p.defaultSellPrice) : null,
+          defaultRentalRateDaily: p.defaultRentalRateDaily != null ? Number(p.defaultRentalRateDaily) : null,
+          defaultRentalRateWeekly: p.defaultRentalRateWeekly != null ? Number(p.defaultRentalRateWeekly) : null,
+          defaultRentalRateMonthly: p.defaultRentalRateMonthly != null ? Number(p.defaultRentalRateMonthly) : null,
           qbItemListId: p.qbItemListId ?? null,
         })),
         source: 'local',

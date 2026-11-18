@@ -54,13 +54,21 @@ export async function getJurisdictionRate(id?: string | null): Promise<ResolvedJ
 }
 
 // Pick the most-specific county available on a ticket's linked locations.
+// Pads are usually created by hand with no county of their own (75 of 77 on
+// prod, 2026-11), so a county-less pad takes the county its wells agree on —
+// otherwise work booked against the pad falls through to the state-only rate.
 export function countyFromTicketLocations(t: {
   well?: { county?: string | null } | null;
-  pad?: { county?: string | null } | null;
+  pad?: { county?: string | null; wells?: { county?: string | null }[] } | null;
   field?: { county?: string | null } | null;
   facility?: { county?: string | null } | null;
 }): string | null {
-  return t.well?.county ?? t.pad?.county ?? t.field?.county ?? t.facility?.county ?? null;
+  const known = (v?: string | null) => v?.trim() || null;
+  const wellCounties = new Map((t.pad?.wells ?? [])
+    .map(w => known(w.county)).filter((c): c is string => !!c).map(c => [c.toUpperCase(), c]));
+  const padWellsCounty = wellCounties.size === 1 ? [...wellCounties.values()][0] : null;
+  return known(t.well?.county) ?? known(t.pad?.county) ?? padWellsCounty
+    ?? known(t.field?.county) ?? known(t.facility?.county);
 }
 
 // taxAmount = Σ(taxable line amounts) × rate, rounded to cents.

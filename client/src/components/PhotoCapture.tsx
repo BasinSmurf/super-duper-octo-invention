@@ -1,4 +1,6 @@
+import { photoGps } from '@/lib/photoGps'
 import { useState, useRef } from 'react'
+import { v4 as uuidv4 } from 'uuid'
 import { Camera, X, Loader2 } from 'lucide-react'
 import { compressImage, estimateBase64Size, formatBytes } from '@/lib/compressImage'
 
@@ -19,8 +21,6 @@ interface PhotoCaptureProps {
   captureLocation?: boolean
 }
 
-let nextPhotoId = 1
-
 export function PhotoCapture({ photos, onChange, maxPhotos = 10, captureLocation = false }: PhotoCaptureProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [previewing, setPreviewing] = useState<string | null>(null)
@@ -32,15 +32,19 @@ export function PhotoCapture({ photos, onChange, maxPhotos = 10, captureLocation
 
     setCompressing(true)
     const newPhotos: CapturedPhoto[] = []
-    const position = captureLocation ? await currentPosition().catch(() => null) : null
+    let devicePosition: ReturnType<typeof currentPosition> | undefined
 
     for (const file of Array.from(files)) {
       if (photos.length + newPhotos.length >= maxPhotos) break
 
+      const embeddedGps = captureLocation ? photoGps(await file.arrayBuffer()) : null
+      const position = embeddedGps
+        ? { ...embeddedGps, geotaggedAt: new Date().toISOString() }
+        : captureLocation ? await (devicePosition ??= currentPosition()).catch(() => null) : null
       try {
         const dataUrl = await compressImage(file, 1920, 0.7)
         newPhotos.push({
-          id: `photo_${nextPhotoId++}`,
+          id: uuidv4(),
           dataUrl,
           timestamp: new Date().toISOString(),
           ...(position ?? {}),
@@ -53,7 +57,7 @@ export function PhotoCapture({ photos, onChange, maxPhotos = 10, captureLocation
           reader.readAsDataURL(file)
         })
         newPhotos.push({
-          id: `photo_${nextPhotoId++}`,
+          id: uuidv4(),
           dataUrl,
           timestamp: new Date().toISOString(),
           ...(position ?? {}),
@@ -137,6 +141,7 @@ export function PhotoCapture({ photos, onChange, maxPhotos = 10, captureLocation
         </p>
       )}
 
+      {captureLocation && photos.some(photo => photo.latitude == null || photo.longitude == null) && <p role="alert" className="mt-2 text-sm text-red-700">This photo has no GPS. Choose a GPS-tagged original, or allow device location and capture it again before continuing.</p>}
       {/* Full-screen preview */}
       {previewing && (
         <div

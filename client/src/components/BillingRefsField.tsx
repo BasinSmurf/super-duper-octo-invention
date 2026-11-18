@@ -12,7 +12,8 @@ interface BillingRefsFieldProps {
 /**
  * #3 PO / AFE / Cost-Code structured repeater. Each row is a typed reference
  * (dropdown) + value; "add additional" appends more. Rows seeded as `required`
- * (from the customer's billing profile) lock their type and can't be removed.
+ * (from the customer's billing profile) lock their type and can't be removed, but
+ * only as a hint: billing enforces the requirement at invoicing, never the tech.
  */
 export function BillingRefsField({ refs, onChange, labels }: BillingRefsFieldProps) {
   const typeLabel = (t: BillingRefType) =>
@@ -28,7 +29,7 @@ export function BillingRefsField({ refs, onChange, labels }: BillingRefsFieldPro
 
   return (
     <div>
-      <label className="block text-sm font-medium text-slate-700 mb-2">Billing References</label>
+      <label className="block text-sm font-medium text-slate-700 mb-2">Billing Reference (AFE/LOE/PO#)</label>
       <div className="space-y-2">
         {refs.map((ref, idx) => (
           <div key={ref.id} className="flex flex-wrap gap-2 items-center">
@@ -52,11 +53,11 @@ export function BillingRefsField({ refs, onChange, labels }: BillingRefsFieldPro
               onChange={e => update(idx, { value: e.target.value })}
               className={cn(
                 'flex-1 min-w-[8rem] px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none',
-                ref.required && !ref.value.trim() ? 'border-red-300' : 'border-slate-300',
+                ref.required && !ref.value.trim() ? 'border-amber-300' : 'border-slate-300',
               )}
             />
             {ref.required ? (
-              <span className="text-xs text-red-600 font-medium px-1" title="Required for this customer">required</span>
+              <span className="text-xs text-amber-600 font-medium px-1" title="This customer's billing needs it. Add it if you have it; billing fills it in otherwise.">billing needs</span>
             ) : (
               <button
                 type="button"

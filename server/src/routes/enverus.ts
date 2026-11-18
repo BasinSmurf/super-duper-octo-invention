@@ -1,3 +1,6 @@
+import { resolveInvoiceBillingProfile } from '../services/invoiceBillingProfile.js';
+import { reconcileEnverusFailures } from '../services/enverusQueueReconciliation.js';
+import { applyCustomerDescriptions } from '../services/customerDescriptions.js';
 /**
  * enverus.ts — Routes for Enverus OpenInvoice/OpenTicket integration.
  *
@@ -31,7 +34,7 @@
  */
 
 import { Router, Request, Response, NextFunction } from 'express';
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { requirePermission } from '../middleware/rbac.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { createAuditLog } from '../utils/auditLog.js';
@@ -48,6 +51,7 @@ import {
   submitReceipt,
   submitReceiptWithAttachment,
   pollReceiptStatus,
+  pollReceiptById,
   getSupplierDuns,
   EnverusApiError,
 } from '../services/enverusClient.js';
@@ -57,15 +61,16 @@ import {
 } from '../services/enverusMasterDataCache.js';
 import {
   buildReceiptPayload,
-  buildInvoiceAsReceiptPayload,
   validateProfileForReceipt,
   validateProfileForInvoice,
   validateLineItemsForReceipt,
 } from '../services/enverusPayloadBuilder.js';
 import type { EnverusSubmitOverrides } from '../services/enverusPayloadBuilder.js';
+import { buildCurrentInvoiceReceipt, serializeInvoiceSubmission, rebuildInvoiceSubmission, settleInvoiceBillingFields } from '../services/enverusInvoiceSubmission.js';
 import { getTicketPdfBuffer, getInvoicePdfBuffer } from '../utils/ticketPdfBuffer.js';
 import { generateInvoicePdf } from '../services/invoicePdfGenerator.js';
 import { pdfToBuffer } from '../utils/pdfToBuffer.js';
+import { missingRequiredBillingFields, ticketBillingCodes } from '../services/locationBillingCodes.js';
 import type { Prisma } from '../db.js';
 
 export const enverusRouter = Router();
@@ -76,67 +81,6 @@ enverusRouter.use(requirePermission('billing:enverus'));
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper: wrap EnverusApiError into AppError for the Express error handler
 // ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Resolve the per-location facility code for an invoice from its source tickets'
- * wells/pads (well code wins, pad is fallback). Returns the single distinct code, or
- * null if there's none — or more than one (a consolidated invoice spanning wells with
- * different codes is ambiguous, so we leave the buyer's static default in place).
- */
-async function resolveInvoiceFacilityCode(
-  lineItems: Array<{ sourceTicketId?: string | null }>,
-): Promise<string | null> {
-  const ticketIds = [
-    ...new Set(lineItems.map((li) => li.sourceTicketId).filter((id): id is string => !!id)),
-  ];
-  if (ticketIds.length === 0) return null;
-  const tickets = await prisma.serviceTicket.findMany({
-    where: { id: { in: ticketIds } },
-    select: {
-      well: { select: { facilityCode: true } },
-      pad: { select: { facilityCode: true } },
-    },
-  });
-  const codes = [
-    ...new Set(
-      tickets
-        .map((t) => t.well?.facilityCode ?? t.pad?.facilityCode)
-        .filter((c): c is string => !!c),
-    ),
-  ];
-  if (codes.length === 1) return codes[0] as string;
-  if (codes.length > 1) {
-    console.warn(
-      `[enverus] invoice spans ${codes.length} distinct facility codes — skipping facility-code auto-injection`,
-    );
-  }
-  return null;
-}
-
-/**
- * Resolve the field tech (assignedTech.name) for each line's source ticket.
- * Returns a Map keyed by sourceTicketId → tech name. Used to populate the COP
- * Labor-line crewMember from who actually did the work. InvoiceLineItem has no
- * Prisma relation to ServiceTicket (only the scalar sourceTicketId), so we look
- * the tickets up directly — mirrors resolveInvoiceFacilityCode.
- */
-async function resolveLineCrewMembers(
-  lineItems: Array<{ sourceTicketId?: string | null }>,
-): Promise<Map<string, string>> {
-  const ticketIds = [
-    ...new Set(lineItems.map((li) => li.sourceTicketId).filter((id): id is string => !!id)),
-  ];
-  const map = new Map<string, string>();
-  if (ticketIds.length === 0) return map;
-  const tickets = await prisma.serviceTicket.findMany({
-    where: { id: { in: ticketIds } },
-    select: { id: true, assignedTech: { select: { name: true } } },
-  });
-  for (const t of tickets) {
-    if (t.assignedTech?.name) map.set(t.id, t.assignedTech.name);
-  }
-  return map;
-}
 
 function mapEnverusError(err: unknown): never {
   if (err instanceof EnverusApiError) {
@@ -256,9 +200,8 @@ enverusRouter.post(
         rate: req.body.rate || 1.00,
       };
 
-      // productServiceCode / partNumber
-      if (req.body.productServiceCode) lineItem.productServiceCode = req.body.productServiceCode;
-      if (req.body.partNumber) lineItem.partNumber = req.body.partNumber;
+      const productServiceCode = req.body.productServiceCode || req.body.partNumber;
+      if (productServiceCode) lineItem.productServiceCode = productServiceCode;
 
       // chargeType — REQUIRED for LEM, FORBIDDEN for General
       if (isLem) {
@@ -300,7 +243,7 @@ enverusRouter.post(
 
       // Price Book — COP REQUIRED
       if (req.body.priceBookNumber?.trim()) {
-        receipt.priceBookNumber = req.body.priceBookNumber.trim();
+        receipt.contract = { number: req.body.priceBookNumber.trim() };
       }
 
       // Header-level location
@@ -308,11 +251,14 @@ enverusRouter.post(
         receipt.location = req.body.location.trim();
       }
 
-      // COP Invoice Approver — ADE field (itemID 99872, header-level)
+      // COP Invoice Approver — caller supplies environment-specific resolver IDs.
       if (req.body.invoiceApprover?.trim()) {
         receipt.additionalDataFields = [
           ...(receipt.additionalDataFields as any[] || []),
-          { itemID: '99872', name: 'Invoice Approver', value: req.body.invoiceApprover.trim().slice(0, 25) },
+          { name: 'Invoice Approver', code: 'FIPP', value: req.body.invoiceApprover.trim().slice(0, 25),
+            ...(req.body.invoiceApproverFieldId ? { itemID: String(req.body.invoiceApproverFieldId) } : {}),
+            ...(req.body.invoiceApproverReferenceDetailId ? { referenceDetailId: String(req.body.invoiceApproverReferenceDetailId) } : {}),
+          },
         ];
       }
 
@@ -555,7 +501,7 @@ enverusRouter.get(
   },
 );
 
-// GET /master-data/buyer-sites — buyers grouped with their distinct sites.
+// GET /master-data/buyer-sites — buyers grouped with their distinct sites (and each site's departments).
 // Drives the structured Buyer Site picker on the billing profile editor so admins
 // pick a site by name and we store the siteUuid (+ matching buyerDUNS) — never a
 // hand-typed label like "L48 NORTH DAKOTA-0109" that OpenInvoice rejects.
@@ -576,7 +522,7 @@ enverusRouter.get(
         customerName: string;
         customerDuns: string;
         customerUuid: string;
-        sites: Map<string, string>; // siteUuid -> siteName
+        sites: Map<string, { name: string; departments: Set<string> }>; // by siteUuid
       }>();
       for (const r of rows) {
         const duns = (r.customerDuns || '').trim();
@@ -586,7 +532,11 @@ enverusRouter.get(
           entry = { customerName: r.customerName || duns, customerDuns: duns, customerUuid: r.customerUuid || '', sites: new Map() };
           byBuyer.set(duns, entry);
         }
-        if (r.siteUuid && r.siteName) entry.sites.set(r.siteUuid, r.siteName);
+        if (!r.siteUuid || !r.siteName) continue;
+        const site = entry.sites.get(r.siteUuid) ?? { name: r.siteName, departments: new Set<string>() };
+        entry.sites.set(r.siteUuid, site);
+        // Remit-to departments (Continental's field offices) — the invoice panel's department picker.
+        if (r.departmentName?.trim() && r.active !== false && r.isActive !== false) site.departments.add(r.departmentName.trim());
       }
       const data = Array.from(byBuyer.values())
         .map(b => ({
@@ -594,7 +544,7 @@ enverusRouter.get(
           customerDuns: b.customerDuns,
           customerUuid: b.customerUuid,
           sites: Array.from(b.sites.entries())
-            .map(([siteUuid, siteName]) => ({ siteUuid, siteName }))
+            .map(([siteUuid, site]) => ({ siteUuid, siteName: site.name, departments: [...site.departments].sort() }))
             .sort((a, z) => a.siteName.localeCompare(z.siteName)),
         }))
         .sort((a, z) => a.customerName.localeCompare(z.customerName));
@@ -627,8 +577,8 @@ enverusRouter.post(
           },
           billingProfile: true,
           company: true,
-          well: { select: { facilityCode: true } },
-          pad: { select: { facilityCode: true } },
+          well: { select: { facilityCode: true, costCenter: true, buyerSiteUuid: true, buyerDepartment: true } },
+          pad: { select: { facilityCode: true, costCenter: true, buyerSiteUuid: true, buyerDepartment: true } },
         },
       });
 
@@ -677,9 +627,24 @@ enverusRouter.post(
 
       // Build payload — well facility code wins, pad is the fallback.
       const facilityCode = ticket.well?.facilityCode ?? ticket.pad?.facilityCode ?? null;
+      const receiptLines = ticket.lineItems.map(line => ({ ...line,
+        description: line.description || line.product?.name || 'Service',
+        qbItemListId: line.product?.qbItemListId,
+      }));
+      await applyCustomerDescriptions(prisma, ticket.companyId, receiptLines);
+      // Profiles that source AFE / cost center from the location get the well's (else pad's) codes.
+      const codes = ticketBillingCodes(profile, ticket);
+      const missing = missingRequiredBillingFields(profile, {
+        poNumber: ticket.poNumber || profile.defaultPoNumber,
+        afeNumber: codes.afeNumber ?? ticket.afeNumber ?? profile.defaultAfeNumber,
+        costCenter: codes.costCenter ?? ticket.costCenter ?? profile.defaultCostCenter,
+        buyerSiteUuid: codes.buyerSiteUuid ?? profile.buyerSiteUuid,
+        buyerDepartment: codes.buyerDepartment ?? profile.defaultBuyerDepartment,
+      });
+      if (missing.length) throw new AppError(400, `This customer requires ${missing.join(', ')} before submitting to Enverus`);
       const payload = buildReceiptPayload(
-        ticket,
-        ticket.lineItems,
+        { ...ticket, afeNumber: codes.afeNumber ?? ticket.afeNumber, costCenter: codes.costCenter ?? ticket.costCenter, buyerSiteUuid: codes.buyerSiteUuid },
+        receiptLines,
         profile,
         { facilityCode },
       );
@@ -758,7 +723,7 @@ enverusRouter.post(
             data: {
               status: queueStatus,
               responseStatusCode: result.statusCode,
-              responsePayload: JSON.stringify(result.body).slice(0, 10000),
+              responsePayload: JSON.stringify(result.body),
               enverusItemId,
               submittedAt: new Date(),
               respondedAt: enverusAccepted ? new Date() : null,
@@ -777,6 +742,7 @@ enverusRouter.post(
             },
           });
 
+          await reconcileEnverusFailures(prisma).catch(error => console.warn('[Enverus] Alert reconciliation deferred:', error));
           res.json({
             ok: true,
             message: enverusAccepted ? 'Receipt accepted by Enverus' : 'Receipt submitted to Enverus',
@@ -903,6 +869,8 @@ enverusRouter.post(
         afeNumber: req.body.afeNumber as string | undefined,
         costCenter: req.body.costCenter as string | undefined,
         poNumber: req.body.poNumber as string | undefined,
+        buyerSiteUuid: req.body.buyerSiteUuid as string | undefined,
+        buyerDepartment: req.body.buyerDepartment as string | undefined,
         receiptType: req.body.receiptType as string | undefined,
         contractNumber: req.body.contractNumber as string | undefined,
         // COP-specific fields (buyer-field-rules mapping)
@@ -913,6 +881,7 @@ enverusRouter.post(
         minor: req.body.minor as string | undefined,               // COP "Functional Area"
         location: req.body.location as string | undefined,
         crewMembers: req.body.crewMembers as string[] | undefined,
+        additionalDataFields: req.body.additionalDataFields as EnverusSubmitOverrides['additionalDataFields'],
       };
 
       const invoice = await prisma.invoice.findUnique({
@@ -944,9 +913,9 @@ enverusRouter.post(
         );
       }
 
-      const profile = invoice.company?.billingProfiles?.[0];
-      if (!profile) {
-        throw new AppError(400, 'Company has no active Enverus-enabled billing profile');
+      const profile = await resolveInvoiceBillingProfile(prisma, invoice);
+      if (!profile || !profile.enverusEnabled) {
+        throw new AppError(400, 'Invoice has no active Enverus-enabled billing profile');
       }
 
       const profileErrors = validateProfileForInvoice(profile);
@@ -954,21 +923,8 @@ enverusRouter.post(
         throw new AppError(400, `Billing profile validation failed: ${profileErrors.join('; ')}`);
       }
 
-      // Persist billing field overrides on the invoice record
-      if (overrides.afeNumber || overrides.costCenter || overrides.poNumber) {
-        await prisma.invoice.update({
-          where: { id: invoiceId as string },
-          data: {
-            ...(overrides.afeNumber ? { afeNumber: overrides.afeNumber } : {}),
-            ...(overrides.costCenter ? { costCenter: overrides.costCenter } : {}),
-            ...(overrides.poNumber ? { poNumber: overrides.poNumber } : {}),
-          },
-        });
-        // Update local copy too
-        if (overrides.afeNumber) (invoice as any).afeNumber = overrides.afeNumber;
-        if (overrides.costCenter) (invoice as any).costCenter = overrides.costCenter;
-        if (overrides.poNumber) (invoice as any).poNumber = overrides.poNumber;
-      }
+      // Persist billing field overrides on the invoice record; enforce the profile's required fields.
+      await settleInvoiceBillingFields(prisma, invoice, profile, overrides);
 
       // Check for existing queue entry
       const existing = await prisma.enverusSyncQueue.findFirst({
@@ -987,14 +943,7 @@ enverusRouter.post(
 
       // Build payload as receipt (the /supply-chain/v3/invoice endpoint requires
       // elevated permissions; the receipt.submit endpoint is universally available)
-      overrides.facilityCode = await resolveInvoiceFacilityCode(invoice.lineItems);
-      // Attach the source ticket's tech as each line's crewMember (per-line).
-      const crewByTicket = await resolveLineCrewMembers(invoice.lineItems);
-      const linesWithCrew = invoice.lineItems.map((li: any) => ({
-        ...li,
-        crewMember: li.sourceTicketId ? crewByTicket.get(li.sourceTicketId) ?? null : null,
-      }));
-      const payload = buildInvoiceAsReceiptPayload(invoice, linesWithCrew, profile, overrides);
+      const payload = await buildCurrentInvoiceReceipt(prisma, invoice, profile, 'invoice', overrides);
 
       // Create queue entry — uses receipt endpoint
       const queueEntry = await prisma.enverusSyncQueue.create({
@@ -1004,7 +953,7 @@ enverusRouter.post(
           target: 'openinvoice',
           action: 'submit',
           endpointUrl: '/events/supply-chain/v1/receipt.submit',
-          requestPayload: JSON.stringify(payload),
+          requestPayload: serializeInvoiceSubmission(payload, invoice, profile, overrides),
           status: 'pending',
         },
       });
@@ -1048,7 +997,7 @@ enverusRouter.post(
             data: {
               status: queueStatus,
               responseStatusCode: result.statusCode,
-              responsePayload: JSON.stringify(result.body).slice(0, 10000),
+              responsePayload: JSON.stringify(result.body),
               enverusItemId,
               submittedAt: new Date(),
               respondedAt: enverusAccepted ? new Date() : null,
@@ -1061,6 +1010,7 @@ enverusRouter.post(
             where: { id: invoiceId as string },
             data: {
               enverusStatus: enverusAccepted ? 'accepted' : 'submitted',
+              enverusReceiptId: enverusItemId,
               enverusSubmittedAt: new Date(),
             },
           });
@@ -1078,6 +1028,7 @@ enverusRouter.post(
             },
           });
 
+          await reconcileEnverusFailures(prisma).catch(error => console.warn('[Enverus] Alert reconciliation deferred:', error));
           res.json({
             ok: true,
             message: enverusAccepted ? 'Invoice accepted by Enverus' : 'Invoice submitted to Enverus',
@@ -1101,7 +1052,9 @@ enverusRouter.post(
               respondedAt: new Date(),
             },
           });
-          // Fall through to return queued response
+          if (!invoice.enverusReceiptId) await prisma.invoice.update({ where: { id: invoiceId as string },
+            data: { enverusStatus: 'error', enverusSubmittedAt: null } });
+          throw new AppError(502, `Enverus submission failed: ${errMsg}`);
         }
       }
 
@@ -1109,8 +1062,7 @@ enverusRouter.post(
       await prisma.invoice.update({
         where: { id: invoiceId as string },
         data: {
-          enverusStatus: 'submitted',
-          enverusSubmittedAt: new Date(),
+          enverusStatus: 'queued',
         },
       });
 
@@ -1270,8 +1222,12 @@ enverusRouter.post(
       const overrides = {
         serviceApprover: req.body.serviceApprover as string | undefined,
         contractNumber: req.body.contractNumber as string | undefined,
+        priceBookNumber: req.body.priceBookNumber as string | undefined,
+        poNumber: req.body.poNumber as string | undefined,
         afeNumber: req.body.afeNumber as string | undefined,
         costCenter: req.body.costCenter as string | undefined,
+        buyerSiteUuid: req.body.buyerSiteUuid as string | undefined,
+        buyerDepartment: req.body.buyerDepartment as string | undefined,
         orderedByName: req.body.orderedByName as string | undefined,
         receiptType: req.body.receiptType as string | undefined,
         superintendentName: req.body.superintendentName as string | undefined,
@@ -1317,9 +1273,9 @@ enverusRouter.post(
         );
       }
 
-      const profile = invoice.company?.billingProfiles?.[0];
-      if (!profile) {
-        throw new AppError(400, 'Company has no active Enverus-enabled billing profile');
+      const profile = await resolveInvoiceBillingProfile(prisma, invoice);
+      if (!profile || !profile.enverusEnabled) {
+        throw new AppError(400, 'Invoice has no active Enverus-enabled billing profile');
       }
 
       // Validate mode allows open ticket
@@ -1333,6 +1289,8 @@ enverusRouter.post(
       if (!profile.buyerDuns) {
         throw new AppError(400, 'Billing profile missing buyerDuns');
       }
+
+      await settleInvoiceBillingFields(prisma, invoice, profile, overrides);
 
       // Check for existing pending/submitted queue entry
       const existing = await prisma.enverusSyncQueue.findFirst({
@@ -1349,97 +1307,9 @@ enverusRouter.post(
         );
       }
 
-      // Resolve service approver + contract number (override > invoice > profile default)
-      const serviceApprover =
-        overrides.serviceApprover ||
-        (profile as any).defaultServiceApprover ||
-        '';
-      const contractNumber =
-        overrides.contractNumber ||
-        invoice.poNumber ||
-        (profile as any).defaultPriceBookNumber ||
-        '';
-
-      const supplierDuns = getSupplierDuns();
-      const serviceDateFrom = invoice.periodStart
-        ? new Date(invoice.periodStart).toISOString().split('T')[0]
-        : new Date(invoice.invoiceDate).toISOString().split('T')[0];
-      const serviceDateTo = invoice.periodEnd
-        ? new Date(invoice.periodEnd).toISOString().split('T')[0]
-        : serviceDateFrom;
-
-      // Receipt type: override → default LEM (Basin Safety is all-LEM in practice).
-      // PIDX/General was removed when production went all-LEM via receipt.submit.
-      const receiptType = (overrides.receiptType || 'lem').toLowerCase();
-
-      let submissionPayload: string;
       const endpointUrl = '/events/supply-chain/v1/receipt.submit';
-
-      // Per-location facility code (well > pad) from the invoice's source tickets.
-      const facilityCode = await resolveInvoiceFacilityCode(invoice.lineItems || []);
-      // Field tech per source ticket → COP Labor-line crewMember.
-      const crewByTicket = await resolveLineCrewMembers(invoice.lineItems || []);
-
-      {
-        // JSON via receipt.submit (LEM / Water Hauling / Chemicals)
-        const receiptPayload = buildInvoiceAsReceiptPayload(
-          {
-            id: invoice.id,
-            invoiceNumber: invoice.invoiceNumber,
-            invoiceDate: invoice.invoiceDate,
-            periodStart: invoice.periodStart,
-            periodEnd: invoice.periodEnd,
-            companyName: invoice.companyName,
-            subtotal: invoice.subtotal,
-            taxAmount: invoice.taxAmount,
-            total: invoice.total,
-            poNumber: invoice.poNumber,
-            afeNumber: invoice.afeNumber,
-            costCenter: invoice.costCenter,
-            notes: invoice.notes,
-          },
-          (invoice.lineItems || []).map((li: any) => ({
-            lineNumber: li.lineNumber || li.sortOrder || 1,
-            description: li.description || li.product?.name || 'Service',
-            quantity: li.quantity,
-            unitOfMeasure: li.unitOfMeasure,
-            rate: li.rate,
-            amount: li.amount,
-            isTaxable: li.isTaxable || false,
-            sourceTicketNumber: li.sourceTicketNumber,
-            // Part # / Item ID — send the SAME identifier QB gets (qbItemFullName),
-            // falling back to an explicit line partNumber. Empty → Enverus defaults
-            // the service code to "PRODUCT" (see 2026-06-16 400 warning).
-            partNumber: li.partNumber || li.qbItemFullName,
-            // Crew member = the tech assigned to the source ticket (per line).
-            crewMember: li.sourceTicketId ? crewByTicket.get(li.sourceTicketId) ?? null : null,
-            product: li.product ? {
-              enverusProductServiceCode: li.product.enverusProductServiceCode,
-              enverusProductServiceDescription: li.product.enverusProductServiceDescription,
-              enverusUnitOfMeasure: li.product.enverusUnitOfMeasure,
-            } : null,
-          })),
-          profile as any,
-          {
-            receiptType,
-            afeNumber: overrides.afeNumber,
-            costCenter: overrides.costCenter,
-            poNumber: overrides.contractNumber, // contractNumber maps to PO for receipts
-            orderedByName: overrides.orderedByName || serviceApprover || undefined,
-            contractNumber: contractNumber || undefined,
-            serviceApprover: serviceApprover || undefined,
-            superintendentName: overrides.superintendentName,
-            officeApproverName: overrides.officeApproverName,
-            invoiceApproverName: overrides.invoiceApproverName,
-            crewMembers: overrides.crewMembers,
-            major: overrides.major,
-            minor: overrides.minor,
-            additionalDataFields: overrides.additionalDataFields,
-            facilityCode,
-          },
-        );
-        submissionPayload = JSON.stringify(receiptPayload);
-      }
+      const receiptPayload = await buildCurrentInvoiceReceipt(prisma, invoice, profile, 'field_ticket', overrides);
+      const submissionPayload = JSON.stringify(receiptPayload);
 
       // Create queue entry
       const queueEntry = await prisma.enverusSyncQueue.create({
@@ -1449,7 +1319,7 @@ enverusRouter.post(
           target: 'openticket',
           action: 'submit',
           endpointUrl,
-          requestPayload: submissionPayload.slice(0, 10000),
+          requestPayload: serializeInvoiceSubmission(receiptPayload, invoice, profile, overrides),
           status: 'pending',
         },
       });
@@ -1460,7 +1330,7 @@ enverusRouter.post(
           // Generate PDF attachment if possible
           let pdfBuffer: Buffer | undefined;
           try {
-            const pdfDoc = generateInvoicePdf(invoice as any);
+            const pdfDoc = await generateInvoicePdf(invoice as any);
             pdfBuffer = await pdfToBuffer(pdfDoc);
           } catch (pdfErr) {
             console.warn('[Enverus OT] PDF generation failed, submitting without attachment:', pdfErr instanceof Error ? pdfErr.message : pdfErr);
@@ -1497,7 +1367,7 @@ enverusRouter.post(
             data: {
               status: queueStatus,
               responseStatusCode: result.statusCode,
-              responsePayload: JSON.stringify(result.body).slice(0, 10000),
+              responsePayload: JSON.stringify(result.body),
               enverusItemId,
               submittedAt: new Date(),
               respondedAt: enverusAccepted ? new Date() : null,
@@ -1509,6 +1379,7 @@ enverusRouter.post(
             where: { id: invoiceId as string },
             data: {
               enverusStatus: enverusAccepted ? 'accepted' : 'submitted',
+              enverusReceiptId: enverusItemId,
               enverusSubmittedAt: new Date(),
             },
           });
@@ -1526,6 +1397,7 @@ enverusRouter.post(
             },
           });
 
+          await reconcileEnverusFailures(prisma).catch(error => console.warn('[Enverus] Alert reconciliation deferred:', error));
           res.json({
             ok: true,
             message: enverusAccepted ? 'Field ticket accepted by Enverus' : 'Field ticket submitted to Enverus',
@@ -1548,7 +1420,9 @@ enverusRouter.post(
               respondedAt: new Date(),
             },
           });
-          // Fall through to return queued response with error info
+          if (!invoice.enverusReceiptId) await prisma.invoice.update({ where: { id: invoiceId as string },
+            data: { enverusStatus: 'error', enverusSubmittedAt: null } });
+          throw new AppError(502, `Enverus submission failed: ${errMsg}`);
         }
       }
 
@@ -1556,8 +1430,7 @@ enverusRouter.post(
       await prisma.invoice.update({
         where: { id: invoiceId as string },
         data: {
-          enverusStatus: 'submitted',
-          enverusSubmittedAt: new Date(),
+          enverusStatus: 'queued',
         },
       });
 
@@ -1610,16 +1483,19 @@ enverusRouter.get(
       let enverusData: unknown = null;
       if (invoice.invoiceNumber) {
         try {
-          const pollResult = await pollReceiptStatus(invoice.invoiceNumber);
-          enverusData = pollResult.body?.value?.[0] ?? null;
+          const pollResult = invoice.enverusReceiptId
+            ? await pollReceiptById(invoice.enverusReceiptId)
+            : await pollReceiptStatus(invoice.invoiceNumber);
+          const body = pollResult.body as any;
+          enverusData = body?.receipt ?? body?.receipts?.[0] ?? body?.value?.[0] ?? null;
 
           if (enverusData && typeof enverusData === 'object') {
             const data = enverusData as Record<string, unknown>;
             let newStatus: string | null = null;
 
-            if (data.status === 'Approved' || data.approvedDatetime) {
+            if (String(data.status).toUpperCase() === 'APPROVED') {
               newStatus = 'accepted';
-            } else if (data.status === 'Disputed' || data.disputedDatetime) {
+            } else if (String(data.status).toUpperCase() === 'DISPUTED') {
               newStatus = 'disputed';
             }
 
@@ -1665,6 +1541,7 @@ enverusRouter.get(
   '/queue',
   async (req: Request, res: Response, next: NextFunction) => {
     try {
+      await reconcileEnverusFailures(prisma);
       const { status, entityType, limit = '50', offset = '0' } = req.query;
 
       const where: Prisma.EnverusSyncQueueWhereInput = {};
@@ -1715,6 +1592,7 @@ enverusRouter.get(
   '/queue/stats',
   async (_req: Request, res: Response, next: NextFunction) => {
     try {
+      await reconcileEnverusFailures(prisma);
       const stats = await prisma.enverusSyncQueue.groupBy({
         by: ['status'],
         _count: true,
@@ -1737,6 +1615,7 @@ enverusRouter.post(
   '/queue/:id/retry',
   async (req: Request, res: Response, next: NextFunction) => {
     try {
+      await reconcileEnverusFailures(prisma);
       const { id } = req.params;
 
       const entry = await prisma.enverusSyncQueue.findUnique({
@@ -1748,9 +1627,20 @@ enverusRouter.post(
         throw new AppError(400, `Cannot retry entry with status "${entry.status}"`);
       }
 
+      let rebuilt: Awaited<ReturnType<typeof rebuildInvoiceSubmission>> | null = null;
+      if (entry.action === 'submit' && (entry.entityType === 'invoice' || entry.entityType === 'field_ticket') &&
+        (entry.endpointUrl?.includes('receipt.submit') || entry.entityType === 'field_ticket')) {
+        try {
+          rebuilt = await rebuildInvoiceSubmission(prisma, entry);
+        } catch (error) {
+          throw new AppError(400, error instanceof Error ? error.message : 'Unable to rebuild Enverus submission');
+        }
+      }
+
       const updated = await prisma.enverusSyncQueue.update({
         where: { id: id as string },
         data: {
+          ...(rebuilt ? { requestPayload: rebuilt.requestPayload } : {}),
           status: 'pending',
           errorMessage: null,
           responsePayload: null,
@@ -1825,6 +1715,7 @@ enverusRouter.get(
   '/alerts',
   async (_req: Request, res: Response, next: NextFunction) => {
     try {
+      await reconcileEnverusFailures(prisma);
       // Queue entries with error status (API rejected)
       const errors = await prisma.enverusSyncQueue.findMany({
         where: { status: 'error' },

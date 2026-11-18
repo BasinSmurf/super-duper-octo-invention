@@ -1,11 +1,55 @@
 import { Router, Request, Response } from 'express';
 import { resolvePriceLevelRate } from '../services/billingRules.js';
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { requirePermission } from '../middleware/rbac.js';
 import { createAuditLog } from '../utils/auditLog.js';
+import type { CustomerDescription } from '../services/customerDescriptions.js';
 
 export const companiesRouter = Router();
+
+companiesRouter.get('/:id/customer-descriptions', async (req: Request, res: Response, next) => {
+  try {
+    const company = await prisma.company.findUnique({ where: { id: req.params.id as string }, select: { customerDescriptions: true } });
+    if (!company) throw new AppError(404, 'Company not found');
+    res.json({ data: company.customerDescriptions ?? [] });
+  } catch (err) { next(err); }
+});
+
+companiesRouter.put('/:id/customer-descriptions', requirePermission('billing:profiles'), async (req: Request, res: Response, next) => {
+  try {
+    const rows = req.body?.data;
+    if (!Array.isArray(rows) || rows.length > 200) throw new AppError(400, 'Provide up to 200 customer descriptions');
+    const company = await prisma.company.findUnique({ where: { id: req.params.id as string }, select: { customerDescriptions: true } });
+    if (!company) throw new AppError(404, 'Company not found');
+    const existing = (company.customerDescriptions ?? []) as unknown as CustomerDescription[];
+    for (const row of rows) {
+      if (!row || typeof row.productId !== 'string' || typeof row.description !== 'string' ||
+          !row.description.trim() || row.description.trim().length > 1000) {
+        throw new AppError(400, 'Each row needs an item and a customer description of 1–1000 characters');
+      }
+    }
+    const products = await prisma.product.findMany({ where: { id: { in: rows.map(row => row.productId) } } });
+    const seen = new Set<string>();
+    const data = rows.map(row => {
+      const product = products.find(item => item.id === row.productId);
+      const prior = existing.find(item => item.productId === row.productId);
+      if (!product?.qbItemListId || (!product.isActive && !prior)) throw new AppError(400, 'Choose an active item linked to QuickBooks');
+      if (prior && prior.qbItemListId !== product.qbItemListId) throw new AppError(400, 'An item’s QuickBooks mapping changed. Remove its override and save before adding it again.');
+      if (seen.has(product.qbItemListId)) throw new AppError(400, 'Only one customer description is allowed per QuickBooks item');
+      seen.add(product.qbItemListId);
+      return {
+        productId: product.id, qbItemListId: product.qbItemListId, partNumber: product.partNumber,
+        standardName: product.name, standardDescription: product.description,
+        description: row.description.trim(),
+      };
+    });
+    await prisma.company.update({ where: { id: req.params.id as string }, data: { customerDescriptions: data } });
+    await createAuditLog({ userId: req.user!.userId, entityType: 'company', entityId: req.params.id as string,
+      action: 'update', changes: { customerDescriptions: { before: existing.map(row => ({ ...row })), after: data } }, ipAddress: req.ip });
+    res.json({ data });
+  } catch (err) { next(err); }
+});
 
 // GET /api/companies — list companies (with search)
 companiesRouter.get('/', async (req: Request, res: Response, next) => {
@@ -158,7 +202,7 @@ companiesRouter.get('/:id', async (req: Request, res: Response, next) => {
         rentalBoms: {
           where: { isActive: true },
           include: BOM_INCLUDE,
-          orderBy: { bomType: 'asc' },
+          orderBy: [{ bomType: 'asc' }, { isDefault: 'desc' }, { name: 'asc' }, { createdAt: 'asc' }],
         },
       },
     });
@@ -214,7 +258,10 @@ companiesRouter.get('/:id', async (req: Request, res: Response, next) => {
       }));
     }
 
-    res.json({ ...company, childCompanies: enrichedChildCompanies });
+    // Packages carry what THIS customer pays (their QB price level), so AR can
+    // see on the profile which packages would bill at list.
+    const rentalBoms = await attachPackagePricing(company.id, company.rentalBoms);
+    res.json({ ...company, rentalBoms, childCompanies: enrichedChildCompanies });
   } catch (err) {
     next(err);
   }
@@ -223,6 +270,7 @@ companiesRouter.get('/:id', async (req: Request, res: Response, next) => {
 // POST /api/companies
 companiesRouter.post('/', requirePermission('customers:manage'), async (req: Request, res: Response, next) => {
   try {
+    if ('customerDescriptions' in req.body) throw new AppError(400, 'Use the customer descriptions endpoint');
     const company = await prisma.company.create({ data: req.body });
 
     await createAuditLog({
@@ -243,6 +291,7 @@ companiesRouter.post('/', requirePermission('customers:manage'), async (req: Req
 // PUT /api/companies/:id
 companiesRouter.put('/:id', requirePermission('customers:manage'), async (req: Request, res: Response, next) => {
   try {
+    if ('customerDescriptions' in req.body) throw new AppError(400, 'Use the customer descriptions endpoint');
     const existing = await prisma.company.findUnique({ where: { id: req.params.id as string } });
     if (!existing) throw new AppError(404, 'Company not found');
 
@@ -456,7 +505,8 @@ companiesRouter.get('/:id/rental-boms', async (req: Request, res: Response, next
     const raw = await prisma.customerRentalBom.findMany({
       where: { companyId: req.params.id as string, isActive: true },
       include: BOM_INCLUDE,
-      orderBy: { bomType: 'asc' },
+      // Variants of one type sit together, default first.
+      orderBy: [{ bomType: 'asc' }, { isDefault: 'desc' }, { name: 'asc' }, { createdAt: 'asc' }],
     });
     const boms = await attachPackagePricing(req.params.id as string, raw);
     res.json(boms);
@@ -487,24 +537,69 @@ const normalizeProductId = (v: unknown): string | null =>
 const RENTAL_BOM_TYPES = new Set(['standard', 'manned', 'unmanned', 'other', 'rig', 'drilling']);
 const normalizeBomType = (v: unknown): any =>
   typeof v === 'string' && RENTAL_BOM_TYPES.has(v) ? v : 'standard';
+const normalizeBomName = (v: unknown): string | null =>
+  typeof v === 'string' && v.trim() ? v.trim().slice(0, 120) : null;
 
-// POST /api/companies/:id/rental-boms — one BOM per (customer, type).
-companiesRouter.post('/:id/rental-boms', requirePermission('billing:profiles'), async (req: Request, res: Response, next) => {
-  try {
-    const { bomType, manned, includedTechs, notes, packageProductId } = req.body ?? {};
-    const bom = await prisma.customerRentalBom.create({
-      data: {
-        companyId: req.params.id as string,
-        bomType: normalizeBomType(bomType),
-        manned: typeof manned === 'boolean' ? manned : true,
-        includedTechs: Number.isFinite(includedTechs) && includedTechs >= 0 ? Math.trunc(includedTechs) : 0,
-        notes: notes || null,
-        packageProductId: normalizeProductId(packageProductId),
-        createdById: req.user!.userId,
-        items: { create: normalizeBomItems(req.body?.items) },
-      },
-      include: BOM_INCLUDE,
+type BomTx = Pick<typeof prisma, 'customerRentalBom'>;
+
+/**
+ * Keep exactly one default per (company, type) among active packages: the
+ * variant dispatch preselects. `claim` = this package asked to be the default;
+ * otherwise it only becomes one when its type has no default yet, so adding a
+ * second variant never silently changes what dispatch picks.
+ */
+async function settleBomDefault(tx: BomTx, companyId: string, bomType: string, id: string, claim: boolean) {
+  const others = await tx.customerRentalBom.findMany({
+    where: { companyId, bomType: bomType as any, isActive: true, id: { not: id } },
+    select: { id: true, isDefault: true },
+  });
+  const makeDefault = claim || !others.some(o => o.isDefault);
+  if (makeDefault) {
+    await tx.customerRentalBom.updateMany({
+      where: { companyId, bomType: bomType as any, id: { not: id }, isDefault: true },
+      data: { isDefault: false },
     });
+  }
+  await tx.customerRentalBom.update({ where: { id }, data: { isDefault: makeDefault } });
+}
+
+/** After a package leaves a type (deleted, retyped, deactivated), promote the
+ *  oldest remaining variant if that left the type without a default. */
+async function backfillBomDefault(tx: BomTx, companyId: string, bomType: string) {
+  const rows = await tx.customerRentalBom.findMany({
+    where: { companyId, bomType: bomType as any, isActive: true },
+    orderBy: { createdAt: 'asc' },
+    select: { id: true, isDefault: true },
+  });
+  if (rows.length && !rows.some(r => r.isDefault)) {
+    await tx.customerRentalBom.update({ where: { id: rows[0].id }, data: { isDefault: true } });
+  }
+}
+
+// POST /api/companies/:id/rental-boms — a customer may hold several packages
+// of one type (the variants their MSA prices separately); one is the default.
+companiesRouter.post('/:id/rental-boms', requirePermission('rentals:edit_packages'), async (req: Request, res: Response, next) => {
+  try {
+    const { bomType, manned, includedTechs, notes, packageProductId, name, isDefault } = req.body ?? {};
+    const companyId = req.params.id as string;
+    const bom = await prisma.$transaction(async (tx) => {
+      const created = await tx.customerRentalBom.create({
+        data: {
+          companyId,
+          bomType: normalizeBomType(bomType),
+          name: normalizeBomName(name),
+          manned: typeof manned === 'boolean' ? manned : true,
+          includedTechs: Number.isFinite(includedTechs) && includedTechs >= 0 ? Math.trunc(includedTechs) : 0,
+          notes: notes || null,
+          packageProductId: normalizeProductId(packageProductId),
+          createdById: req.user!.userId,
+          items: { create: normalizeBomItems(req.body?.items) },
+        },
+      });
+      await settleBomDefault(tx, companyId, created.bomType, created.id, isDefault === true);
+      return tx.customerRentalBom.findUnique({ where: { id: created.id }, include: BOM_INCLUDE });
+    });
+    if (!bom) throw new AppError(500, 'Rental package vanished after create');
 
     await createAuditLog({
       userId: req.user!.userId,
@@ -523,19 +618,23 @@ companiesRouter.post('/:id/rental-boms', requirePermission('billing:profiles'), 
 
 // PUT /api/companies/:companyId/rental-boms/:id — updates fields and, when an
 // `items` array is present, replaces the item set wholesale (simplest for a
-// small edited list). bomType is immutable (it's the unique key).
-companiesRouter.put('/:companyId/rental-boms/:id', requirePermission('billing:profiles'), async (req: Request, res: Response, next) => {
+// small edited list). Changing bomType moves the package to another type's
+// variants; the default is re-settled on both sides.
+companiesRouter.put('/:companyId/rental-boms/:id', requirePermission('rentals:edit_packages'), async (req: Request, res: Response, next) => {
   try {
     const id = req.params.id as string;
-    const { manned, includedTechs, notes, isActive, items, packageProductId } = req.body ?? {};
+    const { manned, includedTechs, notes, isActive, items, packageProductId, name, isDefault, bomType } = req.body ?? {};
 
     const existing = await prisma.customerRentalBom.findUnique({ where: { id } });
-    if (!existing) throw new AppError(404, 'Rental BOM not found');
+    if (!existing || existing.companyId !== req.params.companyId) throw new AppError(404, 'Rental BOM not found');
+    const nextType = bomType !== undefined ? normalizeBomType(bomType) : existing.bomType;
 
     const bom = await prisma.$transaction(async (tx) => {
       await tx.customerRentalBom.update({
         where: { id },
         data: {
+          bomType: nextType,
+          ...(name !== undefined ? { name: normalizeBomName(name) } : {}),
           ...(typeof manned === 'boolean' ? { manned } : {}),
           ...(Number.isFinite(includedTechs) ? { includedTechs: Math.max(0, Math.trunc(includedTechs)) } : {}),
           ...(notes !== undefined ? { notes: notes || null } : {}),
@@ -547,6 +646,18 @@ companiesRouter.put('/:companyId/rental-boms/:id', requirePermission('billing:pr
         await tx.customerRentalBomItem.deleteMany({ where: { bomId: id } });
         const rows = normalizeBomItems(items).map((it) => ({ ...it, bomId: id }));
         if (rows.length) await tx.customerRentalBomItem.createMany({ data: rows });
+      }
+      const active = typeof isActive === 'boolean' ? isActive : existing.isActive;
+      if (active) {
+        // Staying in its type keeps "default" unless un-asked; moving type
+        // only takes the new type's default when asked (or it has none).
+        const claim = isDefault === true || (isDefault === undefined && existing.isDefault && nextType === existing.bomType);
+        await settleBomDefault(tx, existing.companyId, nextType, id, claim);
+      } else {
+        await tx.customerRentalBom.update({ where: { id }, data: { isDefault: false } });
+      }
+      if (nextType !== existing.bomType || !active || isDefault === false) {
+        await backfillBomDefault(tx, existing.companyId, existing.bomType);
       }
       return tx.customerRentalBom.findUnique({ where: { id }, include: BOM_INCLUDE });
     });
@@ -567,12 +678,18 @@ companiesRouter.put('/:companyId/rental-boms/:id', requirePermission('billing:pr
 });
 
 // DELETE /api/companies/:companyId/rental-boms/:id — hard delete (cascades to
-// items). Hard, not soft: the (company, type) unique index would otherwise
-// block re-creating the same type while a deactivated row lingered.
-companiesRouter.delete('/:companyId/rental-boms/:id', requirePermission('billing:profiles'), async (req: Request, res: Response, next) => {
+// items). Rentals keep their own snapshot of the package in composition, so
+// deleting a package never changes what an existing job bills. If it was its
+// type's default, the oldest remaining variant takes over.
+companiesRouter.delete('/:companyId/rental-boms/:id', requirePermission('rentals:edit_packages'), async (req: Request, res: Response, next) => {
   try {
     const id = req.params.id as string;
-    await prisma.customerRentalBom.delete({ where: { id } });
+    const existing = await prisma.customerRentalBom.findUnique({ where: { id } });
+    if (!existing || existing.companyId !== req.params.companyId) throw new AppError(404, 'Rental BOM not found');
+    await prisma.$transaction(async (tx) => {
+      await tx.customerRentalBom.delete({ where: { id } });
+      await backfillBomDefault(tx, existing.companyId, existing.bomType);
+    });
     await createAuditLog({
       userId: req.user!.userId,
       entityType: 'customer_rental_bom',

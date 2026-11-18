@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { api } from '@/lib/api'
 import { Search, Wrench, ChevronRight, X, Plus, Loader2, Layers } from 'lucide-react'
 import { cn } from '@/lib/cn'
+import { ScbaAssemblyFields, blankScbaAssembly } from '@/components/ScbaAssemblyFields'
 
 interface EquipmentProduct {
   id: string
@@ -104,7 +105,7 @@ export function EquipmentPage() {
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by serial number..."
+            placeholder="Search by Case ID, serial number, or product..."
             className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
           />
         </div>
@@ -207,6 +208,9 @@ export function EquipmentPage() {
 // ============================================================
 
 function AddEquipmentModal({ onClose, onCreated }: { onClose: () => void; onCreated: (id?: string) => void }) {
+  const [unitType, setUnitType] = useState('standard')
+  const [scba, setScba] = useState(blankScbaAssembly)
+  const isScba = unitType !== 'standard'
   const [serialNumber, setSerialNumber] = useState('')
   const [productSearch, setProductSearch] = useState('')
   const [products, setProducts] = useState<ProductOption[]>([])
@@ -227,7 +231,7 @@ function AddEquipmentModal({ onClose, onCreated }: { onClose: () => void; onCrea
       try {
         const params = new URLSearchParams({ search: productSearch, limit: '15', active: 'true' })
         const res = await api.get<{ data: ProductOption[] }>(`/products?${params}`)
-        setProducts(res.data.filter(p => p.isSerialized))
+        setProducts(res.data.filter(p => p.isSerialized || p.isAssembly))
         setShowDropdown(true)
       } catch { setProducts([]) }
     }, 200)
@@ -241,13 +245,13 @@ function AddEquipmentModal({ onClose, onCreated }: { onClose: () => void; onCrea
   }
 
   async function handleSave() {
-    if (!selectedProduct || !serialNumber.trim()) return
+    if (isScba ? !scba.caseId.trim() : !selectedProduct || !serialNumber.trim()) return
     setSaving(true)
     setError('')
     try {
       const payload: Record<string, any> = {
         serialNumber: serialNumber.trim(),
-        productId: selectedProduct.id,
+        productId: selectedProduct?.id,
         ownership,
         status,
       }
@@ -255,7 +259,8 @@ function AddEquipmentModal({ onClose, onCreated }: { onClose: () => void; onCrea
       if (purchaseDate) payload.purchaseDate = new Date(purchaseDate).toISOString()
       if (conditionNotes.trim()) payload.conditionNotes = conditionNotes.trim()
 
-      const result = await api.post<{ id: string }>('/equipment', payload)
+      const result = await api.post<{ id: string }>(isScba ? '/equipment/scba' : '/equipment',
+        isScba ? { ...payload, ...scba } : payload)
       onCreated(result.id)
     } catch (err: any) {
       setError(err?.message || 'Failed to create equipment')
@@ -275,6 +280,19 @@ function AddEquipmentModal({ onClose, onCreated }: { onClose: () => void; onCrea
         </div>
 
         <div className="p-4 space-y-4">
+          <label className="block text-sm font-medium text-slate-700">
+            Unit Type
+            <select value={unitType} onChange={e => {
+              setUnitType(e.target.value)
+              if (e.target.value !== 'standard') setScba(s => ({ ...s, durationMinutes: Number(e.target.value) as 5 | 30 }))
+            }} className="mt-1 w-full px-3 py-2 text-sm border border-slate-300 rounded-lg">
+              <option value="standard">Equipment / catalog product</option>
+              <option value="5">SCBA 5 min Pack — Assembly</option>
+              <option value="30">SCBA 30 min Pack — Assembly</option>
+            </select>
+          </label>
+          {isScba && <ScbaAssemblyFields value={scba} onChange={setScba} disabled={saving} />}
+          {!isScba && <>
           {/* Product search */}
           <div className="relative" ref={dropdownRef}>
             <label className="block text-sm font-medium text-slate-700 mb-1">Product *</label>
@@ -326,6 +344,7 @@ function AddEquipmentModal({ onClose, onCreated }: { onClose: () => void; onCrea
           </div>
 
           {/* Ownership + Status */}
+          </>}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">Ownership</label>
@@ -358,7 +377,7 @@ function AddEquipmentModal({ onClose, onCreated }: { onClose: () => void; onCrea
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1">
-                {selectedProduct && isCylinder(selectedProduct) ? 'Hydro/UE Due' : 'Calibration Due'}
+                {isScba ? 'Posi-check Due' : selectedProduct && isCylinder(selectedProduct) ? 'Hydro/UE Due' : 'Calibration Due'}
               </label>
               <input type="date" value={calibrationDueDate} onChange={e => setCalibrationDueDate(e.target.value)} className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none" />
             </div>
@@ -389,7 +408,7 @@ function AddEquipmentModal({ onClose, onCreated }: { onClose: () => void; onCrea
           </button>
           <button
             onClick={handleSave}
-            disabled={saving || !selectedProduct || !serialNumber.trim()}
+            disabled={saving || (isScba ? !scba.caseId.trim() : !selectedProduct || !serialNumber.trim())}
             className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1"
           >
             {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}

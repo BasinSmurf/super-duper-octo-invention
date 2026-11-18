@@ -17,7 +17,10 @@ export interface InspectionData {
 interface RentalInspectionEditorProps {
   equipmentName: string
   serialNumber: string
+  submitLabel?: string
   headerNote?: string
+  saving?: boolean
+  error?: string
   onComplete: (data: InspectionData) => void
   onCancel: () => void
 }
@@ -34,7 +37,7 @@ const CONDITION_OPTIONS: Array<{
   { value: 'needs_repair', label: 'Needs Repair', icon: XCircle, color: 'text-red-600' },
 ]
 
-export function RentalInspectionEditor({ equipmentName, serialNumber, headerNote, onComplete, onCancel }: RentalInspectionEditorProps) {
+export function RentalInspectionEditor({ equipmentName, serialNumber, headerNote, submitLabel = 'Complete Return', saving, error, onComplete, onCancel }: RentalInspectionEditorProps) {
   const [data, setData] = useState<InspectionData>({
     overallCondition: 'good',
     physicalDamage: false,
@@ -68,13 +71,14 @@ export function RentalInspectionEditor({ equipmentName, serialNumber, headerNote
             </h3>
             <p className="text-xs text-slate-500">{equipmentName} — {serialNumber}</p>
           </div>
-          <button onClick={onCancel} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-slate-100">
+          <button disabled={saving} onClick={onCancel} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-slate-100">
             <X className="w-5 h-5 text-slate-400" />
           </button>
         </div>
 
         {/* Scrollable content */}
         <div className="flex-1 overflow-y-auto p-4 space-y-5">
+          {error && <p role="alert" className="rounded bg-red-50 p-3 text-sm text-red-700">{error}</p>}
           {/* Overall Condition */}
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-2">Overall Condition</label>
@@ -207,6 +211,7 @@ export function RentalInspectionEditor({ equipmentName, serialNumber, headerNote
           <button
             type="button"
             onClick={onCancel}
+            disabled={saving}
             className="flex-1 py-3 rounded-lg border border-slate-200 text-slate-700 font-medium"
           >
             Cancel
@@ -214,9 +219,10 @@ export function RentalInspectionEditor({ equipmentName, serialNumber, headerNote
           <button
             type="button"
             onClick={handleSubmit}
+            disabled={saving}
             className="flex-1 py-3 rounded-lg bg-blue-600 text-white font-medium"
           >
-            Complete Return
+            {saving ? 'Saving…' : submitLabel}
           </button>
         </div>
       </div>

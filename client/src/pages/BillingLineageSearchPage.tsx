@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import { useSearchParams, Link } from 'react-router-dom'
 import { Search, Loader2, ArrowUpRight } from 'lucide-react'
 import { api, ApiError } from '@/lib/api'
+import { LineageDownloadButton, type LineageTicket } from '@/components/LineageDownloadButton'
 import { BillingProvenancePill, formatDate, formatDateShort, type BillingObservationLite } from '@/components/BillingProvenancePill'
 
 interface DocRef {
@@ -38,11 +39,19 @@ interface Submission {
 }
 
 interface LineageResponse {
+  tickets: LineageTicket[]
   resolvedVia: string
   docRefs: DocRef[]
   lines: DocLine[]
   submissions: Submission[]
   observations: BillingObservationLite[]
+}
+
+interface SearchResponse {
+  documents: Pick<DocRef, 'id' | 'docNumber' | 'docType' | 'revision' | 'qbTxnId'>[]
+  tickets: { id: string; ticketNumber: string; workDescription: string | null; status: string }[]
+  total: number
+  hasMore: boolean
 }
 
 const RESOLVED_VIA_LABEL: Record<string, string> = {
@@ -64,35 +73,49 @@ export function BillingLineageSearchPage() {
   const [data, setData] = useState<LineageResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-
-  const runSearch = useCallback((value: string) => {
-    if (!value.trim()) return
-    setLoading(true)
-    setError(null)
-    setData(null)
-    api.get<LineageResponse>(`/billing/lineage?q=${encodeURIComponent(value.trim())}`)
-      .then(setData)
-      .catch((err) => setError(err instanceof ApiError ? err.message : 'Search failed'))
-      .finally(() => setLoading(false))
-  }, [])
+  const [results, setResults] = useState<SearchResponse | null>(null)
+  const searchQuery = params.get('q')?.trim() ?? ''
+  const page = Math.max(0, Number(params.get('page')) || 0)
+  const docRefId = params.get('docRefId')
+  const ticketId = params.get('ticketId')
 
   useEffect(() => {
-    const initial = params.get('q')
-    if (initial) runSearch(initial)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    setQ(searchQuery)
+    setData(null)
+    setResults(null)
+    setError(null)
+    if (!searchQuery) {
+      setLoading(false)
+      return
+    }
+    let cancelled = false
+    setLoading(true)
+    const query = new URLSearchParams({ q: searchQuery })
+    const request = docRefId || ticketId
+      ? (() => {
+          if (docRefId) query.set('docRefId', docRefId)
+          else if (ticketId) query.set('ticketId', ticketId)
+          return api.get<LineageResponse>(`/billing/lineage?${query}`)
+            .then((response) => { if (!cancelled) setData(response) })
+        })()
+      : api.get<SearchResponse>(`/billing/lineage/search?${query}&page=${page}`)
+          .then((response) => { if (!cancelled) setResults(response) })
+    request
+      .catch((err) => { if (!cancelled) setError(err instanceof ApiError ? err.message : 'Search failed') })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [searchQuery, page, docRefId, ticketId])
 
   function onSubmit(e: React.FormEvent) {
     e.preventDefault()
-    setParams(q ? { q } : {})
-    runSearch(q)
+    setParams(q.trim() ? { q: q.trim() } : {})
   }
 
   return (
     <div className="max-w-3xl mx-auto p-6 space-y-6">
       <div>
         <h1 className="text-xl font-semibold text-slate-900">Billing Lineage</h1>
-        <p className="text-sm text-slate-500">Find where a ticket's billing went — by ticket number, invoice number, credit memo number, or QuickBooks TxnID.</p>
+        <p className="text-sm text-slate-500">Search any part of a ticket number, invoice number, credit memo number, QuickBooks TxnID, or submission reference.</p>
       </div>
 
       <form onSubmit={onSubmit} className="flex items-center gap-2">
@@ -101,7 +124,7 @@ export function BillingLineageSearchPage() {
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="FS-2026-00002, INV-2026-00001, QB TxnID…"
+            placeholder="Try 2026-0, part of a number, or a submission reference…"
             className="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-lg text-sm"
           />
         </div>
@@ -120,9 +143,40 @@ export function BillingLineageSearchPage() {
 
       {error && <p className="text-sm text-red-600">{error}</p>}
 
+      {results && (
+        <section className="space-y-3">
+          <h2 className="text-sm font-semibold text-slate-700">{results.total.toLocaleString()} matches for “{searchQuery}”</h2>
+          {results.total === 0 && <p className="text-sm text-slate-500">No matches. Try a shorter part of the identifier.</p>}
+          {results.documents.map((d) => (
+            <button key={d.id} onClick={() => setParams({ q: searchQuery, page: String(page), docRefId: d.id })}
+              className="block w-full text-left p-3 border border-slate-200 rounded-lg hover:bg-blue-50">
+              <span className="font-mono text-sm text-blue-700">{d.docNumber}{d.revision > 1 ? ` (rev ${d.revision})` : ''}</span>
+              <span className="ml-2 text-xs text-slate-500">{d.docType}{d.qbTxnId ? ` · QB ${d.qbTxnId}` : ''}</span>
+            </button>
+          ))}
+          {results.tickets.map((t) => (
+            <button key={t.id} onClick={() => setParams({ q: searchQuery, page: String(page), ticketId: t.id })}
+              className="block w-full text-left p-3 border border-slate-200 rounded-lg hover:bg-blue-50">
+              <span className="font-mono text-sm text-blue-700">{t.ticketNumber}</span>
+              <span className="ml-2 text-xs text-slate-500">Ticket · {t.status}</span>
+              {t.workDescription && <p className="text-xs text-slate-500 truncate mt-1">{t.workDescription}</p>}
+            </button>
+          ))}
+          {(page > 0 || results.hasMore) && (
+            <div className="flex items-center gap-3 text-sm">
+              <button disabled={page === 0} onClick={() => setParams({ q: searchQuery, page: String(page - 1) })} className="text-blue-700 disabled:opacity-40">Previous</button>
+              <span className="text-slate-500">Page {page + 1} · up to 100 documents and 100 tickets per page</span>
+              <button disabled={!results.hasMore} onClick={() => setParams({ q: searchQuery, page: String(page + 1) })} className="text-blue-700 disabled:opacity-40">Next</button>
+            </div>
+          )}
+        </section>
+      )}
+
       {data && (
         <div className="space-y-5">
+          <button onClick={() => setParams({ q: searchQuery, page: String(page) })} className="text-sm text-blue-700 hover:underline">← Back to search results</button>
           <p className="text-xs text-slate-400">Resolved via {RESOLVED_VIA_LABEL[data.resolvedVia] ?? data.resolvedVia}</p>
+          <LineageDownloadButton key={`${docRefId ?? ''}:${ticketId ?? ''}:${searchQuery}`} tickets={data.tickets ?? data.lines} />
 
           <section>
             <h2 className="text-sm font-semibold text-slate-700 mb-2">Documents</h2>
@@ -195,7 +249,7 @@ export function BillingLineageSearchPage() {
         </div>
       )}
 
-      {!loading && !error && !data && (
+      {!loading && !error && !data && !results && (
         <p className="text-sm text-slate-400 flex items-center gap-1">
           Search above, or arrive here from a "View full lineage" link. <ArrowUpRight className="w-3.5 h-3.5" />
         </p>

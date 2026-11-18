@@ -10,7 +10,7 @@
  * Aging thresholds come from the admin-tunable BoardConfig singleton.
  */
 
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import type { Prisma, ShopItemStatus } from '../db.js';
 import { resolveHoldReason, type ResolvedHoldReason } from './shopHoldReason.js';
 
@@ -155,13 +155,8 @@ export interface BoardCard {
 }
 
 /** Read a personal-monitor's stored bin location off its customData JSON. */
-export function binLocationOf(customData: unknown): string | null {
-  if (customData && typeof customData === 'object' && !Array.isArray(customData)) {
-    const v = (customData as Record<string, unknown>).binLocation;
-    if (typeof v === 'string' && v.trim()) return v.trim();
-  }
-  return null;
-}
+export { binLocationOf } from './shopBins.js';
+import { binLocationOf } from './shopBins.js';
 
 /**
  * Bins currently held by an active (non-returned, non-condemned) personal
@@ -170,15 +165,15 @@ export function binLocationOf(customData: unknown): string | null {
  * on its own, with no extra bookkeeping needed on the release/void/force-close
  * paths that already flip status to `returned`.
  */
-export async function getOccupiedBins(): Promise<Map<string, { workOrderNumber: string; itemId: string }>> {
+export async function getOccupiedBins(): Promise<Map<string, { workOrderNumber: string; workOrderId: string; itemId: string }>> {
   const items = await prisma.shopWorkOrderItem.findMany({
     where: { equipmentCategory: 'personal_monitor', status: { notIn: ['returned', 'condemned'] } },
-    select: { id: true, customData: true, workOrder: { select: { workOrderNumber: true } } },
+    select: { id: true, workOrderId: true, customData: true, workOrder: { select: { workOrderNumber: true } } },
   });
-  const map = new Map<string, { workOrderNumber: string; itemId: string }>();
+  const map = new Map<string, { workOrderNumber: string; workOrderId: string; itemId: string }>();
   for (const it of items) {
     const bin = binLocationOf(it.customData);
-    if (bin) map.set(bin, { workOrderNumber: it.workOrder.workOrderNumber, itemId: it.id });
+    if (bin) map.set(bin, { workOrderNumber: it.workOrder.workOrderNumber, workOrderId: it.workOrderId, itemId: it.id });
   }
   return map;
 }
@@ -220,7 +215,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   ue_cylinder: 'UE Cylinder',
   other: 'Other',
 };
-function humanizeCategory(raw: string): string {
+export function humanizeCategory(raw: string): string {
   return CATEGORY_LABEL[raw] ?? raw.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 

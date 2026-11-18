@@ -1,11 +1,12 @@
 import { Router, Request, Response } from 'express';
 import Fuse from 'fuse.js';
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { AppError } from '../middleware/errorHandler.js';
 import type { TicketStatus } from '../db.js';
 import { requirePermission } from '../middleware/rbac.js';
 import { createAuditLog } from '../utils/auditLog.js';
 import { emitEvent } from '../services/eventBus.js';
+import { isVerificationCurrent, validateExpiryDays, workPointIdentityChanged } from '../services/workPointVerification.js';
 import { dmrImportRouter } from './dmr-import.js';
 import { dmrMatchRouter } from './dmr-match.js';
 import { proximityRouter } from './proximity.js';
@@ -22,6 +23,24 @@ locationsRouter.use('/proximity', proximityRouter);
 // ============================================================
 // FIELDS
 // ============================================================
+
+locationsRouter.get('/work-point-verification-settings', async (_req, res, next) => {
+  try {
+    const config = await prisma.workPointVerificationConfig.findUnique({ where: { id: 'default' } });
+    res.json({ expiryDays: config?.expiryDays ?? 0 });
+  } catch (error) { next(error); }
+});
+
+locationsRouter.put('/work-point-verification-settings', requirePermission('system:config'), async (req, res, next) => {
+  try {
+    const expiryDays = validateExpiryDays(req.body?.expiryDays);
+    await prisma.$transaction(async tx => {
+      await tx.workPointVerificationConfig.upsert({ where: { id: 'default' }, create: { id: 'default', expiryDays }, update: { expiryDays } });
+      await tx.auditLog.create({ data: { userId: req.user!.userId, entityType: 'WorkPointVerificationConfig', entityId: 'default', action: 'update', changes: { expiryDays } } });
+    });
+    res.json({ expiryDays });
+  } catch (error) { next(error); }
+});
 
 locationsRouter.get('/fields', async (req: Request, res: Response, next) => {
   try {
@@ -845,7 +864,9 @@ locationsRouter.get('/work-points', async (req: Request, res: Response, next) =>
       return wp;
     });
 
-    res.json({ data: normalized });
+    const config = await prisma.workPointVerificationConfig.findUnique({ where: { id: 'default' } });
+    const expiryDays = config?.expiryDays ?? 0;
+    res.json({ data: normalized.map(wp => ({ ...wp, verificationCurrent: isVerificationCurrent(wp.verified, wp.dateVerified, expiryDays) })), expiryDays });
   } catch (err) {
     next(err);
   }
@@ -853,7 +874,8 @@ locationsRouter.get('/work-points', async (req: Request, res: Response, next) =>
 
 locationsRouter.post('/work-points', requirePermission('locations:manage'), async (req: Request, res: Response, next) => {
   try {
-    const wp = await prisma.workPoint.create({ data: req.body });
+    const { verified, dateVerified, verificationChangedAt, ...data } = req.body;
+    const wp = await prisma.workPoint.create({ data });
     res.status(201).json(wp);
   } catch (err) {
     next(err);
@@ -862,7 +884,11 @@ locationsRouter.post('/work-points', requirePermission('locations:manage'), asyn
 
 locationsRouter.put('/work-points/:id', requirePermission('locations:manage'), async (req: Request, res: Response, next) => {
   try {
-    const wp = await prisma.workPoint.update({ where: { id: req.params.id as string }, data: req.body });
+    const existing = await prisma.workPoint.findUnique({ where: { id: req.params.id as string } });
+    if (!existing) throw new AppError(404, 'Work point not found');
+    const { verified, dateVerified, verificationChangedAt, ...data } = req.body;
+    const changed = workPointIdentityChanged(existing, data);
+    const wp = await prisma.workPoint.update({ where: { id: existing.id }, data: { ...data, ...(changed ? { verified: false, dateVerified: null, verificationChangedAt: new Date() } : {}) } });
     res.json(wp);
   } catch (err) {
     next(err);
@@ -2330,6 +2356,8 @@ locationsRouter.post('/transfer-operator', requirePermission('locations:manage')
     };
 
     if (!toOperatorId) throw new AppError(400, 'toOperatorId is required');
+    if (fromOperatorId === toOperatorId) throw new AppError(400, 'Source and destination operators must differ');
+    if (fromOperatorId && !await prisma.company.findUnique({ where: { id: fromOperatorId }, select: { id: true } })) throw new AppError(400, 'Source operator not found');
     if (!fromOperatorId && (!padIds || padIds.length === 0)) {
       throw new AppError(400, 'Provide either fromOperatorId (bulk) or padIds[] (selective)');
     }

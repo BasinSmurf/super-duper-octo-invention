@@ -23,6 +23,7 @@ export interface EditableLineItem {
 }
 
 interface ProductResult {
+  isTaxable: boolean
   id: string
   partNumber: string
   name: string
@@ -33,11 +34,27 @@ interface ProductResult {
 }
 
 interface Props {
+  taxExempt?: boolean
+  companyId?: string
   lineItems: EditableLineItem[]
   onChange: (items: EditableLineItem[]) => void
 }
 
-export function InvoiceLineEditor({ lineItems, onChange }: Props) {
+export function InvoiceLineEditor({ companyId, lineItems, onChange, taxExempt = false }: Props) {
+  const [customerDescriptions, setCustomerDescriptions] = useState<{ qbItemListId: string; description: string }[]>([])
+  const [descriptionError, setDescriptionError] = useState('')
+  const [descriptionsLoading, setDescriptionsLoading] = useState(!!companyId)
+  useEffect(() => {
+    let cancelled = false
+    setCustomerDescriptions([])
+    setDescriptionError('')
+    setDescriptionsLoading(!!companyId)
+    if (companyId) api.get<{ data: { qbItemListId: string; description: string }[] }>(`/companies/${companyId}/customer-descriptions`)
+      .then(result => { if (!cancelled) setCustomerDescriptions(result.data) })
+      .catch(() => { if (!cancelled) setDescriptionError('Customer Alt Text could not load. Retry by reopening the invoice before choosing a replacement item.') })
+      .finally(() => { if (!cancelled) setDescriptionsLoading(false) })
+    return () => { cancelled = true }
+  }, [companyId])
   const unmappedCount = lineItems.filter(
     li => li.amount > 0 && !li.qbItemFullName
   ).length
@@ -86,12 +103,14 @@ export function InvoiceLineEditor({ lineItems, onChange }: Props) {
   }
 
   function onProductSelect(index: number, product: ProductResult) {
+    if (descriptionsLoading || descriptionError) return
     updateLine(index, {
       productId: product.id,
       partNumber: product.partNumber,
       qbItemFullName: product.qbItemFullName,
       qbItemListId: product.qbItemListId,
-      description: product.name,
+      description: customerDescriptions.find(row => row.qbItemListId === product.qbItemListId)?.description || product.name,
+      isTaxable: !taxExempt && product.isTaxable,
       rate: product.defaultSellPrice ?? lineItems[index].rate,
       unitOfMeasure: product.unitOfMeasure || 'EA',
       amount: Math.round(
@@ -104,6 +123,8 @@ export function InvoiceLineEditor({ lineItems, onChange }: Props) {
 
   return (
     <div>
+      {descriptionsLoading && <p role="status" className="mb-2 text-sm text-slate-600">Loading customer Alt Text…</p>}
+      {descriptionError && <p role="alert" className="mb-2 text-sm text-red-700">{descriptionError}</p>}
       {/* Warning banner */}
       {unmappedCount > 0 ? (
         <div className="flex items-center gap-2 mb-3 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-700">
@@ -137,6 +158,7 @@ export function InvoiceLineEditor({ lineItems, onChange }: Props) {
             onChange={updateLine}
             onRemove={removeLine}
             onProductSelect={onProductSelect}
+            mappingDisabled={descriptionsLoading || !!descriptionError}
           />
         ))}
       </div>
@@ -167,12 +189,14 @@ function LineRow({
   onChange,
   onRemove,
   onProductSelect,
+  mappingDisabled,
 }: {
   line: EditableLineItem
   index: number
   onChange: (index: number, updates: Partial<EditableLineItem>) => void
   onRemove: (index: number) => void
   onProductSelect: (index: number, product: ProductResult) => void
+  mappingDisabled: boolean
 }) {
   const [partSearch, setPartSearch] = useState(line.partNumber || '')
   const [products, setProducts] = useState<ProductResult[]>([])
@@ -207,7 +231,7 @@ function LineRow({
       setSearching(true)
       try {
         const data = await api.get<{ data: ProductResult[] }>(
-          `/products?search=${encodeURIComponent(query)}&limit=8`
+          `/products?search=${encodeURIComponent(query)}&limit=8&active=true`
         )
         setProducts(data.data)
         setShowDropdown(data.data.length > 0)
@@ -259,6 +283,7 @@ function LineRow({
                 {products.map(p => (
                   <button
                     key={p.id}
+                    disabled={mappingDisabled}
                     onClick={() => selectProduct(p)}
                     className="w-full text-left px-3 py-2 hover:bg-blue-50 text-xs border-b border-slate-50 last:border-0"
                   >
@@ -374,7 +399,8 @@ function LineRow({
               {products.map(p => (
                 <button
                   key={p.id}
-                  onClick={() => selectProduct(p)}
+                  disabled={mappingDisabled}
+                    onClick={() => selectProduct(p)}
                   className="w-full text-left px-3 py-2 hover:bg-blue-50 text-xs border-b border-slate-50 last:border-0"
                 >
                   <span className="font-mono font-medium">{p.partNumber}</span>

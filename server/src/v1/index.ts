@@ -12,6 +12,7 @@ import { existsSync, readFileSync } from 'fs';
 import swaggerUi from 'swagger-ui-express';
 import { prisma } from '../db.js';
 import { v1Auth } from './auth.js';
+import { validateListQuery } from './query.js';
 import { runList, sendOne, parseLimit, V1Error, v1ErrorHandler } from './respond.js';
 import * as m from './mappers.js';
 import { getFileStore } from '../services/fileStore.js';
@@ -46,55 +47,6 @@ const FILE_MIME: Record<string, string> = {
   '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
   '.gif': 'image/gif', '.webp': 'image/webp', '.txt': 'text/plain', '.csv': 'text/csv',
 };
-
-// ── Request guard (light, spec-aligned) ─────────────────────────────────────────
-// Validates exactly the enum + date query params the spec declares, so a bad
-// value returns a clean 400 in the error envelope instead of a Prisma 500 or a
-// silently-ignored filter. Not a full schema validator — the mappers remain the
-// response contract. Runs before the resource routes (auth still runs per-route).
-const TICKET_TYPES = ['field_service', 'training', 'shop_service', 'rental', 'direct_sale', 'repair', 'other'] as const;
-const EQUIP_STATUS = ['available', 'deployed', 'rented', 'repair', 'in_transit', 'lost', 'retired', 'out_of_service', 'condemned'] as const;
-const OWNERSHIP = ['basin_safety', 'customer_owned'] as const;
-const PRODUCT_CATEGORY = ['monitor_personal', 'monitor_area', 'supplied_air_component', 'sensor', 'calibration_gas', 'accessory', 'consumable', 'assembly', 'labor', 'misc'] as const;
-const INSPECTION_CATEGORY = ['fire_extinguisher', 'gas_detection', 'scba', 'fall_arrest', 'ue_cylinder', 'breathing_air_system', 'first_aid_kit', 'other'] as const;
-const INSPECTION_OUTCOME = ['pass', 'fail', 'condemn', 'cannot_service', 'requires_parts'] as const;
-const RENTAL_STATUS = ['scheduled', 'active', 'completed', 'cancelled'] as const;
-const FACILITY_TYPE = ['remote_battery', 'tank_battery', 'compressor_station', 'swd_facility', 'gas_plant', 'office', 'shop', 'other'] as const;
-const BLUELION_STATUS = ['pending', 'synced', 'error', 'needs_attention', 'ambiguous'] as const;
-
-const QUERY_RULES: Record<string, { enums?: Record<string, readonly string[]>; dates?: string[] }> = {
-  '/tickets': { enums: { ticketType: TICKET_TYPES }, dates: ['updatedSince'] },
-  '/invoices': { dates: ['updatedSince'] },
-  '/equipment': { enums: { status: EQUIP_STATUS, ownership: OWNERSHIP, productCategory: PRODUCT_CATEGORY }, dates: ['updatedSince'] },
-  '/equipment-inspections': { enums: { category: INSPECTION_CATEGORY, outcome: INSPECTION_OUTCOME }, dates: ['updatedSince'] },
-  '/rentals': { enums: { status: RENTAL_STATUS }, dates: ['updatedSince'] },
-  '/fields': { dates: ['updatedSince'] },
-  '/pads': { dates: ['updatedSince'] },
-  '/wells': { dates: ['updatedSince'] },
-  '/facilities': { enums: { facilityType: FACILITY_TYPE }, dates: ['updatedSince'] },
-  '/companies': { dates: ['updatedSince'] },
-  '/trainings': { dates: ['updatedSince'] },
-  '/bluelion/queue': { enums: { status: BLUELION_STATUS } },
-};
-
-v1Router.use((req: Request, _res: Response, next) => {
-  const rule = QUERY_RULES[req.path];
-  if (rule) {
-    for (const [param, allowed] of Object.entries(rule.enums ?? {})) {
-      const v = req.query[param];
-      if (typeof v === 'string' && v.length && !allowed.includes(v)) {
-        throw new V1Error(400, 'invalid_parameter', `Invalid ${param}: "${v}"`, { param, allowed });
-      }
-    }
-    for (const param of rule.dates ?? []) {
-      const v = req.query[param];
-      if (typeof v === 'string' && v.length && Number.isNaN(new Date(v).getTime())) {
-        throw new V1Error(400, 'invalid_parameter', `Invalid ${param}: not an ISO date/datetime`, { param });
-      }
-    }
-  }
-  next();
-});
 
 // ── OpenAPI docs ────────────────────────────────────────────────────────────────
 // The contract is meant to be published to bolt-on builders. Gated OFF in prod
@@ -132,7 +84,7 @@ const ticketDetailInclude = {
   trainingRosterRecords: { select: { id: true } },
 };
 
-v1Router.get('/tickets', v1Auth('tickets:read'), async (req: Request, res: Response) => {
+v1Router.get('/tickets', v1Auth('tickets:read'), validateListQuery, async (req: Request, res: Response) => {
   await runList(res, {
     findMany: (a) => prisma.serviceTicket.findMany({ ...a, include: ticketListInclude } as any),
     where: merge(
@@ -153,7 +105,7 @@ v1Router.get('/tickets/:id', v1Auth('tickets:read'), async (req: Request, res: R
 });
 
 // ── Invoices ────────────────────────────────────────────────────────────────
-v1Router.get('/invoices', v1Auth('invoices:read'), async (req: Request, res: Response) => {
+v1Router.get('/invoices', v1Auth('invoices:read'), validateListQuery, async (req: Request, res: Response) => {
   await runList(res, {
     findMany: (a) => prisma.invoice.findMany(a as any),
     where: merge(
@@ -206,7 +158,7 @@ v1Router.get('/invoices/:id/pdf', v1Auth('invoices:read'), async (req: Request, 
   if (!invoice) throw new V1Error(404, 'not_found', 'Invoice not found');
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `attachment; filename="invoice-${invoice.invoiceNumber}.pdf"`);
-  const doc = generateInvoicePdf(invoice as any);
+  const doc = await generateInvoicePdf(invoice as any);
   doc.pipe(res);
   doc.end();
 });
@@ -279,7 +231,7 @@ v1Router.get('/files/:id', v1Auth(), async (req: Request, res: Response) => {
 });
 
 // ── Equipment ───────────────────────────────────────────────────────────────
-v1Router.get('/equipment', v1Auth('equipment:read'), async (req: Request, res: Response) => {
+v1Router.get('/equipment', v1Auth('equipment:read'), validateListQuery, async (req: Request, res: Response) => {
   await runList(res, {
     findMany: (a) => prisma.serializedEquipment.findMany({ ...a, include: { product: { select: { id: true, partNumber: true, name: true, category: true } } } } as any),
     where: merge(
@@ -312,7 +264,7 @@ v1Router.get('/equipment/:id', v1Auth('equipment:read'), async (req: Request, re
 });
 
 // ── Equipment inspections ─────────────────────────────────────────────────────
-v1Router.get('/equipment-inspections', v1Auth('inspections:read'), async (req: Request, res: Response) => {
+v1Router.get('/equipment-inspections', v1Auth('inspections:read'), validateListQuery, async (req: Request, res: Response) => {
   await runList(res, {
     findMany: (a) => prisma.equipmentInspection.findMany({ ...a, include: { inspectedBy: { select: { id: true, name: true } } } } as any),
     where: merge(
@@ -337,7 +289,7 @@ v1Router.get('/equipment-inspections/:id', v1Auth('inspections:read'), async (re
 });
 
 // ── Rentals ───────────────────────────────────────────────────────────────────
-v1Router.get('/rentals', v1Auth('rentals:read'), async (req: Request, res: Response) => {
+v1Router.get('/rentals', v1Auth('rentals:read'), validateListQuery, async (req: Request, res: Response) => {
   await runList(res, {
     findMany: (a) => prisma.rentalAgreement.findMany({
       ...a,
@@ -370,7 +322,7 @@ v1Router.get('/rentals/:id', v1Auth('rentals:read'), async (req: Request, res: R
   sendOne(req, res, r as any, m.rentalDetail);
 });
 
-v1Router.get('/rentals/:id/daily-logs', v1Auth('rentals:read'), async (req: Request, res: Response) => {
+v1Router.get('/rentals/:id/daily-logs', v1Auth('rentals:read'), validateListQuery, async (req: Request, res: Response) => {
   const exists = await prisma.rentalAgreement.findUnique({ where: { id: req.params.id as string }, select: { id: true } });
   if (!exists) throw new V1Error(404, 'not_found', 'Rental agreement not found');
   const from = str(req.query.from);
@@ -386,7 +338,7 @@ v1Router.get('/rentals/:id/daily-logs', v1Auth('rentals:read'), async (req: Requ
 });
 
 // ── Locations ───────────────────────────────────────────────────────────────
-v1Router.get('/fields', v1Auth('locations:read'), async (req: Request, res: Response) => {
+v1Router.get('/fields', v1Auth('locations:read'), validateListQuery, async (req: Request, res: Response) => {
   await runList(res, {
     findMany: (a) => prisma.field.findMany(a as any),
     where: merge(bool(req.query.isActive) !== undefined && { isActive: bool(req.query.isActive) }, since(req.query.updatedSince)),
@@ -399,7 +351,7 @@ v1Router.get('/fields/:id', v1Auth('locations:read'), async (req: Request, res: 
 });
 
 const padInclude = { field: { select: { id: true, name: true } }, currentOperator: { select: { id: true, name: true } } };
-v1Router.get('/pads', v1Auth('locations:read'), async (req: Request, res: Response) => {
+v1Router.get('/pads', v1Auth('locations:read'), validateListQuery, async (req: Request, res: Response) => {
   await runList(res, {
     findMany: (a) => prisma.pad.findMany({ ...a, include: padInclude } as any),
     where: merge(
@@ -417,7 +369,7 @@ v1Router.get('/pads/:id', v1Auth('locations:read'), async (req: Request, res: Re
 });
 
 const wellInclude = { field: { select: { id: true, name: true } }, pad: { select: { id: true, name: true } }, currentOperator: { select: { id: true, name: true } } };
-v1Router.get('/wells', v1Auth('locations:read'), async (req: Request, res: Response) => {
+v1Router.get('/wells', v1Auth('locations:read'), validateListQuery, async (req: Request, res: Response) => {
   await runList(res, {
     findMany: (a) => prisma.well.findMany({ ...a, include: wellInclude } as any),
     where: merge(
@@ -436,7 +388,7 @@ v1Router.get('/wells/:id', v1Auth('locations:read'), async (req: Request, res: R
 });
 
 const facilityInclude = { field: { select: { id: true, name: true } }, pad: { select: { id: true, name: true } }, currentOperator: { select: { id: true, name: true } } };
-v1Router.get('/facilities', v1Auth('locations:read'), async (req: Request, res: Response) => {
+v1Router.get('/facilities', v1Auth('locations:read'), validateListQuery, async (req: Request, res: Response) => {
   await runList(res, {
     findMany: (a) => prisma.facility.findMany({ ...a, include: facilityInclude } as any),
     where: merge(
@@ -454,7 +406,7 @@ v1Router.get('/facilities/:id', v1Auth('locations:read'), async (req: Request, r
 });
 
 // ── Companies ─────────────────────────────────────────────────────────────────
-v1Router.get('/companies', v1Auth('companies:read'), async (req: Request, res: Response) => {
+v1Router.get('/companies', v1Auth('companies:read'), validateListQuery, async (req: Request, res: Response) => {
   await runList(res, {
     findMany: (a) => prisma.company.findMany(a as any),
     where: merge(
@@ -471,7 +423,7 @@ v1Router.get('/companies/:id', v1Auth('companies:read'), async (req: Request, re
 });
 
 // ── Trainings ───────────────────────────────────────────────────────────────
-v1Router.get('/trainings', v1Auth('trainings:read'), async (req: Request, res: Response) => {
+v1Router.get('/trainings', v1Auth('trainings:read'), validateListQuery, async (req: Request, res: Response) => {
   const course = str(req.query.course);
   await runList(res, {
     findMany: (a) => prisma.serviceTicket.findMany({
@@ -503,7 +455,7 @@ v1Router.get('/trainings/:id', v1Auth('trainings:read'), async (req: Request, re
 });
 
 // ── BlueLion sync management ───────────────────────────────────────────────────
-v1Router.get('/bluelion/queue', v1Auth('bluelion:read'), async (req: Request, res: Response) => {
+v1Router.get('/bluelion/queue', v1Auth('bluelion:read'), validateListQuery, async (req: Request, res: Response) => {
   const status = str(req.query.status);
   const rows = await prisma.blueLionSyncQueue.findMany({
     where: status ? { status: status as any } : undefined,

@@ -117,7 +117,7 @@ exports[`qbXML snapshots (regression lock) > InvoiceAdd — with LOCATION (heade
 </QBXML>"
 `;
 
-exports[`qbXML snapshots (regression lock) > InvoiceQueryByRefNumber + ItemQueryRq 1`] = `
+exports[`qbXML snapshots (regression lock) > InvoiceQueryByRefNumber 1`] = `
 "<?xml version="1.0" encoding="utf-8"?>
 <?qbxml version="13.0"?>
 <QBXML>
@@ -125,31 +125,6 @@ exports[`qbXML snapshots (regression lock) > InvoiceQueryByRefNumber + ItemQuery
     <InvoiceQueryRq>
       <RefNumber>2026-00042</RefNumber>
     </InvoiceQueryRq>
-  </QBXMLMsgsRq>
-</QBXML>"
-`;
-
-exports[`qbXML snapshots (regression lock) > InvoiceQueryByRefNumber + ItemQueryRq 2`] = `
-"<?xml version="1.0" encoding="utf-8"?>
-<?qbxml version="13.0"?>
-<QBXML>
-  <QBXMLMsgsRq onError="continueOnError">
-    <ItemServiceQueryRq>
-      
-      <ActiveStatus>All</ActiveStatus>
-    </ItemServiceQueryRq>
-    <ItemNonInventoryQueryRq>
-      
-      <ActiveStatus>All</ActiveStatus>
-    </ItemNonInventoryQueryRq>
-    <ItemInventoryQueryRq>
-      
-      <ActiveStatus>All</ActiveStatus>
-    </ItemInventoryQueryRq>
-    <ItemOtherChargeQueryRq>
-      
-      <ActiveStatus>All</ActiveStatus>
-    </ItemOtherChargeQueryRq>
   </QBXMLMsgsRq>
 </QBXML>"
 `;

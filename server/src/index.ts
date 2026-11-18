@@ -9,6 +9,7 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import jwt from 'jsonwebtoken';
 import { authRouter } from './routes/auth.js';
+import { brandingRouter } from './routes/branding.js';
 import { companiesRouter } from './routes/companies.js';
 import { companyMergeRouter } from './routes/companyMerge.js';
 import { locationsRouter } from './routes/locations.js';
@@ -41,6 +42,7 @@ import { routesRouter } from './routes/routes.js';
 import { qbwcRouter } from './routes/qbwc.js';
 import { enverusRouter } from './routes/enverus.js';
 import { roleMappingsRouter } from './routes/roleMappings.js';
+import { webhookNotificationsRouter } from './routes/webhookNotifications.js';
 import { usersRouter } from './routes/users.js';
 import { dashboardRouter } from './routes/dashboard.js';
 import { paymentsRouter } from './routes/payments.js';
@@ -63,6 +65,7 @@ import { startAutoApprovalProcessor, stopAutoApprovalProcessor, CHECK_INTERVAL_M
 import { logGcalStatus } from './services/gcalSync.js';
 import { startQbInvoiceDiffWatcher, stopQbInvoiceDiffWatcher, CHECK_INTERVAL_MS as QB_DIFF_TICK_MS } from './services/qbInvoiceDiffWatcher.js';
 import { startRentalBillReadyWatcher, stopRentalBillReadyWatcher, CHECK_INTERVAL_MS as RENTAL_BILL_TICK_MS } from './services/rentalBillReadyWatcher.js';
+import { startOperationsDigestWatcher, stopOperationsDigestWatcher, CHECK_INTERVAL_MS as OPS_DIGEST_TICK_MS } from './services/operationsDigestWatcher.js';
 import { startAttachmentUploader, stopAttachmentUploader, CHECK_INTERVAL_MS as ATTACHMENT_TICK_MS } from './services/attachmentUploader.js';
 import { startShopHardCloseSweep, stopShopHardCloseSweep, CHECK_INTERVAL_MS as HARD_CLOSE_TICK_MS } from './services/shopHardCloseSweep.js';
 import { startLocationRescoreListener } from './services/locationRescoreListener.js';
@@ -79,7 +82,6 @@ import { checkEnvironment } from './utils/envCheck.js';
 checkEnvironment();
 
 import { prisma } from './db.js';
-export { prisma };
 import { loadMatrix } from './services/permissions.js';
 
 const app = express();
@@ -139,6 +141,7 @@ app.get('/api/health', (_req, res) => {
 
 // Auth routes (no auth required)
 app.use('/api/auth', authRouter);
+app.use('/api/branding', brandingRouter);
 
 // All-sites Shop Kanban board — view-only. Mounts without the global
 // authenticate middleware because the router runs its own per-route
@@ -219,6 +222,7 @@ app.use('/api/bluelion', authenticate, blueLionRouter);
 app.use('/api/novara', authenticate, novaraRouter);
 app.use('/api/sync', authenticate, syncRouter);
 app.use('/api/role-mappings', authenticate, roleMappingsRouter);
+app.use('/api/webhook-notifications', authenticate, webhookNotificationsRouter);
 app.use('/api/users', authenticate, usersRouter);
 app.use('/api/dashboard', authenticate, dashboardRouter);
 // Stripe webhook — NO `authenticate`: Stripe cannot carry a JWT. The endpoint
@@ -240,6 +244,11 @@ app.use('/api/training/employers', authenticate, trainingEmployersRouter);
 // Carries its own auth (scoped API key or staff JWT) via v1Auth, so it mounts
 // WITHOUT the global `authenticate`. Curated DTOs only — see openapi/.
 app.use('/api/v1', v1Router);
+
+// Keep unknown API requests out of the production SPA fallback.
+app.use('/api', (_req, res) => {
+  res.status(404).json({ error: 'No such API endpoint' });
+});
 
 // Error handler
 app.use(errorHandler);
@@ -314,6 +323,7 @@ async function main() {
   registerTask({ name: 'approval',       start: startAutoApprovalProcessor, stop: stopAutoApprovalProcessor, stallMs: stallFor(APPROVAL_TICK_MS) });
   registerTask({ name: 'qb-diff',        start: startQbInvoiceDiffWatcher, stop: stopQbInvoiceDiffWatcher, stallMs: stallFor(QB_DIFF_TICK_MS) });
   registerTask({ name: 'rental-bill',    start: startRentalBillReadyWatcher, stop: stopRentalBillReadyWatcher, stallMs: stallFor(RENTAL_BILL_TICK_MS) });
+  registerTask({ name: 'operations-digest', start: startOperationsDigestWatcher, stop: stopOperationsDigestWatcher, stallMs: stallFor(OPS_DIGEST_TICK_MS) });
   registerTask({ name: 'attachment-upload', start: startAttachmentUploader, stop: stopAttachmentUploader, stallMs: stallFor(ATTACHMENT_TICK_MS) });
   registerTask({ name: 'shop-hard-close', start: startShopHardCloseSweep, stop: stopShopHardCloseSweep, stallMs: stallFor(HARD_CLOSE_TICK_MS) });
   registerTask({ name: 'print-queue',    start: startPrintQueueProcessor, stop: stopPrintQueueProcessor, stallMs: stallFor(PRINT_QUEUE_TICK_MS) });
@@ -376,10 +386,7 @@ async function main() {
   });
 }
 
-// Guard against boot-on-import: one-off scripts (server/scripts/*.ts) that
-// transitively import a module reaching back into this file (e.g. via
-// utils/auditLog.ts's `prisma` import) would otherwise crash with
-// EADDRINUSE against the already-running server on the same port.
+// Open listeners only when invoked directly. Database consumers import db.ts.
 if (require.main === module) {
   main().catch((e) => {
     console.error('Failed to start server:', e);

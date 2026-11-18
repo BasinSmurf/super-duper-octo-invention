@@ -198,7 +198,9 @@ export function closerFieldsFor(
   newStatus: string,
   actorUserId: string,
 ): Record<string, unknown> {
-  if (!isClosingState(newStatus)) return {};
+  // Restarting work retracts the close; the next final disposition gets a fresh window.
+  if (!isClosingState(newStatus)) return item.softClosedAt
+    ? { softClosedAt: null, hardClosesAt: null, closedById: null } : {};
   if (item.softClosedAt) return {}; // already closed once; don't reassign the closer
   return { closedById: actorUserId };
 }

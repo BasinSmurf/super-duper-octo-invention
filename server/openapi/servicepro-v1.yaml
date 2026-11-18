@@ -11,13 +11,10 @@ openapi: 3.1.0
 #     deliberate: it is the firewall that protects the operational ("OG") data
 #     model from external consumers. Internal schema churn must never break a
 #     v1 consumer, and a bolt-on must never see more than the contract grants.
-#   - Today the only principal is a staff JWT. The contract reserves a scoped
-#     API-key slot (apiKeyAuth + x-scopes) so read-only bolt-ons can be issued
-#     keys later WITHOUT a breaking contract change.
+#   - Scoped API keys and staff JWTs use Authorization: Bearer. Keys are
+#     issued/revoked in Admin; each resource requires its corresponding scope.
 #
-# Status of this document: SEED. Three resources are specified (Ticket detail,
-# Invoice read+PDF, BlueLion sync management). Everything here is contract only
-# — no server behavior has been changed to match it yet.
+# This document describes the implemented v1 routes and their DTO contract.
 # ─────────────────────────────────────────────────────────────────────────────
 
 info:
@@ -31,8 +28,14 @@ info:
 
     ## Conventions
     - **Base path**: all endpoints live under `/api/v1`.
-    - **Auth**: `Authorization: Bearer <jwt>` today. Scoped API keys are
-      reserved (see `securitySchemes.apiKeyAuth`) and will carry `x-scopes`.
+    - **Auth**: `Authorization: Bearer <jwt>` for staff or
+      `Authorization: Bearer <sp_...>` for scoped API keys issued in Admin.
+      Portal accounts cannot use this surface.
+    - **Query validation**: known filters take one non-empty value. Invalid
+      enums, booleans, dates, limits and repeated/nested filters return 400
+      with `error.code: invalid_parameter` and `error.details.param`.
+      `updatedSince` requires an RFC 3339 timestamp with a timezone; daily-log
+      `from`/`to` dates use YYYY-MM-DD and `from` must not be later than `to`.
     - **Errors**: every non-2xx returns the `Error` envelope. Consumers should
       branch on `error.code` (stable) rather than the HTTP status alone.
     - **Pagination**: list endpoints are cursor-based (`cursor` + `limit`),
@@ -49,6 +52,7 @@ servers:
 
 security:
   - bearerAuth: []
+  - apiKeyAuth: []
 
 tags:
   - name: Tickets
@@ -99,13 +103,13 @@ paths:
         - $ref: '#/components/parameters/Limit'
         - name: status
           in: query
-          schema: { type: string }
+          schema: { type: string, enum: [draft, dispatched, in_progress, completed, supervisor_review, awaiting_signature, billing_queue, invoiced, closed, void] }
           description: Filter by ticket status (e.g. `billing_queue`, `closed`).
         - name: ticketType
           in: query
           schema:
             type: string
-            enum: [field_service, training, shop_service, rental, direct_sale, repair, other]
+            enum: [field_service, sale, rental, repair, inspection, training]
         - name: companyId
           in: query
           schema: { type: string }
@@ -126,6 +130,7 @@ paths:
                     type: array
                     items: { $ref: '#/components/schemas/TicketSummary' }
                   page: { $ref: '#/components/schemas/PageInfo' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
@@ -162,7 +167,7 @@ paths:
         - $ref: '#/components/parameters/Limit'
         - name: status
           in: query
-          schema: { type: string }
+          schema: { type: string, enum: [draft, approved, awaiting_signature, queued, so_created, invoiced, sent, paid, void] }
         - name: companyId
           in: query
           schema: { type: string }
@@ -182,6 +187,7 @@ paths:
                     type: array
                     items: { $ref: '#/components/schemas/InvoiceSummary' }
                   page: { $ref: '#/components/schemas/PageInfo' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
@@ -235,8 +241,10 @@ paths:
           in: query
           schema:
             type: string
-            enum: [pending, synced, error, needs_attention, ambiguous]
-        - $ref: '#/components/parameters/Limit'
+            enum: [pending, synced, needs_attention, retrying, error]
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 500, default: 200 }
       responses:
         '200':
           description: Queue rows, newest first.
@@ -245,6 +253,7 @@ paths:
               schema:
                 type: array
                 items: { $ref: '#/components/schemas/BlueLionQueueEntry' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
@@ -261,7 +270,7 @@ paths:
               schema:
                 type: object
                 additionalProperties: { type: integer }
-                example: { pending: 3, synced: 1402, error: 1, ambiguous: 2 }
+                example: { pending: 3, synced: 1402, error: 1, needs_attention: 2, retrying: 1 }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
@@ -330,8 +339,9 @@ paths:
       summary: Resolve an ambiguous person match with a chosen BlueLion id
       description: |
         When a roster push matches multiple existing BlueLion persons by name,
-        the row lands `ambiguous` with `candidates`. A human picks the correct
-        person; this stamps the chosen `blueLionId` on the roster record and
+        the row lands `needs_attention` with `resultStatus: ambiguous` and
+        `candidates`. A human picks the correct person; this stamps the chosen
+        `blueLionId` on the roster record and
         re-queues the push.
       parameters:
         - $ref: '#/components/parameters/IdPath'
@@ -405,6 +415,7 @@ paths:
                     type: array
                     items: { $ref: '#/components/schemas/EquipmentSummary' }
                   page: { $ref: '#/components/schemas/PageInfo' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
@@ -470,6 +481,7 @@ paths:
                     type: array
                     items: { $ref: '#/components/schemas/EquipmentInspectionSummary' }
                   page: { $ref: '#/components/schemas/PageInfo' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
@@ -529,6 +541,7 @@ paths:
                     type: array
                     items: { $ref: '#/components/schemas/RentalSummary' }
                   page: { $ref: '#/components/schemas/PageInfo' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
@@ -582,6 +595,7 @@ paths:
                     type: array
                     items: { $ref: '#/components/schemas/RentalDailyLog' }
                   page: { $ref: '#/components/schemas/PageInfo' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -610,6 +624,7 @@ paths:
                 properties:
                   data: { type: array, items: { $ref: '#/components/schemas/Field' } }
                   page: { $ref: '#/components/schemas/PageInfo' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
   /fields/{id}:
@@ -662,6 +677,7 @@ paths:
                 properties:
                   data: { type: array, items: { $ref: '#/components/schemas/PadSummary' } }
                   page: { $ref: '#/components/schemas/PageInfo' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
   /pads/{id}:
@@ -719,6 +735,7 @@ paths:
                 properties:
                   data: { type: array, items: { $ref: '#/components/schemas/WellSummary' } }
                   page: { $ref: '#/components/schemas/PageInfo' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
   /wells/{id}:
@@ -772,6 +789,7 @@ paths:
                 properties:
                   data: { type: array, items: { $ref: '#/components/schemas/FacilitySummary' } }
                   page: { $ref: '#/components/schemas/PageInfo' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
   /facilities/{id}:
@@ -805,7 +823,7 @@ paths:
         - $ref: '#/components/parameters/IsActive'
         - name: companyType
           in: query
-          schema: { type: string }
+          schema: { type: string, enum: [operator, customer, both, parent_only] }
         - name: updatedSince
           in: query
           schema: { type: string, format: date-time }
@@ -820,6 +838,7 @@ paths:
                 properties:
                   data: { type: array, items: { $ref: '#/components/schemas/CompanySummary' } }
                   page: { $ref: '#/components/schemas/PageInfo' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
   /companies/{id}:
@@ -855,7 +874,7 @@ paths:
           schema: { type: string }
         - name: status
           in: query
-          schema: { type: string }
+          schema: { type: string, enum: [draft, dispatched, in_progress, completed, supervisor_review, awaiting_signature, billing_queue, invoiced, closed, void] }
         - name: course
           in: query
           schema: { type: string }
@@ -874,6 +893,7 @@ paths:
                 properties:
                   data: { type: array, items: { $ref: '#/components/schemas/TrainingClassSummary' } }
                   page: { $ref: '#/components/schemas/PageInfo' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
   /trainings/{id}:
@@ -925,15 +945,17 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
-      description: Staff JWT issued by `/api/auth`. The only principal today.
+      description: Staff JWT issued by `/api/auth/login`. Portal accounts are rejected.
     apiKeyAuth:
-      type: apiKey
-      in: header
-      name: X-API-Key
+      type: http
+      scheme: bearer
+      bearerFormat: sp_ API key
       description: |
-        RESERVED — not yet issued. Scoped, read-only keys for external bolt-ons.
-        Each key will carry `x-scopes` (e.g. `tickets:read`, `invoices:read`).
-        Documented now so adding it later is non-breaking.
+        Scoped API key issued in Admin > API Keys. Send it as
+        Authorization: Bearer sp_... (the same header as staff JWTs).
+        Read scopes are tickets:read, invoices:read, equipment:read,
+        inspections:read, rentals:read, locations:read, companies:read,
+        trainings:read and bluelion:read. BlueLion writes require bluelion:write.
 
   parameters:
     IdPath:
@@ -1155,7 +1177,7 @@ components:
         externalId: { type: [string, 'null'], description: Idempotency key sent to BlueLion. }
         status:
           type: string
-          enum: [pending, synced, error, needs_attention, ambiguous]
+          enum: [pending, synced, needs_attention, retrying, error]
         resultStatus:
           type: [string, 'null']
           description: BlueLion per-record outcome (`added`, `skipped`, `ambiguous`, `invalid`).

@@ -10,6 +10,7 @@
  */
 
 import { db } from './db'
+import { remapEntityId } from './syncIdentity'
 import { markAttachmentSynced } from './attachments'
 import { api, ApiError } from './api'
 import { pruneAbandonedWizardDrafts } from './draftActions'
@@ -30,7 +31,7 @@ const WRITABLE_TABLES_LIST = ['tickets', 'rentalAgreements', 'rentalAgreementIte
 // priceLevels is prunable for the same reason pads are: a contract pricebook
 // retired in QuickBooks has to stop pricing lines on the device, and nothing
 // else ever clears IndexedDB.
-const PRUNABLE_TABLES = new Set<string>([...WRITABLE_TABLES_LIST, 'pads', 'priceLevels'])
+const PRUNABLE_TABLES = new Set<string>([...WRITABLE_TABLES_LIST, 'pads', 'priceLevels', 'products'])
 const ALL_SYNC_TABLES = [...REFERENCE_TABLES, ...WRITABLE_TABLES_LIST] as const
 export type SyncStatus = 'idle' | 'syncing' | 'error' | 'offline'
 
@@ -120,6 +121,7 @@ export async function runFullSync(): Promise<void> {
     setState({ status: 'syncing', error: null })
 
     // 1. Push first — get local changes to server before pulling
+    await repairStaleProductReferences()
     await pushMutations()
 
     // 2. Pull — delta sync reference + writable tables
@@ -137,7 +139,11 @@ export async function runFullSync(): Promise<void> {
     await updatePendingCount()
 
     const now = new Date().toISOString()
-    setState({ status: 'idle', lastSyncedAt: now, error: null })
+    if (_state.pendingMutations > 0) {
+      setState({ status: 'error', error: `${_state.pendingMutations} uploads still pending. Open the upload queue for details.` })
+    } else {
+      setState({ status: 'idle', lastSyncedAt: now, error: null })
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
 
@@ -231,6 +237,15 @@ async function pullAll() {
   const { serverNow, tables } = response
   const counts: Record<string, number> = {}
 
+  // Repair old-client local children too, even when their parent create was
+  // acknowledged before this release. Server pull retains the offline identity.
+  for (const row of tables.tickets?.data ?? []) {
+    const ticket = row as { id: string; offlineId?: string | null }
+    if (ticket.offlineId && ticket.offlineId !== ticket.id) {
+      await remapEntityId('tickets', ticket.offlineId, ticket.id)
+    }
+  }
+
   // Build the protected-id set from the outbox BEFORE opening the write
   // transaction (Dexie won't let us read mutationQueue from inside a tx scoped
   // to other tables). Any id referenced by a queued mutation — the record
@@ -246,6 +261,8 @@ async function pullAll() {
   for (const m of queuedForProtect) {
     protectedIds.add(m.entityId)
     const p = m.payload as Record<string, unknown>
+    const equipmentVisit = p?.equipmentVisit as { requestId?: string } | undefined
+    if (equipmentVisit?.requestId) protectedIds.add(equipmentVisit.requestId)
     for (const k of ['ticketId', 'workOrderId', 'rentalAgreementId', 'shopItemId', 'inspectionId'] as const) {
       if (typeof p?.[k] === 'string') protectedIds.add(p[k] as string)
     }
@@ -263,9 +280,14 @@ async function pullAll() {
       const dexieTable = db.table(tableName)
 
       if (needsFullHydrate) {
-        // Full hydrate — clear and bulk-add
+        // An initial/recovery hydrate must not erase a failed offline create
+        // or the local draft the queued mutation is protecting.
+        const unsynced = await dexieTable.filter((row: any) =>
+          protectedIds.has(row.id) || row._offlineStatus === 'pending',
+        ).toArray()
         await dexieTable.clear()
         if (data.length > 0) await dexieTable.bulkPut(data as any[])
+        if (unsynced.length > 0) await dexieTable.bulkPut(unsynced)
       } else {
         // Delta — merge: put (upsert) each record
         if (data.length > 0) await dexieTable.bulkPut(data as any[])
@@ -357,6 +379,8 @@ async function pruneOldData(): Promise<void> {
   for (const m of queued) {
     const p = m.payload as Record<string, unknown>
     if (m.table === 'tickets') protectedTickets.add(m.entityId)
+    const equipmentVisit = p?.equipmentVisit as { requestId?: string } | undefined
+    if (equipmentVisit?.requestId) protectedTickets.add(equipmentVisit.requestId)
     if (typeof p?.ticketId === 'string') protectedTickets.add(p.ticketId)
     if (m.table === 'shopWorkOrders') protectedWorkOrders.add(m.entityId)
     if (typeof p?.workOrderId === 'string') protectedWorkOrders.add(p.workOrderId)
@@ -446,6 +470,40 @@ async function pruneOldData(): Promise<void> {
 const MAX_BATCH = 20
 const MAX_RETRIES = 5
 
+/** Recover catalog IDs replaced by a database refresh without changing the quoted line. */
+async function repairStaleProductReferences() {
+  const failed = await db.mutationQueue.filter(m =>
+    m.table === 'ticketLineItems' && m.action !== 'delete' && m.status === 'error' &&
+    /\bInvalid productId\b/.test(m.errorMessage ?? ''),
+  ).toArray()
+  if (!failed.length) return
+
+  const response = await api.get<{
+    tables: { products?: { data: Array<{ id: string; partNumber: string }> } }
+  }>('/sync/pull?tables=products')
+  const products = response.tables.products?.data
+  if (!products) return
+  const byPart = new Map(products.map(p => [p.partNumber, p.id]))
+  for (const mutation of failed) {
+    const oldId = mutation.payload.productId
+    if (typeof oldId !== 'string' || !oldId) continue
+    const cached = await db.products.get(oldId)
+    const partNumber = mutation.payload.partNumber || cached?.partNumber
+    if (typeof partNumber !== 'string' || !partNumber) continue
+    // Conflicting identities require a person to choose the product.
+    if (cached?.partNumber && cached.partNumber !== partNumber) continue
+    const productId = byPart.get(partNumber)
+    if (!productId || productId === oldId) continue
+    await db.transaction('rw', [db.mutationQueue, db.ticketLineItems], async () => {
+      await db.mutationQueue.update(mutation.queueId!, {
+        payload: { ...mutation.payload, productId },
+        status: 'pending', retryCount: 0, errorMessage: undefined,
+      })
+      await db.ticketLineItems.update(mutation.entityId, { productId })
+    })
+  }
+}
+
 async function pushMutations() {
   // Grab pending mutations, ordered by creation time
   // Also pick up 'uploading' in case a previous sync was interrupted mid-push
@@ -466,9 +524,16 @@ async function pushMutations() {
   // queue delete that immediately follows it.
   const pushWarnings: string[] = []
 
-  // Send in batches
-  for (let i = 0; i < pending.length; i += MAX_BATCH) {
-    const batch = pending.slice(i, i + MAX_BATCH)
+  // A submission barrier must run after its edits have been acknowledged,
+  // including edits in another batch or exhausted-error entries. Never send a
+  // barrier in the same request as dependencies whose outcome is still unknown.
+  let remaining = [...pending]
+  while (remaining.length) {
+    const queuedIds = new Set((await db.mutationQueue.toArray()).map(m => m.queueId))
+    const batch = remaining.filter(m => !(m.dependsOn ?? []).some(id => queuedIds.has(id))).slice(0, MAX_BATCH)
+    if (!batch.length) break
+    const sentIds = new Set(batch.map(m => m.queueId))
+    remaining = remaining.filter(m => !sentIds.has(m.queueId))
 
     // Mark as uploading
     await db.mutationQueue.bulkUpdate(
@@ -542,6 +607,7 @@ async function pushMutations() {
           queueId: number
           status: 'ok' | 'error'
           serverId?: string
+          ticketId?: string
           error?: string
           warnings?: string[]
         }>
@@ -574,14 +640,19 @@ async function pushMutations() {
             }
           }
 
-          // Success — remove from queue
-          await db.mutationQueue.delete(mut.queueId!)
-
           // Track ID remap so child records in later batches can use server ID
           if (result.serverId && result.serverId !== mut.entityId) {
             idRemaps.set(mut.entityId, result.serverId)
             await remapEntityId(mut.table, mut.entityId, result.serverId)
           }
+          if (result.ticketId && typeof mut.payload.ticketId === 'string' && result.ticketId !== mut.payload.ticketId) {
+            idRemaps.set(mut.payload.ticketId, result.ticketId)
+            await remapEntityId('tickets', mut.payload.ticketId, result.ticketId)
+          }
+
+          // Acknowledge only after the durable remap. If remapping fails or the
+          // browser closes, the create can be replayed instead of losing its ID.
+          await db.mutationQueue.delete(mut.queueId!)
 
           // Mark local record as synced
           try {
@@ -665,34 +736,6 @@ async function pushMutations() {
   // Only assigned when something changes, to avoid needless state churn.
   if (pushWarnings.length > 0 || _state.pushWarnings.length > 0) {
     setState({ pushWarnings })
-  }
-}
-
-/**
- * When the server assigns a new ID on create, remap the local record
- * so future updates reference the correct server ID.
- */
-async function remapEntityId(tableName: string, oldId: string, newId: string) {
-  const table = db.table(tableName)
-  try {
-    const existing = await table.get(oldId)
-    if (existing) {
-      await table.delete(oldId)
-      await table.put({ ...existing, id: newId })
-    }
-
-    // Also update any queued mutations that reference the old ID
-    const queuedMuts = await db.mutationQueue
-      .where('entityId')
-      .equals(oldId)
-      .toArray()
-
-    for (const m of queuedMuts) {
-      await db.mutationQueue.update(m.queueId!, { entityId: newId })
-    }
-  } catch {
-    // Non-critical — log but don't fail
-    console.warn(`[sync] Failed to remap ${tableName} ${oldId} → ${newId}`)
   }
 }
 

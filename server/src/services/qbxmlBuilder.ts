@@ -13,7 +13,7 @@ import { decodeHtmlEntities, decodeHtmlEntitiesOrNull } from '../utils/htmlEntit
 const QB_FALLBACK_ITEM = process.env.QB_FALLBACK_ITEM || 'Misc';
 
 // XML-escape special characters and sanitize for QB's strict XML parser
-function esc(val: string | null | undefined): string {
+function esc(val: string | null | undefined, maxLength?: number): string {
   if (!val) return '';
   return val
     // Replace common Unicode chars that QB's parser chokes on
@@ -30,6 +30,9 @@ function esc(val: string | null | undefined): string {
     .replace(/\u2083/g, '3')   // subscript 3 (NH₃) → 3
     // Strip any remaining non-ASCII chars that could break QB
     .replace(/[^\x20-\x7E\n\r\t]/g, '')
+    // QB measures decoded field text, not the length of XML entities. Apply
+    // limits after normalization but before escaping (never split &amp;).
+    .slice(0, maxLength)
     // Standard XML escapes
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -89,11 +92,27 @@ function buildOther(val?: string | null): string {
   return `<Other>${esc(trimmed.slice(0, QB_OTHER_MAX_LEN))}</Other>`;
 }
 
+// QB Desktop caps PONumber at 25 decoded characters. ServicePro combines
+// PO/AFE, so preserve the full reference in Memo when the header must shorten.
+function buildPoAndMemo(data: { poNumber?: string | null; memo?: string | null }) {
+  const po = esc(data.poNumber, 25);
+  const overflow = po !== esc(data.poNumber);
+  const memo = overflow
+    ? [data.memo, `PO/AFE: ${data.poNumber}`].filter(Boolean).join('\n')
+    : data.memo;
+  if (esc(memo, 4095) !== esc(memo)) throw new Error('QuickBooks Memo exceeds 4095 characters; shorten the memo or PO/AFE reference');
+  return { po, memo: esc(memo) };
+}
+
 // ---------------------------------------------------------------------------
 // SalesOrderAdd
 // ---------------------------------------------------------------------------
 
 export interface QbSalesOrderLine {
+  // Summary rows preserve the exact extended charge across mixed source rates.
+  useAmount?: boolean;
+  // Description-only rows printed immediately beneath this charge.
+  noteLines?: string[];
   qbItemListId?: string | null;
   qbItemFullName?: string | null;
   qbClassListId?: string | null;
@@ -141,9 +160,19 @@ export interface QbSalesOrderData {
   otherLocation?: string | null;
   // Lines
   lines: QbSalesOrderLine[];
+  // Description-only rows: no item, quantity, rate, amount or tax code.
+  noteLines?: string[];
+}
+
+function buildNoteLines(tag: 'InvoiceLineAdd' | 'SalesOrderLineAdd', notes: string[] = []): string {
+  return notes.filter(note => note.trim()).map(note => {
+    if (esc(note, 4095) !== esc(note)) throw new Error('QuickBooks note exceeds 4095 characters');
+    return `      <${tag}>\n        <Desc>${esc(note)}</Desc>\n      </${tag}>`;
+  }).join('\n');
 }
 
 export function buildSalesOrderAdd(data: QbSalesOrderData): string {
+  const poAndMemo = buildPoAndMemo(data);
   // Customer ref — prefer ListID, fall back to FullName
   let customerRef = '';
   if (data.customerListId) {
@@ -168,10 +197,12 @@ export function buildSalesOrderAdd(data: QbSalesOrderData): string {
       `        ${itemRef}`,
       `        <Desc>${esc(line.description)}</Desc>`,
       `        <Quantity>${line.quantity}</Quantity>`,
-      `        <Rate>${qbAmount(line.rate)}</Rate>`,
+      line.useAmount ? '' : `        <Rate>${qbAmount(line.rate)}</Rate>`,
       lineClass ? `        ${lineClass}` : '',
+      line.useAmount ? `        <Amount>${qbAmount(line.amount)}</Amount>` : '',
       taxCodeRef ? `        ${taxCodeRef}` : '',
       '      </SalesOrderLineAdd>',
+      buildNoteLines('SalesOrderLineAdd', line.noteLines),
     ].filter(Boolean).join('\n');
   }).join('\n');
 
@@ -198,16 +229,17 @@ export function buildSalesOrderAdd(data: QbSalesOrderData): string {
     headerClass ? `        ${headerClass}` : '',
     `        <TxnDate>${qbDate(data.txnDate)}</TxnDate>`,
     `        <RefNumber>${esc(qbRefNumber(data.refNumber))}</RefNumber>`,
-    data.poNumber ? `        <PONumber>${esc(data.poNumber)}</PONumber>` : '',
-    data.fob ? `        <FOB>${esc(data.fob)}</FOB>` : '',
+    poAndMemo.po ? `        <PONumber>${poAndMemo.po}</PONumber>` : '',
+    data.fob ? `        <FOB>${esc(data.fob, 13)}</FOB>` : '',
     itemSalesTaxRef,
-    data.memo ? `        <Memo>${esc(data.memo)}</Memo>` : '',
+    poAndMemo.memo ? `        <Memo>${poAndMemo.memo}</Memo>` : '',
     // <Other> comes AFTER Memo and BEFORE the line adds — the qbXML header
     // sequence is …ItemSalesTaxRef → Memo → CustomerMsgRef → IsToBePrinted →
     // IsToBeEmailed → IsTaxIncluded → CustomerSalesTaxCodeRef → Other → lines.
     // Emitting it anywhere else is an out-of-order element and QB rejects the
     // whole doc with 0x80040400 (QBXML_ERROR_PARSE).
     otherRef ? `        ${otherRef}` : '',
+    buildNoteLines('SalesOrderLineAdd', data.noteLines),
     lineXml,
     '      </SalesOrderAdd>',
     '    </SalesOrderAddRq>',
@@ -226,6 +258,7 @@ export type QbInvoiceLine = QbSalesOrderLine;
 export type QbInvoiceData = QbSalesOrderData;
 
 export function buildInvoiceAdd(data: QbInvoiceData): string {
+  const poAndMemo = buildPoAndMemo(data);
   // Customer ref — prefer ListID, fall back to FullName
   let customerRef = '';
   if (data.customerListId) {
@@ -251,11 +284,13 @@ export function buildInvoiceAdd(data: QbInvoiceData): string {
       `        ${itemRef}`,
       `        <Desc>${esc(line.description)}</Desc>`,
       `        <Quantity>${line.quantity}</Quantity>`,
-      `        <Rate>${qbAmount(line.rate)}</Rate>`,
+      line.useAmount ? '' : `        <Rate>${qbAmount(line.rate)}</Rate>`,
       lineClass ? `        ${lineClass}` : '',
+      line.useAmount ? `        <Amount>${qbAmount(line.amount)}</Amount>` : '',
       serviceDate,
       taxCodeRef ? `        ${taxCodeRef}` : '',
       '      </InvoiceLineAdd>',
+      buildNoteLines('InvoiceLineAdd', line.noteLines),
     ].filter(Boolean).join('\n');
   }).join('\n');
 
@@ -281,16 +316,17 @@ export function buildInvoiceAdd(data: QbInvoiceData): string {
     headerClass ? `        ${headerClass}` : '',
     `        <TxnDate>${qbDate(data.txnDate)}</TxnDate>`,
     `        <RefNumber>${esc(qbRefNumber(data.refNumber))}</RefNumber>`,
-    data.poNumber ? `        <PONumber>${esc(data.poNumber)}</PONumber>` : '',
-    data.fob ? `        <FOB>${esc(data.fob)}</FOB>` : '',
+    poAndMemo.po ? `        <PONumber>${poAndMemo.po}</PONumber>` : '',
+    data.fob ? `        <FOB>${esc(data.fob, 13)}</FOB>` : '',
     itemSalesTaxRef,
-    data.memo ? `        <Memo>${esc(data.memo)}</Memo>` : '',
+    poAndMemo.memo ? `        <Memo>${poAndMemo.memo}</Memo>` : '',
     // <Other> comes AFTER Memo and BEFORE the line adds — the qbXML header
     // sequence is …ItemSalesTaxRef → Memo → CustomerMsgRef → IsToBePrinted →
     // IsToBeEmailed → IsTaxIncluded → CustomerSalesTaxCodeRef → Other → lines.
     // Emitting it anywhere else is an out-of-order element and QB rejects the
     // whole doc with 0x80040400 (QBXML_ERROR_PARSE).
     otherRef ? `        ${otherRef}` : '',
+    buildNoteLines('InvoiceLineAdd', data.noteLines),
     lineXml,
     '      </InvoiceAdd>',
     '    </InvoiceAddRq>',
@@ -669,50 +705,10 @@ export function parseInvoiceQueryResponse(responseXml: string): QbInvoiceQueryRe
   };
 }
 
-// ---------------------------------------------------------------------------
-// Item Query — Pull items from QB to sync UOM, description, price
-// ---------------------------------------------------------------------------
-
-/**
- * Build qbXML requests to query all item types from QB.
- * Uses individual typed queries (ItemServiceQueryRq, etc.) because
- * the generic ItemQueryRq isn't available in older QB SDK versions.
- *
- * Returns a single qbXML document with multiple requests inside one QBXML block.
- * QB Desktop processes them sequentially and returns all responses in one batch.
- */
-export function buildItemQueryRq(fromModifiedDate?: string): string {
-  const dateFilter = fromModifiedDate
-    ? `<FromModifiedDate>${fromModifiedDate}</FromModifiedDate>`
-    : '';
-
-  // Query all 4 item types that can appear on sales orders/invoices
-  return `<?xml version="1.0" encoding="utf-8"?>
-<?qbxml version="13.0"?>
-<QBXML>
-  <QBXMLMsgsRq onError="continueOnError">
-    <ItemServiceQueryRq>
-      ${dateFilter}
-      <ActiveStatus>All</ActiveStatus>
-    </ItemServiceQueryRq>
-    <ItemNonInventoryQueryRq>
-      ${dateFilter}
-      <ActiveStatus>All</ActiveStatus>
-    </ItemNonInventoryQueryRq>
-    <ItemInventoryQueryRq>
-      ${dateFilter}
-      <ActiveStatus>All</ActiveStatus>
-    </ItemInventoryQueryRq>
-    <ItemOtherChargeQueryRq>
-      ${dateFilter}
-      <ActiveStatus>All</ActiveStatus>
-    </ItemOtherChargeQueryRq>
-  </QBXMLMsgsRq>
-</QBXML>`;
-}
 
 /** A parsed QB item record. */
 export interface QbItemRecord {
+  isTaxable?: boolean | null;
   listId: string;
   fullName: string;
   isActive: boolean;
@@ -748,6 +744,14 @@ function normalizeUoM(raw: string): string {
  */
 export function parseItemQueryResponse(responseXml: string): QbItemRecord[] {
   const items: QbItemRecord[] = [];
+  const taxCodes = new Map<string, boolean>();
+  for (const match of responseXml.matchAll(/<SalesTaxCodeRet>[\s\S]*?<\/SalesTaxCodeRet>/g)) {
+    const taxable = extractTag(match[0], 'IsTaxable');
+    if (taxable !== 'true' && taxable !== 'false') continue;
+    for (const key of [extractTag(match[0], 'ListID'), extractTag(match[0], 'Name')]) {
+      if (key) taxCodes.set(key.toLowerCase(), taxable === 'true');
+    }
+  }
 
   const typeMap: Record<string, string> = {
     ItemServiceRet: 'service',
@@ -794,7 +798,13 @@ export function parseItemQueryResponse(responseXml: string): QbItemRecord[] {
       const rawUom = uomBlock ? extractTag(uomBlock[0], 'FullName') : null;
       const unitOfMeasure = rawUom ? normalizeUoM(rawUom) : null;
 
-      items.push({ listId, fullName, isActive, description, price, unitOfMeasure, itemType });
+      const taxRef = block.match(/<SalesTaxCodeRef>[\s\S]*?<\/SalesTaxCodeRef>/)?.[0];
+      const taxId = taxRef ? extractTag(taxRef, 'ListID')?.toLowerCase() : null;
+      const taxName = taxRef ? extractTag(taxRef, 'FullName')?.toLowerCase() : null;
+      const isTaxable = (taxId ? taxCodes.get(taxId) : undefined)
+        ?? (taxName ? taxCodes.get(taxName) : undefined)
+        ?? (taxName === 'tax' ? true : taxName === 'non' ? false : null);
+      items.push({ listId, fullName, isActive, description, price, unitOfMeasure, itemType, isTaxable });
     }
   }
 
@@ -804,7 +814,7 @@ export function parseItemQueryResponse(responseXml: string): QbItemRecord[] {
 
 // ---------------------------------------------------------------------------
 // Slice F — Invoice Diff parsing. Pulls just enough off the InvoiceQueryRs
-// payload to detect divergence vs Sundog's canonical record. Today: TxnTotal
+// payload to detect divergence vs Sundog's canonical record. Today: gross total
 // + line count. Per-line line-item diff in a follow-up slice.
 // ---------------------------------------------------------------------------
 
@@ -812,9 +822,9 @@ export interface QbInvoiceDiffResult {
   found: boolean;
   statusCode: string;
   statusMessage: string;
-  /** Total amount on the QB invoice (TxnTotal). */
+  /** Gross invoice amount, including sales tax and already-applied payments. */
   qbTotal: number | null;
-  /** Number of <InvoiceLineRet> blocks in the response. */
+  /** Number of item/charge rows, excluding description-only documentation. */
   qbLineCount: number;
   /** When QB last edited this invoice — useful for follow-up logic. */
   qbTimeModified: string | null;
@@ -839,14 +849,30 @@ export function parseInvoiceDiffResponse(responseXml: string): QbInvoiceDiffResu
   }
 
   const block = invoiceRetMatch[1];
-  const totalStr = extractTag(block, 'TotalAmount') || extractTag(block, 'Subtotal');
-  const qbTotal = totalStr ? parseFloat(totalStr) : null;
+  // Desktop InvoiceRet normally has Subtotal + SalesTaxTotal, not TotalAmount.
+  // BalanceRemaining alone is also wrong for partially/fully paid invoices.
+  const amount = (tag: string): number | null => {
+    const value = extractTag(block, tag);
+    if (value === null || value.trim() === '') return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+  const subtotal = amount('Subtotal');
+  const balance = amount('BalanceRemaining');
+  const qbTotal = amount('TotalAmount')
+    ?? (subtotal !== null ? Math.round((subtotal + (amount('SalesTaxTotal') ?? 0)) * 100) / 100 : null)
+    ?? (balance !== null ? Math.round((balance + (amount('AppliedAmount') ?? 0)) * 100) / 100 : null);
 
   // Count line items — InvoiceLineRet is the standard line item block.
   // Group lines (InvoiceLineGroupRet) are not counted separately; their
   // child lines surface as InvoiceLineRet inside.
-  const lineMatches = block.match(/<InvoiceLineRet>/g);
-  const qbLineCount = lineMatches ? lineMatches.length : 0;
+  const lineMatches = [...block.matchAll(/<InvoiceLineRet>([\s\S]*?)<\/InvoiceLineRet>/g)];
+  const qbLineCount = lineMatches.filter(([, line]) => {
+    // QB may return Amount=0 on a documentation row. Keep zero-priced item
+    // rows and any nonzero amounts in the count so genuine edits still flag.
+    const lineAmount = extractTag(line, 'Amount');
+    return /<ItemRef>/.test(line) || (lineAmount !== null && Number(lineAmount) !== 0);
+  }).length;
 
   return {
     found: true,

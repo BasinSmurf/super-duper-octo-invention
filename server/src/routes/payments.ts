@@ -5,7 +5,7 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { createPaymentIntent, retrievePaymentIntent, getPublishableKey } from '../services/stripeClient.js';
 import { ensureSalesReceiptQueued } from '../services/stripeWebhook.js';
 import { noteReceiptOnWorkOrder } from '../services/paymentReceiptNote.js';

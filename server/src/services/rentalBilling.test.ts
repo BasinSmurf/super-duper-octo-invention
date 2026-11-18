@@ -1,5 +1,17 @@
 import { describe, it, expect } from 'vitest';
-import { seedsDeliveryPickupLines } from './rentalBilling.js';
+import { computeRentalBillingState, seedsDeliveryPickupLines } from './rentalBilling.js';
+
+describe('rental calendar-month due dates', () => {
+  it.each([['2026-06-15','2026-06-30'],['2026-08-31','2026-08-31'],['2026-02-01','2026-02-28'],['2024-02-01','2024-02-29']])('bills %s at EOM %s', (start, end) => {
+    expect(computeRentalBillingState({ status:'active', startDate:new Date(start), endDate:null, billingCadence:'monthly' }, []).nextDueDate).toEqual(new Date(end));
+  });
+  it('advances EOM only after the previous month is fully invoiced', () => {
+    const rental = { status:'active', startDate:new Date('2026-06-15'), endDate:null, billingCadence:'monthly' as const };
+    expect(computeRentalBillingState(rental, [{ periodEnd:new Date('2026-06-20') }]).nextDueDate).toEqual(new Date('2026-06-30'));
+    expect(computeRentalBillingState(rental, [{ periodEnd:new Date('2026-06-30') }]).nextDueDate).toEqual(new Date('2026-07-31'));
+    expect(computeRentalBillingState({ ...rental, status:'completed', endDate:new Date('2026-07-05') }, [{ periodEnd:new Date('2026-06-30') }]).nextDueDate).toEqual(new Date('2026-07-05'));
+  });
+});
 
 describe('seedsDeliveryPickupLines — who gets Delivery/Pickup rows', () => {
   it('seeds them for a dispatch rental, where a truck actually rolled', () => {

@@ -1,3 +1,4 @@
+import { HelpTip } from '@/components/HelpTip'
 import { useState, useEffect } from 'react'
 import { Clock } from 'lucide-react'
 import { cn } from '@/lib/cn'
@@ -30,6 +31,7 @@ export function LiveClock({ className }: { className?: string }) {
       <Clock className="w-3.5 h-3.5 text-slate-400" />
       {time}
       <span className="font-semibold text-slate-700">{deviceZone(now)}</span>
+      <HelpTip text="This clock uses your device time and time zone. Check your device settings if the displayed time is incorrect." />
     </span>
   )
 }

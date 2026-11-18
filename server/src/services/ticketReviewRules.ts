@@ -1,3 +1,4 @@
+import { selectBillingProfile } from './billingProfileSelector.js';
 /**
  * ticketReviewRules.ts
  *
@@ -22,7 +23,9 @@
  *   - approvalAutoProcessor (never — it reads cached signal only)
  */
 
-import { prisma } from '../index.js';
+import { ticketBillingCodes } from './locationBillingCodes.js';
+import { prisma } from '../db.js';
+import { inspectionBillingError } from './inspectionBillingGuard.js';
 import type { ServiceSubtype, TicketType } from '../db.js';
 
 export type ReviewVerdict = 'green' | 'yellow' | 'red';
@@ -37,7 +40,7 @@ export interface ReviewSignal {
 }
 
 // Bump when rule logic changes so stale cached signals can be detected later.
-export const ENGINE_VERSION = 4;
+export const ENGINE_VERSION = 6;
 
 // Service types where a customer signature is expected.
 const SIGNATURE_REQUIRED_TYPES: TicketType[] = ['field_service', 'repair', 'training'];
@@ -78,8 +81,8 @@ export async function runReviewRules(ticketId: string): Promise<ReviewSignal> {
           },
         },
       },
-      pad: { select: { id: true, pendingReview: true, currentOperatorId: true } },
-      well: { select: { id: true, pendingReview: true, apiNumber: true, currentOperatorId: true } },
+      pad: { select: { id: true, pendingReview: true, currentOperatorId: true, facilityCode: true } },
+      well: { select: { id: true, pendingReview: true, apiNumber: true, currentOperatorId: true, facilityCode: true } },
       lineItems: {
         include: {
           equipmentInstalled: { select: { id: true, status: true } },
@@ -109,8 +112,11 @@ export async function runReviewRules(ticketId: string): Promise<ReviewSignal> {
   }
 
   // Resolve effective billing profile (ticket-level overrides fall back to company-level)
+  const inspectionError = inspectionBillingError(ticket, ticket.lineItems.length);
+  record('inspection_line_synced', inspectionError ? 'fail' : 'pass', inspectionError ?? undefined);
+
   const billingProfile =
-    ticket.billingProfile ?? ticket.company.billingProfiles[0] ?? null;
+    ticket.billingProfile ?? selectBillingProfile(ticket.company.billingProfiles, ticket);
 
   // ──────────────────────────────────────────────────────────────
   // Rule 1: missing_customer
@@ -309,26 +315,16 @@ export async function runReviewRules(ticketId: string): Promise<ReviewSignal> {
   // If customer has enverusEnabled and the ticket has no orderedByName
   // and the billing profile has no default, it will fail on submission.
   // ──────────────────────────────────────────────────────────────
-  if (billingProfile?.enverusEnabled) {
-    const orderedByName =
-      (customData?.orderedByName as string | undefined) ||
-      billingProfile.defaultOrderedByName ||
-      null;
-    if (!orderedByName) {
-      record('enverus_missing_requisitioner', 'fail', 'Enverus customer requires orderedByName');
-    } else {
-      record('enverus_missing_requisitioner', 'pass');
-    }
-  } else {
-    record('enverus_missing_requisitioner', 'pass');
-  }
+  // Requisitioner is selected by billing on the invoice before submission.
+  record('enverus_missing_requisitioner', 'pass');
 
   // ──────────────────────────────────────────────────────────────
   // Rule 8: enverus_missing_afe (fail for LEM customers)
   // LEM receipts require AFE per Continental/COP guidelines.
   // ──────────────────────────────────────────────────────────────
   if (billingProfile?.enverusEnabled && billingProfile?.requiresAfe) {
-    const afe = ticket.afeNumber || billingProfile.defaultAfeNumber || null;
+    // A location-sourced AFE comes from the well/pad at billing.
+    const afe = ticketBillingCodes(billingProfile, ticket).afeNumber || ticket.afeNumber || billingProfile.defaultAfeNumber || null;
     if (!afe) {
       record('enverus_missing_afe', 'fail', 'Enverus LEM customer requires AFE number');
     } else {

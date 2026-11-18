@@ -18,6 +18,8 @@ function fakePrisma(opts: {
   equipmentCategory?: string;
   qaChecklist?: Record<string, boolean>;
   inspectionCount?: number;
+  hardClosesAt?: Date;
+  serialNumber?: string;
 }) {
   const updates: Array<Record<string, unknown>> = [];
   const logs: Array<Record<string, unknown>> = [];
@@ -35,6 +37,7 @@ function fakePrisma(opts: {
   };
   const prisma = {
     shopWorkOrderItem: {
+      findMany: vi.fn().mockResolvedValue([{ id: 'unit-1', itemNumber: 1, serialNumber: opts.serialNumber ?? 'SN-1' }]),
       findUnique: vi.fn().mockResolvedValue({
         id: 'unit-1',
         status: opts.itemStatus,
@@ -44,6 +47,8 @@ function fakePrisma(opts: {
         equipmentDescription: '',
         fexBrand: '',
         partsUsed: [],
+        hardClosesAt: opts.hardClosesAt ?? new Date(Date.now() + 3600000),
+        billedAt: null,
       }),
     },
     equipmentInspection: {
@@ -76,6 +81,26 @@ const PASS_INSPECTION = {
 };
 
 describe('routeShopItemFromInspection — QA backstop', () => {
+  it.each(['pass', 'condemn'])('withholds %s routing when a piece has no serial', async outcome => {
+    const { prisma, updates } = fakePrisma({ itemStatus: 'diagnosing', serialNumber: '', qaChecklist: completeFexChecklist() });
+    const result = await routeShopItemFromInspection(prisma, { ...PASS_INSPECTION, outcome }, 'user-1');
+    expect(result.routed).toBe(false);
+    expect(result.reason).toMatch(/serial/i);
+    expect(updates).toHaveLength(0);
+  });
+
+  it.each(['fail', 'requires_parts'])('reopens a ready unit for a %s correction inside its correction window', async (outcome) => {
+    const { prisma, updates } = fakePrisma({ itemStatus: 'shop_complete' });
+    const result = await routeShopItemFromInspection(prisma, { ...PASS_INSPECTION, outcome }, 'user-1');
+    expect(result.toStatus).toBe('in_work');
+    expect(updates[0]?.status).toBe('in_work');
+  });
+  it('does not silently reopen a hard-closed unit from an inspection replay', async () => {
+    const { prisma, updates } = fakePrisma({ itemStatus: 'shop_complete', hardClosesAt: new Date(0) });
+    const result = await routeShopItemFromInspection(prisma, { ...PASS_INSPECTION, outcome: 'fail' }, 'user-1');
+    expect(result.routed).toBe(false);
+    expect(updates).toHaveLength(0);
+  });
   it('releases to shop_complete when the checklist is complete', async () => {
     const { prisma, updates } = fakePrisma({
       itemStatus: 'diagnosing',

@@ -35,7 +35,11 @@ export function deriveJobTypePills(agreement: PillSource): JobTypePill[] {
     pills.push({ label: 'Manned', cls: 'bg-blue-100 text-blue-700' })
   }
 
-  const hasMonitors = c ? c.gasMonitors.length > 0 : !!agreement.monitorsIncluded
+  // Older compositions can contain only a trailer or BOM package. Fall back
+  // to the legacy flag when the monitor list is absent; an explicit [] wins.
+  const hasMonitors = Array.isArray(c?.gasMonitors)
+    ? c.gasMonitors.length > 0
+    : !!agreement.monitorsIncluded
   if (hasMonitors) pills.push({ label: 'Monitors', cls: 'bg-emerald-100 text-emerald-700' })
 
   return pills

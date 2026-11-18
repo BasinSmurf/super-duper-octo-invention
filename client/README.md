@@ -1,71 +1,59 @@
 # ServicePRO client
 
-React 19 / TypeScript / Vite / Tailwind PWA. Reviewed 2026-09-17 against source
-through 45b3d44. See the [root README](../README.md) for API/database setup and
-[current workflows](../server/docs/CURRENT-WORKFLOWS.md) for operating behavior.
+React 19 and TypeScript PWA built with Vite and Tailwind. Staff workflows,
+customer portal pages, and kiosk displays share this package. Dexie stores
+local records and the offline mutation outbox.
 
 ## Development
 
-From this directory, with Node 22:
+Use Node.js 22.23.4, matching `.node-version`, `.nvmrc`, and CI. Start Postgres and Redis from the repository root,
+configure `server/.env` from the root `.env.example`, and run the API on port 3001.
+Then, in this directory:
 
 ```powershell
 npm ci --legacy-peer-deps
 npm run dev
 ```
 
-Vite defaults to 5173, binds to the LAN, and proxies `/api` to
-`http://127.0.0.1:3001`. Override in ignored `client/.env.local`:
+Vite defaults to port 5173 and proxies `/api` to `http://127.0.0.1:3001`.
+Optional `client/.env.local` settings:
 
-```ini
-PORT=5174
-VITE_API_URL=http://127.0.0.1:3002
+```dotenv
+PORT=5173
+VITE_API_URL=http://127.0.0.1:3001
 ```
 
-The API and databases run separately. `VITE_*` values are public configuration,
-never secrets. `@/` resolves to `src/`.
+The development server binds to all interfaces for LAN testing. Camera and service
+worker features may require a secure context on devices. `VITE_*` values are
+public build inputs; keep secrets in the server environment.
 
-## Source map
-
-| Path | Responsibility |
-|---|---|
-| `src/App.tsx` | Lazy routes, staff/portal separation, permission guards, PWA updates |
-| `src/pages/wizard/` | Division-first `/tickets/start`; delegates to existing work types |
-| `src/pages/TicketWizard.tsx` | Direct `/tickets/new`, editing, work-type flows |
-| `src/pages/portal/` | Company-scoped customer experience |
-| `src/contexts/` | Auth, effective permissions, sync |
-| `src/lib/db.ts`, `db-types.ts`, `syncEngine.ts` | Dexie schema, local models, synchronization |
-| `src/components/widgets/` | Dashboard components and registry |
-| `vite.config.ts` | Proxy, assets, service-worker configuration |
-
-Staff land at `/dashboard`; `/home` redirects there. Customers land at `/portal`.
-Portal sections include `/portal/service`, `/portal/h2s`, `/portal/shop`,
-`/portal/rentals`, and `/portal/account`. Platform admins can preview a selected
-company. Permissions are edited at `/admin/permissions`.
-
-Shop boards separate customer (`/shop-board`) and internal (`/shop-board/inhouse`)
-work. Kiosk `/kiosk/...` routes use device tokens; the server controls site and
-rental pickup scope. Client visibility is not server authorization.
-
-## Offline work and updates
-
-Supported staff mutations queue in IndexedDB and sync push-first, then pull.
-Not every screen/action works offline. Inspect failed mutations before clearing
-browser data: unsynced records and attachment buffers can be lost. Offline shop
-completion still runs server QA checks; incomplete QA can replay successfully
-into `qc_testing`, with the reason recorded in unit history.
-
-The production PWA prompts for updates and defers activation around active work.
-Vite development alone does not verify production service-worker behavior.
-Check pending work and the update prompt when diagnosing stale UI.
-
-## Checks and delivery
+## Validation and build
 
 ```powershell
-npm run build   # tsc -b, then Vite production build
-npm run lint    # existing backlog; report-only in CI
+npx tsc -b
+node --test *.test.mjs
+npm run lint
+npm run build
 ```
 
-There is no client test script in `package.json`. Exercise changed interactions
-in a browser, including offline replay where applicable. Production's client
-container copies files into `client-dist` and exits successfully; Caddy serves
-them. An exited client-copy container is expected.
+CI gates the production build (including TypeScript), workflow regressions, and
+`npm audit --audit-level=low`; lint is currently report-only.
+Build output is `dist/`. Production copies the client image's static files into
+the shared `client-dist` volume served by Caddy.
+
+## Where to look
+
+- `src/pages/wizard/WizardShell.tsx`: division-first `/tickets/start` entry.
+- `src/pages/TicketWizard.tsx`: setup, dispatch preparation, field completion.
+- `src/pages/TicketEditPage.tsx`: online admin and rental-visit ticket editing.
+- `src/lib/rentalCatalog.ts`: catalog/customer rental rates and manual-rate preservation.
+- `src/components/HelpTip.tsx` and `src/lib/helpTips.ts`: contextual help visibility.
+- `src/lib/db.ts` and `src/lib/db-types.ts`: offline database and record types.
+- `src/lib/syncEngine.ts`: pull, outbox replay, and reconciliation.
+- `src/lib/manualRentalVisit.ts`: offline swap/return batches.
+- `vite.config.ts`: dev proxy, PWA manifest, and service worker settings.
+
+Read the [user guide](../server/docs/USER_GUIDE.md),
+[current workflows](../server/docs/CURRENT-WORKFLOWS.md), and
+[operational runbook](../server/docs/RUNBOOK.md). Sync pending work before
+accepting a PWA update; clearing browser storage can discard unsynced records.

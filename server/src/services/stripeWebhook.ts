@@ -48,7 +48,7 @@
  */
 
 import Stripe from 'stripe';
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { noteReceiptOnWorkOrder } from './paymentReceiptNote.js';
 
 /**

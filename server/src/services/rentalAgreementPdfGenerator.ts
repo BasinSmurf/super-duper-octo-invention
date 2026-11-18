@@ -1,4 +1,5 @@
 import PDFDocument from 'pdfkit';
+import { drawCompanyHeader, drawPdfFooters, loadPdfBranding, type PdfBranding } from './pdfBranding.js';
 
 // ---- Types (mirrors the include shape from GET /rentals/:id) ----
 
@@ -95,14 +96,15 @@ const BRAND_ACCENT = '#0e7490';
 
 // ---- Main Generator ----
 
-export function generateRentalAgreementPdf(ra: RentalAgreementForPdf): PDFKit.PDFDocument {
+export async function generateRentalAgreementPdf(ra: RentalAgreementForPdf, providedBranding?: PdfBranding): Promise<PDFKit.PDFDocument> {
+  const branding = providedBranding ?? await loadPdfBranding();
   const doc = new PDFDocument({
     size: 'LETTER',
     margins: { top: 36, bottom: 10, left: 50, right: 50 },
     bufferPages: true,
     info: {
       Title: `Rental ${ra.agreementNumber}`,
-      Author: 'Basin Safety',
+      Author: branding.companyName,
       Creator: 'Sundog Field Service Platform',
     },
   });
@@ -117,7 +119,7 @@ export function generateRentalAgreementPdf(ra: RentalAgreementForPdf): PDFKit.PD
   // ================================================================
   let y = 36;
 
-  doc.fontSize(22).font('Helvetica-Bold').fillColor(BRAND_DARK).text('BASIN SAFETY', contentLeft, y);
+  drawCompanyHeader(doc, branding, contentLeft, y, contentWidth / 2 - 14, BRAND_DARK);
   doc.fontSize(7.5).font('Helvetica').fillColor('#666666');
   doc.text('701.572.8140  |  billing@basinsafetyus.com  |  Williston, ND 58801', contentLeft, y + 26);
 
@@ -273,7 +275,7 @@ export function generateRentalAgreementPdf(ra: RentalAgreementForPdf): PDFKit.PD
 
   doc.fontSize(8).font('Helvetica').fillColor('#555555').text(
     'The customer acknowledges receipt of the equipment listed above in good working condition and accepts ' +
-    'responsibility for its safe use, care, and return. Basin Safety is not liable for misuse or damage occurring ' +
+    `responsibility for its safe use, care, and return. ${branding.companyName} is not liable for misuse or damage occurring ` +
     'during the rental period.',
     contentLeft, y, { width: contentWidth },
   );
@@ -307,17 +309,7 @@ export function generateRentalAgreementPdf(ra: RentalAgreementForPdf): PDFKit.PD
   // FOOTER — every page
   // ================================================================
   const now = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-  const footerY = 752;
-  const range = doc.bufferedPageRange();
-  const pageCount = range.count;
-  for (let i = 0; i < pageCount; i++) {
-    doc.switchToPage(range.start + i);
-    doc.moveTo(contentLeft, footerY - 6).lineTo(contentRight, footerY - 6).strokeColor('#e0e0e0').lineWidth(0.5).stroke();
-    doc.fontSize(7).font('Helvetica').fillColor('#aaaaaa')
-      .text(`Generated ${now}  |  Basin Safety  |  Williston, ND  |  701.572.8140`, contentLeft, footerY, { width: contentWidth - 60, align: 'center', lineBreak: false });
-    doc.fontSize(7).font('Helvetica').fillColor('#bbbbbb')
-      .text(`Page ${i + 1} of ${pageCount}`, contentRight - 55, footerY, { lineBreak: false });
-  }
+  drawPdfFooters(doc, branding, now, contentLeft, contentRight);
 
   // NOTE: caller is responsible for calling doc.end()
   return doc;

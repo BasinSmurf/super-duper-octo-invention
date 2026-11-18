@@ -4,6 +4,9 @@ import { X, Loader2, Phone, AtSign, Truck, ShoppingBag, Package, DollarSign, Shi
 import { api } from '@/lib/api'
 import { db } from '@/lib/db'
 import { CustomerSearch } from '@/components/CustomerSearch'
+import { ProductSearch } from '@/components/ProductSearch'
+import { useCompanyPriceLevels } from '@/lib/priceLevels'
+import { loadRentalMonitors, rentalCatalogRate, repriceRentalRows, type RentalCatalogProduct } from '@/lib/rentalCatalog'
 import { CREDIT_HOLD_MESSAGE } from '@/lib/creditHold'
 import { LocationPicker, type LocationSelection } from '@/components/LocationPicker'
 import { EquipmentScanner, type ScannedEquipment } from '@/components/EquipmentScanner'
@@ -13,7 +16,7 @@ import { QuantityInput } from '@/components/QuantityInput'
 import { selectBillingProfileSeed } from '@/lib/billingProfile'
 import { rateUnitAbbrev, rateUnitLong, hasRate } from '@/lib/rentalRates'
 import type { BillingRef, RentalComposition, BillingProfileSeed } from '@/lib/db-types'
-import { type RentalBom, BOM_TYPE_LABELS, resolveBom, bomBaselineItems, bomPackageLine } from '@/lib/rentalBom'
+import { type RentalBom, BOM_TYPE_LABELS, packageVariants, bomDisplayName, bomBaselineItems, bomPackageLine } from '@/lib/rentalBom'
 import { todayKey } from '@/lib/dates'
 
 type PickupType = 'dispatch' | 'walk_in'
@@ -28,13 +31,7 @@ interface WalkInItem {
   rateType: 'daily' | 'weekly' | 'monthly'
 }
 
-interface MonitorProduct {
-  id: string
-  name: string
-  defaultRentalRateDaily?: number | null
-  defaultRentalRateWeekly?: number | null
-  defaultRentalRateMonthly?: number | null
-}
+type MonitorProduct = RentalCatalogProduct
 
 interface CompanyRef {
   id: string
@@ -62,8 +59,23 @@ interface DispatchRentalDialogProps {
  *   with no Pad/Location and no daily-log expectation.
  */
 export function DispatchRentalDialog({ open, onClose, onCreated }: DispatchRentalDialogProps) {
+  const [assignedTechId, setAssignedTechId] = useState('')
+  const [ringCentralChannel, setRingCentralChannel] = useState('')
+  const [dispatchUsers, setDispatchUsers] = useState<{ id: string; name: string }[]>([])
+  const [dispatchChannels, setDispatchChannels] = useState<{ channel: string }[]>([])
+  const [optionsError, setOptionsError] = useState('')
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    setOptionsError('')
+    Promise.all([api.get<{ data: { id: string; name: string }[] }>('/users/active'), api.get<{ channels: { channel: string }[] }>('/rentals/dispatch-options')])
+      .then(([users, options]) => { if (!cancelled) { setDispatchUsers(users.data); setDispatchChannels(options.channels); setRingCentralChannel(previous => previous || (options.channels.find(c => c.channel === 'rentals')?.channel ?? '')) } })
+      .catch(() => { if (!cancelled) setOptionsError('Could not load dispatch users and channels. Reopen this form to retry.') })
+    return () => { cancelled = true }
+  }, [open])
   const [pickupType, setPickupType] = useState<PickupType>('dispatch')
   const [customer, setCustomer] = useState<CompanyRef | null>(null)
+  const { levels: rentalPriceLevels } = useCompanyPriceLevels(customer?.id)
   // AR credit hold on the selected customer — a rental is equipment leaving on
   // credit, so the hold blocks dispatching one.
   const [customerCreditHold, setCustomerCreditHold] = useState(false)
@@ -78,14 +90,19 @@ export function DispatchRentalDialog({ open, onClose, onCreated }: DispatchRenta
   const [trailerOn, setTrailerOn] = useState(false)
   const [trailerManned, setTrailerManned] = useState(true)
   const [trailerRate, setTrailerRate] = useState<number | null>(null)
-  const [gasMonitors, setGasMonitors] = useState<{ id: string; productId: string; productName: string; qty: number; rate: number | null }[]>([])
-  const [otherItems, setOtherItems] = useState<{ id: string; label: string; qty: number; rate: number | null }[]>([])
+  const [gasMonitors, setGasMonitors] = useState<{ id: string; productId: string; productName: string; qty: number; rate: number | null; manualRate?: boolean }[]>([])
+  const [otherItems, setOtherItems] = useState<{ id: string; label: string; productId?: string; catalogProduct?: RentalCatalogProduct; qty: number; rate: number | null; manualRate?: boolean }[]>([])
   const [drillingRig, setDrillingRig] = useState(false)
   const [monitorProducts, setMonitorProducts] = useState<MonitorProduct[]>([])
   // #Wave4 the selected customer's saved rental packages (Standard/Drilling).
   // The composition baseline pre-fills from these; drives the "what's included"
   // preview. Fetched on customer select.
   const [customerBoms, setCustomerBoms] = useState<RentalBom[]>([])
+  const [baselinePackageSelected, setBaselinePackageSelected] = useState(true)
+  // Which variant of the applicable package type the dispatcher picked. null =
+  // the type's default. A pick that stops fitting (manned/rig toggled) falls
+  // back to the new type's default rather than carrying a stale id.
+  const [selectedBomId, setSelectedBomId] = useState<string | null>(null)
   // The package's own rate, in the agreement's billing unit. Seeded from the
   // bound package product and editable per job — the package is a real charge,
   // so it follows the same set-a-rate-before-dispatch discipline as every other
@@ -113,25 +130,13 @@ export function DispatchRentalDialog({ open, onClose, onCreated }: DispatchRenta
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // #C load rentable gas-monitor products (QB parts list) for the picker
+  // Refresh the QB-backed catalog online; keep cached products available offline.
   useEffect(() => {
     if (!open) return
     let cancelled = false
-    ;(async () => {
-      const prods = await db.products
-        .where('category').anyOf('monitor_personal', 'monitor_area')
-        .filter(p => p.isActive !== false)
-        .toArray()
-      if (!cancelled) {
-        setMonitorProducts(prods.map(p => ({
-          id: p.id,
-          name: p.name,
-          defaultRentalRateDaily: p.defaultRentalRateDaily,
-          defaultRentalRateWeekly: p.defaultRentalRateWeekly,
-          defaultRentalRateMonthly: p.defaultRentalRateMonthly,
-        })).sort((a, b) => a.name.localeCompare(b.name)))
-      }
-    })()
+    loadRentalMonitors().then(products => {
+      if (!cancelled) setMonitorProducts(products)
+    }).catch(() => { if (!cancelled) setMonitorProducts([]) })
     return () => { cancelled = true }
   }, [open])
 
@@ -169,9 +174,9 @@ export function DispatchRentalDialog({ open, onClose, onCreated }: DispatchRenta
   // so a package existing is taken to mean the job has one. A monitors-only job
   // is the exception, and the dispatcher just unticks it.
   //
-  // Fires on customer change only, so a dispatcher who turns the trailer back
-  // off doesn't have it snap on again underneath them.
+  // Fetch on customer change only; package selection controls the pre-fill below.
   useEffect(() => {
+    setSelectedBomId(null)
     if (!customer?.id) { setCustomerBoms([]); return }
     let cancelled = false
     ;(async () => {
@@ -179,18 +184,6 @@ export function DispatchRentalDialog({ open, onClose, onCreated }: DispatchRenta
         const boms = await api.get<RentalBom[]>(`/companies/${customer.id}/rental-boms`)
         if (cancelled) return
         setCustomerBoms(boms || [])
-        const standard = (boms || []).find(b => b.bomType === 'standard')
-        if (standard) {
-          setTrailerManned(standard.manned)
-          setTrailerOn(true)
-          // The package covers the trailer, so its own line must be $0 —
-          // "deliberately included", which is what 0 means here — or the job
-          // bills the trailer twice: once inside the package line and again on
-          // its own. Only when the package will actually bill, though: a BOM
-          // with no QB item bound can't charge for anything, so the trailer
-          // stays the real charge and the dispatcher prices it as before.
-          if (standard.packageProductId) setTrailerRate(0)
-        }
       } catch {
         if (!cancelled) setCustomerBoms([])
       }
@@ -198,20 +191,27 @@ export function DispatchRentalDialog({ open, onClose, onCreated }: DispatchRenta
     return () => { cancelled = true }
   }, [customer?.id])
 
-  // #5 Re-seed gas-monitor line rates from product defaults when the rate type
-  // flips (daily↔weekly↔monthly), so the seeded number matches the unit.
-  // NOTE: must stay above the `if (!open)` early return — it's a hook.
+  // Apply saved defaults only while the package is selected, including when
+  // the package request finishes after dispatch has already deselected it.
   useEffect(() => {
-    setGasMonitors(rows => rows.map(r => {
-      if (!r.productId) return r
-      const prod = monitorProducts.find(p => p.id === r.productId)
-      const seeded = prod ? rateForProduct(prod) : null
-      // Re-seed from the product default for the new unit, but never wipe a rate
-      // the dispatcher already entered: an absent default keeps the current value.
-      return { ...r, rate: seeded ?? r.rate }
-    }))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [billingRateType])
+    if (!baselinePackageSelected) return
+    const standard = customerBoms.find(b => b.bomType === 'standard')
+    if (!standard) return
+    setTrailerManned(standard.manned)
+    setTrailerOn(true)
+    if (standard.packageProductId) setTrailerRate(0)
+  }, [customerBoms, baselinePackageSelected])
+
+  // Catalog/contract responses may arrive after a line is selected. Refresh
+  // automatic quotes, while preserving rates dispatch has explicitly edited.
+  useEffect(() => {
+    setGasMonitors(rows => repriceRentalRows(rows, monitorProducts, billingRateType, rentalPriceLevels))
+  }, [billingRateType, monitorProducts, rentalPriceLevels])
+
+  useEffect(() => {
+    setOtherItems(rows => rows.map(row => row.catalogProduct && !row.manualRate
+      ? { ...row, rate: rentalCatalogRate(row.catalogProduct, billingRateType, rentalPriceLevels) } : row))
+  }, [billingRateType, rentalPriceLevels])
 
   // Auto-populate the package rate from the customer's bound package item —
   // re-seeding when the applicable package changes (Drilling toggle) or the
@@ -220,14 +220,18 @@ export function DispatchRentalDialog({ open, onClose, onCreated }: DispatchRenta
   // dispatcher typed by hand.
   // NOTE: must stay above the `if (!open)` early return — it's a hook.
   useEffect(() => {
-    const pkg = bomPackageLine(resolveBom(customerBoms, drillingRig, trailerManned), billingRateType)
+    const variants = packageVariants(customerBoms, drillingRig, trailerManned)
+    const bom = variants.find(b => b.id === selectedBomId) ?? variants[0] ?? null
+    const pkg = bomPackageLine(bom, billingRateType)
     setBomPackageRate(prev => pkg?.rate ?? prev)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [customerBoms, drillingRig, trailerManned, billingRateType])
+  }, [customerBoms, drillingRig, trailerManned, billingRateType, selectedBomId])
 
   if (!open) return null
 
   function reset() {
+    setAssignedTechId('')
+    setRingCentralChannel('')
     setPickupType('dispatch')
     setCustomer(null)
     setLocation({ field: null, pad: null, wells: [] })
@@ -242,6 +246,8 @@ export function DispatchRentalDialog({ open, onClose, onCreated }: DispatchRenta
     setOtherItems([])
     setDrillingRig(false)
     setCustomerBoms([])
+    setBaselinePackageSelected(true)
+    setSelectedBomId(null)
     setBomPackageRate(null)
     setPersonCallingName('')
     setPersonCallingPhone('')
@@ -269,13 +275,16 @@ export function DispatchRentalDialog({ open, onClose, onCreated }: DispatchRenta
   // #Wave4 the baseline package that applies to this rental: rig when the rig
   // toggle is on; otherwise manned/unmanned follows the existing trailer flag.
   // Legacy Standard/Drilling rows are still accepted as resolver fallbacks.
-  const resolvedBom = resolveBom(customerBoms, drillingRig, trailerManned)
+  // A customer may price several variants of one type ("w/ gas detection" vs
+  // "no monitors"); the default is preselected and the rest are one click away.
+  const bomVariants = baselinePackageSelected ? packageVariants(customerBoms, drillingRig, trailerManned) : []
+  const resolvedBom = bomVariants.find(b => b.id === selectedBomId) ?? bomVariants[0] ?? null
   const baselineItems = bomBaselineItems(resolvedBom)
   // The package's billable line. Bound package items still get customer price
   // level handling; unbound/no-package rentals can carry an explicit manual
   // rate so a dispatcher-entered daily rate does not disappear.
   const packageLine = bomPackageLine(resolvedBom, billingRateType)
-  const manualPackageLine = pickupType === 'dispatch' && customer && !packageLine
+  const manualPackageLine = pickupType === 'dispatch' && baselinePackageSelected && customer && !packageLine
     ? {
         label: `${rateTypeLabel} Rental Rate`,
         bomType: (drillingRig ? 'drilling' : 'standard') as 'drilling' | 'standard',
@@ -290,6 +299,13 @@ export function DispatchRentalDialog({ open, onClose, onCreated }: DispatchRenta
   const boundPackageBills = pickupType === 'dispatch' && !!packageLine?.productId
   const manualPackageBills = pickupType === 'dispatch' && !!packageRateLine && !packageLine?.productId && hasRate(bomPackageRate)
   const packageBills = boundPackageBills || manualPackageBills
+
+  function toggleBaselinePackage(selected: boolean) {
+    setBaselinePackageSelected(selected)
+    // A trailer previously covered by the package needs its own rate when
+    // dispatch switches to manual items. Keep all manually added items.
+    if (!selected && packageBills && trailerRate === 0) setTrailerRate(null)
+  }
 
   // #5 Every present composition line must carry a rate before dispatch — an
   // unpriced line would later block invoicing (the server fails rather than
@@ -350,7 +366,7 @@ export function DispatchRentalDialog({ open, onClose, onCreated }: DispatchRenta
         gasMonitors: gasMonitors.filter(g => g.productId).map(g => ({
           id: g.id, productId: g.productId, productName: g.productName, qty: g.qty || 1, rate: g.rate,
         })),
-        other: otherItems.filter(o => o.label.trim()).map(o => ({ id: o.id, label: o.label.trim(), qty: o.qty || 1, rate: o.rate })),
+        other: otherItems.filter(o => o.label.trim()).map(o => ({ id: o.id, productId: o.productId, label: o.label.trim(), qty: o.qty || 1, rate: o.rate })),
         drillingRig: pickupType === 'dispatch' ? drillingRig : false,
         // #Wave4 snapshot the resolved customer BOM as the baseline (frozen with
         // the agreement; descriptive, covered by the flat rate). Dispatch-only.
@@ -381,6 +397,8 @@ export function DispatchRentalDialog({ open, onClose, onCreated }: DispatchRenta
         ? {
             ...commonPayload,
             pickupType: 'dispatch',
+            assignedTechId: assignedTechId || undefined,
+            ringCentralChannel: ringCentralChannel || undefined,
             fieldId: location.field?.id || undefined,
             padId: location.pad?.id || undefined,
             wellId: location.wells[0]?.id || undefined,
@@ -421,11 +439,8 @@ export function DispatchRentalDialog({ open, onClose, onCreated }: DispatchRenta
     }
   }
 
-  function rateForProduct(prod: { defaultRentalRateDaily?: number | null; defaultRentalRateWeekly?: number | null; defaultRentalRateMonthly?: number | null }): number | null {
-    if (billingRateType === 'daily') return prod.defaultRentalRateDaily ?? null
-    if (billingRateType === 'weekly') return prod.defaultRentalRateWeekly ?? null
-    if (billingRateType === 'monthly') return prod.defaultRentalRateMonthly ?? null
-    return null
+  function rateForProduct(prod: RentalCatalogProduct): number | null {
+    return rentalCatalogRate(prod, billingRateType, rentalPriceLevels)
   }
 
   async function addEquipment(equip: ScannedEquipment) {
@@ -497,6 +512,22 @@ export function DispatchRentalDialog({ open, onClose, onCreated }: DispatchRenta
             </div>
           )}
 
+          {pickupType === 'dispatch' && <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <label className="text-sm font-medium text-slate-700">RingCentral channel (optional)
+              <select value={ringCentralChannel} onChange={e => setRingCentralChannel(e.target.value)} className="block w-full mt-1 border rounded-lg p-2">
+                <option value="">Select channel (optional)</option>
+                {dispatchChannels.map(c => <option key={c.channel} value={c.channel}>Rental creation</option>)}
+              </select>
+            </label>
+            <label className="text-sm font-medium text-slate-700">Assigned tech (optional)
+              <select value={assignedTechId} onChange={e => setAssignedTechId(e.target.value)} className="block w-full mt-1 border rounded-lg p-2">
+                <option value="">Unassigned</option>
+                {dispatchUsers.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+              </select>
+            </label>
+            {optionsError && <p className="text-sm text-red-700 sm:col-span-2">{optionsError}</p>}
+            {!optionsError && dispatchChannels.length === 0 && <p className="text-sm text-amber-700 sm:col-span-2">No RingCentral destinations available. Configure a channel in Settings.</p>}
+          </div>}
           {/* Pickup type toggle */}
           <div className="grid grid-cols-2 gap-2">
             <button
@@ -675,15 +706,32 @@ export function DispatchRentalDialog({ open, onClose, onCreated }: DispatchRenta
                 covers. Standard by default; their Drilling package when Drilling
                 Rig is on. Extras above this (monitors/other above) bill separately. */}
             <div className="border border-slate-200 rounded-lg p-3 bg-slate-50/60">
-              <div className="flex items-center justify-between">
+              <label className="flex items-center justify-between gap-2 cursor-pointer">
                 <span className="text-sm font-medium text-slate-800 flex items-center gap-2"><Package className="w-4 h-4 text-slate-500" /> Baseline package</span>
+                <input type="checkbox" checked={baselinePackageSelected} onChange={e => toggleBaselinePackage(e.target.checked)} className="w-4 h-4 accent-blue-600" />
+              </label>
+              {bomVariants.length > 1 && resolvedBom && (
+                <select
+                  aria-label="Package variant"
+                  value={resolvedBom.id}
+                  onChange={e => setSelectedBomId(e.target.value)}
+                  className="mt-2 w-full px-2 py-1.5 border border-slate-300 rounded text-sm bg-white"
+                >
+                  {bomVariants.map(b => (
+                    <option key={b.id} value={b.id}>{bomDisplayName(b)}{b.isDefault ? ' (default)' : ''}</option>
+                  ))}
+                </select>
+              )}
+              <div className="mt-1">
                 {resolvedBom && (
                   <span className="text-xs text-slate-400">
-                    {BOM_TYPE_LABELS[resolvedBom.bomType]}{resolvedBom.manned ? ` · ${resolvedBom.includedTechs} tech${resolvedBom.includedTechs === 1 ? '' : 's'} incl.` : ' · unmanned'}
+                    {bomVariants.length > 1 ? BOM_TYPE_LABELS[resolvedBom.bomType] : bomDisplayName(resolvedBom)}{resolvedBom.manned ? ` · ${resolvedBom.includedTechs} tech${resolvedBom.includedTechs === 1 ? '' : 's'} incl.` : ' · unmanned'}
                   </span>
                 )}
               </div>
-              {!customer ? (
+              {!baselinePackageSelected ? (
+                <p className="mt-1 text-xs font-medium text-slate-600">Deselected — add and price items manually below. No package contents or charge will be included.</p>
+              ) : !customer ? (
                 <p className="mt-1 text-xs text-slate-400 italic">Pick a customer to load their package.</p>
               ) : resolvedBom ? (
                 baselineItems.length ? (
@@ -752,13 +800,13 @@ export function DispatchRentalDialog({ open, onClose, onCreated }: DispatchRenta
                 )
               )}
 
-              <p className="mt-2 text-[11px] text-slate-400">
+              {baselinePackageSelected && <p className="mt-2 text-[11px] text-slate-400">
                 {packageBills
                   ? 'The package bills as one line; anything deployed beyond the list bills on top.'
                   : resolvedBom
                     ? 'Package contents are tracked; enter a rate or price individual lines below.'
                     : 'Enter a rental rate here, or price individual lines below.'}
-              </p>
+              </p>}
             </div>
             <div className="border border-slate-200 rounded-lg p-3">
                 <label className="flex items-center justify-between cursor-pointer">
@@ -837,12 +885,12 @@ export function DispatchRentalDialog({ open, onClose, onCreated }: DispatchRenta
                       const opt = monitorProducts.find(p => p.id === e.target.value)
                       // Seed the per-unit rate from the product's rental default for the chosen rate type.
                       const seeded = opt ? rateForProduct(opt) : null
-                      setGasMonitors(rows => rows.map((r, i) => i === idx ? { ...r, productId: e.target.value, productName: opt?.name || '', rate: seeded } : r))
+                      setGasMonitors(rows => rows.map((r, i) => i === idx ? { ...r, productId: e.target.value, productName: opt?.name || '', rate: seeded, manualRate: false } : r))
                     }}
                     className="flex-1 min-w-0 px-2 py-1.5 border border-slate-300 rounded text-sm bg-white"
                   >
                     <option value="">— pick monitor type —</option>
-                    {monitorProducts.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    {monitorProducts.map(p => <option key={p.id} value={p.id}>{p.partNumber ? `${p.partNumber} — ` : ''}{p.name}</option>)}
                   </select>
                   <QuantityInput min={1} value={g.qty}
                     onChange={qty => setGasMonitors(rows => rows.map((r, i) => i === idx ? { ...r, qty } : r))}
@@ -850,7 +898,7 @@ export function DispatchRentalDialog({ open, onClose, onCreated }: DispatchRenta
                   <div className="flex items-center gap-1">
                     <span className="text-xs text-slate-400">$</span>
                     <input type="number" min={0} value={g.rate ?? ''} placeholder="rate"
-                      onChange={e => { const v = e.target.value ? parseFloat(e.target.value) : null; setGasMonitors(rows => rows.map((r, i) => i === idx ? { ...r, rate: v } : r)) }}
+                      onChange={e => { const v = e.target.value ? parseFloat(e.target.value) : null; setGasMonitors(rows => rows.map((r, i) => i === idx ? { ...r, rate: v, manualRate: true } : r)) }}
                       className="w-20 px-2 py-1.5 border border-slate-300 rounded text-sm" />
                     <span className="text-xs text-slate-400">/{rateUnit}</span>
                   </div>
@@ -860,12 +908,21 @@ export function DispatchRentalDialog({ open, onClose, onCreated }: DispatchRenta
               <button type="button" onClick={() => setGasMonitors(rows => [...rows, { id: uuidv4(), productId: '', productName: '', qty: 1, rate: null }])} className="text-sm font-medium text-blue-600 hover:text-blue-700">+ Add gas monitor</button>
             </div>
 
-            {/* Other — stackable freeform */}
+            {/* QB-backed additional items, with a manual option for custom charges. */}
             <div className="border border-slate-200 rounded-lg p-3 space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium text-slate-800">Other</span>
                 <span className="text-xs text-slate-400">{otherItems.length} added</span>
               </div>
+              <ProductSearch
+                division={4}
+                priceLevels={rentalPriceLevels}
+                placeholder="Search QB item or part # to add…"
+                onSelect={product => setOtherItems(rows => [...rows, {
+                  id: uuidv4(), productId: product.id, catalogProduct: product,
+                  label: product.name, qty: 1, rate: rateForProduct(product), manualRate: false,
+                }])}
+              />
               {otherItems.map((o, idx) => (
                 <div key={o.id} className="flex gap-2 items-center">
                   <input type="text" value={o.label} placeholder="Wind sock, signage, …"
@@ -877,7 +934,7 @@ export function DispatchRentalDialog({ open, onClose, onCreated }: DispatchRenta
                   <div className="flex items-center gap-1">
                     <span className="text-xs text-slate-400">$</span>
                     <input type="number" min={0} value={o.rate ?? ''} placeholder="rate"
-                      onChange={e => { const v = e.target.value ? parseFloat(e.target.value) : null; setOtherItems(rows => rows.map((r, i) => i === idx ? { ...r, rate: v } : r)) }}
+                      onChange={e => { const v = e.target.value ? parseFloat(e.target.value) : null; setOtherItems(rows => rows.map((r, i) => i === idx ? { ...r, rate: v, manualRate: true } : r)) }}
                       className="w-20 px-2 py-1.5 border border-slate-300 rounded text-sm" />
                     <span className="text-xs text-slate-400">/{rateUnit}</span>
                   </div>

@@ -1,5 +1,6 @@
+import { api } from '@/lib/api'
 import { useState, useEffect, useCallback, lazy, Suspense } from 'react'
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useParams } from 'react-router-dom'
 import { AuthProvider, useAuth } from '@/contexts/AuthContext'
 import { RequireSyncingRole } from '@/components/RequireSyncingRole'
 import { PermissionsProvider, usePermissions } from '@/contexts/PermissionsContext'
@@ -23,7 +24,10 @@ const ProductsPage = lazy(() => import('@/pages/ProductsPage').then(m => ({ defa
 const EquipmentPage = lazy(() => import('@/pages/EquipmentPage').then(m => ({ default: m.EquipmentPage })))
 const EquipmentDetailPage = lazy(() => import('@/pages/EquipmentDetailPage').then(m => ({ default: m.EquipmentDetailPage })))
 const DashboardPage = lazy(() => import('@/pages/DashboardPage').then(m => ({ default: m.DashboardPage })))
+const OperationsReportPage = lazy(() => import('@/pages/OperationsReportPage').then(m => ({ default: m.OperationsReportPage })))
+const RentalSwapPage = lazy(() => import('@/pages/RentalSwapPage').then(m => ({ default: m.RentalSwapPage })))
 const TicketWizard = lazy(() => import('@/pages/TicketWizard').then(m => ({ default: m.TicketWizard })))
+const TicketEditPage = lazy(() => import('@/pages/TicketEditPage').then(m => ({ default: m.TicketEditPage })))
 const WizardShell = lazy(() => import('@/pages/wizard/WizardShell').then(m => ({ default: m.WizardShell })))
 const TicketDetailPage = lazy(() => import('@/pages/TicketDetailPage').then(m => ({ default: m.TicketDetailPage })))
 const RentalsPage = lazy(() => import('@/pages/RentalsPage').then(m => ({ default: m.RentalsPage })))
@@ -49,6 +53,7 @@ const PadDetailPage = lazy(() => import('@/pages/PadDetailPage').then(m => ({ de
 const WellDetailPage = lazy(() => import('@/pages/WellDetailPage').then(m => ({ default: m.WellDetailPage })))
 const FieldDetailPage = lazy(() => import('@/pages/FieldDetailPage').then(m => ({ default: m.FieldDetailPage })))
 const SettingsPage = lazy(() => import('@/pages/SettingsPage').then(m => ({ default: m.SettingsPage })))
+const WebhooksPage = lazy(() => import('@/pages/WebhooksPage').then(m => ({ default: m.WebhooksPage })))
 const MyAccountPage = lazy(() => import('@/pages/MyAccountPage').then(m => ({ default: m.MyAccountPage })))
 const SitesPage = lazy(() => import('@/pages/SitesPage').then(m => ({ default: m.SitesPage })))
 const PrintersPage = lazy(() => import('@/pages/PrintersPage').then(m => ({ default: m.PrintersPage })))
@@ -120,6 +125,25 @@ function CustomerRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
+function TicketEditRoute() {
+  const { user } = useAuth()
+  const { id } = useParams()
+  const [kind, setKind] = useState<'loading' | 'rental' | 'other' | 'error'>('loading')
+  useEffect(() => {
+    let cancelled = false
+    setKind('loading')
+    if (user?.role === 'platform_admin') { setKind('other'); return }
+    api.get<{ customData?: { workType?: string }; linkedRentalAgreementId?: string }>(`/tickets/${id}`)
+      .then(ticket => { if (!cancelled) setKind(['rental_deploy', 'rental_swap', 'rental_return'].includes(ticket.customData?.workType || '') ? 'rental' : 'other') })
+      .catch(() => { if (!cancelled) setKind('error') })
+    return () => { cancelled = true }
+  }, [id, user?.role])
+  if (user?.role === 'platform_admin' || kind === 'rental') return <TicketEditPage />
+  if (kind === 'loading') return <p role="status">Loading ticket…</p>
+  if (kind === 'error') return <p role="alert">Could not load this ticket for editing. Return to its detail page and retry.</p>
+  return <RequireSyncingRole><TicketWizard /></RequireSyncingRole>
+}
+
 function PublicRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth()
   const location = useLocation()
@@ -152,11 +176,11 @@ function PageSpinner() {
 // Route-level page gating. If the user's role lacks the page capability, bounce
 // to their default landing page rather than rendering a page they can't use.
 // Waits for the matrix to load so we don't redirect on the fallback defaults.
-function RequirePage({ cap, children }: { cap: string; children: React.ReactNode }) {
+function RequirePage({ cap, children }: { cap: string | string[]; children: React.ReactNode }) {
   const { user } = useAuth()
   const { can, loading } = usePermissions()
   if (loading) return null
-  if (!can(cap)) return <Navigate to={defaultRouteForRole(user?.role)} replace />
+  if (!(Array.isArray(cap) ? cap.some(value => can(value)) : can(cap))) return <Navigate to={defaultRouteForRole(user?.role)} replace />
   return <>{children}</>
 }
 
@@ -242,13 +266,14 @@ export default function App() {
           >
             <Route index element={<IndexRedirect />} />
             <Route path="/tickets" element={<RequirePage cap="page:tickets"><TicketsPage /></RequirePage>} />
+            <Route path="/tickets/swap" element={<RequireSyncingRole><RentalSwapPage /></RequireSyncingRole>} />
             <Route path="/tickets/new" element={<RequireSyncingRole><TicketWizard /></RequireSyncingRole>} />
             {/* ADR-0013 division-first entry point (strangler) — delegates to
                 /tickets/new?type=… for each work type. Parallel to the direct
                 entry above until every work type is extracted. */}
             <Route path="/tickets/start" element={<RequireSyncingRole><WizardShell /></RequireSyncingRole>} />
             <Route path="/tickets/:id" element={<TicketDetailPage />} />
-            <Route path="/tickets/:id/edit" element={<RequireSyncingRole><TicketWizard /></RequireSyncingRole>} />
+            <Route path="/tickets/:id/edit" element={<TicketEditRoute />} />
             <Route path="/companies" element={<RequirePage cap="page:companies"><CompaniesPage /></RequirePage>} />
             <Route path="/companies/:id" element={<CompanyDetailPage />} />
             <Route path="/locations" element={<RequirePage cap="page:locations"><LocationsPage /></RequirePage>} />
@@ -275,7 +300,7 @@ export default function App() {
             <Route path="/shop/:id" element={<ShopOrderDetailPage />} />
             <Route path="/pos" element={<DirectSalePage />} />
             <Route path="/billing" element={<RequirePage cap="page:billing"><BillingPage /></RequirePage>} />
-            <Route path="/billing/lineage" element={<RequirePage cap="page:billing"><BillingLineageSearchPage /></RequirePage>} />
+            <Route path="/billing/lineage" element={<RequirePage cap={["page:billing", "page:tickets"]}><BillingLineageSearchPage /></RequirePage>} />
             <Route path="/billing/attention" element={<RequirePage cap="page:billing"><BillingAttentionListPage /></RequirePage>} />
             <Route path="/billing/:id" element={<InvoiceDetailPage />} />
             <Route path="/dispatch" element={<RequirePage cap="page:dispatch"><DispatchPage /></RequirePage>} />
@@ -283,13 +308,17 @@ export default function App() {
             <Route path="/routes" element={<RequirePage cap="page:routes"><RoutesPage /></RequirePage>} />
             <Route path="/home" element={<Navigate to="/dashboard" replace />} />
             <Route path="/dashboard" element={<DashboardPage />} />
+            <Route path="/operations-report" element={<RequirePage cap="tickets:view_all"><OperationsReportPage /></RequirePage>} />
             <Route path="/account" element={<MyAccountPage />} />
+            <Route path="/ops" element={<Navigate to="/admin/ops" replace />} />
+            <Route path="/calendar" element={<Navigate to="/training/calendar" replace />} />
             <Route path="/admin/ops" element={<RequirePage cap="page:ops"><AdminOpsPage /></RequirePage>} />
             <Route path="/sites" element={<RequirePage cap="page:sites"><SitesPage /></RequirePage>} />
             <Route path="/printers" element={<RequirePage cap="page:printers"><PrintersPage /></RequirePage>} />
             <Route path="/kiosks" element={<RequirePage cap="page:kiosks"><KiosksPage /></RequirePage>} />
             <Route path="/board-settings" element={<RequirePage cap="page:board_settings"><BoardSettingsPage /></RequirePage>} />
             <Route path="/admin/permissions" element={<RequirePage cap="page:permissions"><PermissionsPage /></RequirePage>} />
+            <Route path="/admin/webhooks" element={<RequirePage cap="system:config"><WebhooksPage /></RequirePage>} />
             <Route path="/admin/api-keys" element={<RequirePage cap="page:api_keys"><ApiKeysPage /></RequirePage>} />
             <Route path="/admin/novara" element={<RequirePage cap="page:novara"><NovaraSyncPage /></RequirePage>} />
             <Route path="/admin/courses" element={<RequirePage cap="page:courses"><CoursesPage /></RequirePage>} />

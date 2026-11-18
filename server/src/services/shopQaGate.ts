@@ -131,12 +131,28 @@ export async function evaluateItemQa(
 
   const inspections = await prisma.equipmentInspection.findMany({
     where: { shopItemId: item.id },
-    select: { data: true, outcome: true, serviceActions: true },
+    select: { data: true, outcome: true, serviceActions: true, updatedAt: true },
   });
 
+  const qaResults = await prisma.shopQaUnitResult.findMany({
+    where: { itemId: item.id },
+    select: {
+      outcome: true, updatedAt: true, checklistOverrides: true,
+      qaEvent: { select: { checklistResults: true, serviceActions: true } },
+    },
+  });
+  // A later failed inspection invalidates every earlier pass, including a
+  // batch pass. Only a subsequent passing retest can certify readiness again.
+  const stamp = (record: { updatedAt?: Date }) => record.updatedAt?.getTime() ?? 0;
+  const failedAt = Math.max(-1, ...[...inspections, ...qaResults]
+    .filter(r => r.outcome === 'fail' || r.outcome === 'requires_parts')
+    .map(stamp));
+
   const passed = inspections.some((insp) => {
+    if (stamp(insp) <= failedAt) return false;
     // Condemn / cannot-service: nothing to QA — the unit isn't being serviced.
     if (insp.outcome === 'condemn' || insp.outcome === 'cannot_service') return true;
+    if (insp.outcome !== 'pass') return false;
     const qaChecklist = (insp.data as Record<string, unknown> | null)?.qaChecklist;
     return isQaChecklistComplete(category, qaChecklist, insp.serviceActions);
   });
@@ -147,14 +163,8 @@ export async function evaluateItemQa(
   // per-unit inspection -- same predicate, same required keys, same category.
   // Checked second only because the per-unit record is the common case; neither
   // is privileged.
-  const qaResults = await prisma.shopQaUnitResult.findMany({
-    where: { itemId: item.id, outcome: 'pass' },
-    select: {
-      checklistOverrides: true,
-      qaEvent: { select: { checklistResults: true, serviceActions: true } },
-    },
-  });
   const batchPassed = qaResults.some((r) =>
+    r.outcome === 'pass' && stamp(r) > failedAt &&
     unitQaComplete(
       category,
       r.qaEvent.checklistResults,
@@ -167,6 +177,9 @@ export async function evaluateItemQa(
   // Build a helpful message. If an inspection exists but is incomplete, list
   // what's missing from the most complete attempt; otherwise say none exists.
   let reason = 'No QA inspection has been completed for this item.';
+  if (failedAt >= 0) {
+    return { satisfied: false, reason: 'The latest failed QA outcome requires a subsequent passing re-test before pickup.' };
+  }
   if (inspections.length > 0) {
     const missingByInsp = inspections.map((insp) =>
       getMissingRequiredShopKeys(
@@ -177,7 +190,9 @@ export async function evaluateItemQa(
     );
     // Pick the attempt with the fewest missing items.
     const best = missingByInsp.reduce((a, b) => (b.length < a.length ? b : a));
-    reason = `QA checklist incomplete — still required: ${labelsForKeys(category, best).join('; ')}`;
+    reason = best.length
+      ? `QA checklist incomplete — still required: ${labelsForKeys(category, best).join('; ')}`
+      : 'QA outcome is not Pass — repair or re-test the item before marking it ready.';
   }
   return { satisfied: false, reason };
 }

@@ -17,7 +17,7 @@
  *   outside_service → received (comes back, restarts)
  *   qc_testing → shop_complete | in_work (fail → rework) | outside_service (send back out) | condemned
  *   on_hold → back to any active working state (WI-02 generic park)
- *   shop_complete → returned
+ *   shop_complete → returned | in_work | qc_testing | condemned
  *   condemned → (terminal — billable; writes a BlueLion DEAD record)
  *   returned → (terminal)
  *
@@ -38,7 +38,7 @@ const ITEM_TRANSITIONS: Record<string, ShopItemStatus[]> = {
   // 'outside_service' is the single "someone offsite has it" status; warranty is
   // now the orthogonal isWarranty flag. 'warranty_out' is retired/deprecated —
   // kept here for legacy rows but no longer produced by the send-out flow.
-  received: ['diagnosing', 'in_work', 'awaiting_approval', 'warranty_out', 'outside_service', 'on_hold'],
+  received: ['diagnosing', 'in_work', 'awaiting_approval', 'warranty_out', 'outside_service', 'condemned', 'on_hold'],
   // diagnosing = "Inspecting". A visual-only PASS routes straight to shop_complete
   // (ReadyVisualOnly) with no repair; other outcomes route to in_work / outside_service / condemned.
   // 'qc_testing' is reachable from here because the QA gate diverts an ungated
@@ -46,18 +46,20 @@ const ITEM_TRANSITIONS: Record<string, ShopItemStatus[]> = {
   // whose checklist is not finished has to land SOMEWHERE that isn't
   // shop_complete, and "awaiting QC" is what it is.
   diagnosing: ['awaiting_parts', 'awaiting_approval', 'in_work', 'warranty_out', 'outside_service', 'condemned', 'shop_complete', 'qc_testing', 'on_hold'],
-  awaiting_parts: ['in_work', 'diagnosing', 'awaiting_approval', 'on_hold'],
-  awaiting_approval: ['in_work', 'returned', 'on_hold'],
+  awaiting_parts: ['in_work', 'diagnosing', 'awaiting_approval', 'condemned', 'on_hold'],
+  awaiting_approval: ['in_work', 'returned', 'condemned', 'on_hold'],
   in_work: ['qc_testing', 'shop_complete', 'awaiting_parts', 'awaiting_approval', 'warranty_out', 'outside_service', 'condemned', 'on_hold'],
-  warranty_out: ['received'],
-  outside_service: ['received'],
+  warranty_out: ['received', 'condemned'],
+  outside_service: ['received', 'condemned'],
   qc_testing: ['shop_complete', 'in_work', 'outside_service', 'condemned', 'on_hold'],
   // Generic park (WI-02). Leads back to every active state so a unit that was
   // waiting on someone internal can resume wherever it left off. Deliberately
   // NOT a route to shop_complete/returned — coming off hold means going back to
   // work, and releasing gear still has to pass the QA gate on its own path.
   on_hold: ['received', 'diagnosing', 'in_work', 'awaiting_parts', 'awaiting_approval', 'outside_service', 'qc_testing', 'condemned'],
-  shop_complete: ['returned'],
+  // A fault found before pickup may require repair, re-test, or condemnation.
+  // Callers still enforce the soft/hard-close edit guard.
+  shop_complete: ['returned', 'in_work', 'qc_testing', 'condemned'],
   // condemned is terminal — no transitions out (terminal-billable)
   // returned is terminal — no transitions out
 };

@@ -8,11 +8,13 @@
  * If this is a resend, increments sendCount and updates lastSentAt.
  */
 
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { sendMail, FROM_ADDRESS, BILLING_CC, mailerConfigured } from './mailer.js';
 import { generateTicketPdf } from './ticketPdfGenerator.js';
 import { generateInvoicePdf } from './invoicePdfGenerator.js';
 import { pdfToBuffer } from '../utils/pdfToBuffer.js';
+import { getBranding } from './branding.js';
+import { loadPdfBranding } from './pdfBranding.js';
 
 interface SendForSigningOpts {
   type: 'ticket' | 'invoice';
@@ -32,9 +34,11 @@ export async function sendForSigning(opts: SendForSigningOpts): Promise<{ succes
   }
 
   // ── 1. Generate PDF ──────────────────────────────────────────────────────
+  const branding = await getBranding();
+  const pdfBranding = await loadPdfBranding(branding);
   const pdfDoc = type === 'invoice'
-    ? generateInvoicePdf(data)
-    : generateTicketPdf(data);
+    ? await generateInvoicePdf(data, pdfBranding)
+    : await generateTicketPdf(data, pdfBranding);
   const pdfBuffer = await pdfToBuffer(pdfDoc);
 
   const refLabel = type === 'invoice'
@@ -47,7 +51,7 @@ export async function sendForSigning(opts: SendForSigningOpts): Promise<{ succes
 
   // ── 2. Build and send email ──────────────────────────────────────────────
   const docLabel = type === 'invoice' ? 'Invoice' : 'Service Ticket';
-  const subject = `Signature Requested — Basin Safety ${docLabel} ${refLabel}`;
+  const subject = `Signature Requested — ${branding.companyName} ${docLabel} ${refLabel}`;
 
   const totalAmount = data.total != null ? Number(data.total) : null;
   const html = buildEmailHtml({
@@ -57,6 +61,8 @@ export async function sendForSigning(opts: SendForSigningOpts): Promise<{ succes
     totalAmount,
     description: data.workDescription || data.notes || '',
     customMessage: message,
+    companyName: branding.companyName,
+    logoUrl: branding.logoUrl,
   });
 
   await sendMail({
@@ -137,8 +143,10 @@ function buildEmailHtml(opts: {
   totalAmount: number | null;
   description: string;
   customMessage?: string;
+  companyName: string;
+  logoUrl: string;
 }): string {
-  const { docLabel, refLabel, customerName, totalAmount, description, customMessage } = opts;
+  const { docLabel, refLabel, customerName, totalAmount, description, customMessage, companyName, logoUrl } = opts;
   const appUrl = process.env.APP_BASE_URL || 'https://service.basinsafetyus.com';
 
   const amountLine = totalAmount != null
@@ -156,11 +164,11 @@ function buildEmailHtml(opts: {
 <head><meta charset="utf-8"></head>
 <body style="font-family:Arial,sans-serif;font-size:14px;color:#222;max-width:600px;margin:0 auto;padding:24px">
 
-  <img src="${appUrl}/logo.png" alt="Basin Safety" style="height:48px;margin-bottom:24px" onerror="this.style.display='none'">
+  <img src="${escapeHtml(new URL(logoUrl, appUrl).href)}" alt="${escapeHtml(companyName)}" style="height:48px;margin-bottom:24px">
 
   <p>Hello,</p>
 
-  <p>Please review and sign the attached ${docLabel} from Basin Safety.</p>
+  <p>Please review and sign the attached ${docLabel} from ${escapeHtml(companyName)}.</p>
 
   <div style="background:#f7f7f7;border-left:3px solid #1a5fa8;padding:14px 18px;margin:20px 0;border-radius:2px">
     <p style="margin:0 0 4px;font-weight:bold">${docLabel} ${escapeHtml(refLabel)}</p>
@@ -176,13 +184,13 @@ function buildEmailHtml(opts: {
   </p>
 
   <p>Thank you,<br>
-  <strong>Basin Safety, LLC</strong><br>
+  <strong>${escapeHtml(companyName)}</strong><br>
   <a href="mailto:${BILLING_CC}">${BILLING_CC}</a>
   </p>
 
   <hr style="border:none;border-top:1px solid #eee;margin:28px 0">
   <p style="font-size:11px;color:#aaa">
-    This message was sent to ${escapeHtml(customerName)}. A copy has been retained by Basin Safety for records purposes.
+    This message was sent to ${escapeHtml(customerName)}. A copy has been retained by ${escapeHtml(companyName)} for records purposes.
   </p>
 
 </body>

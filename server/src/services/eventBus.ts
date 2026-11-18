@@ -170,7 +170,7 @@ export type SundogEventMap = {
   };
 
   /** A RentalAgreement was created via POST /api/rentals (dispatch or
-   *  walk-in). Drives the RingCentral "dispatch" channel notification —
+   *  walk-in). Drives the RingCentral "rentals" channel notification —
    *  the goal being that firing this automatically makes manually typing
    *  the same thing into RingCentral chat redundant.
    *  `composition` is the dispatch-time equipment spec (trailer/monitors/
@@ -178,6 +178,7 @@ export type SundogEventMap = {
    *  info available, since `items` (real serialized equipment) is empty
    *  until pickup for anything but a walk-in. */
   'rental.agreement.created': {
+    ringCentralChannel?: import('./webhookSettings.js').RingCentralChannel;
     agreementId: string;
     agreementNumber: string;
     companyId: string;
@@ -197,6 +198,11 @@ export type SundogEventMap = {
     companyId: string;
     companyName: string;
     itemCount: number;
+    /** WO priority as set at intake: 1=urgent, 2=high, 5=normal, 10=low. */
+    priority?: number;
+    /** Top-level units per equipment category (SCBA components are not
+     *  counted separately, unlike `itemCount`). */
+    categoryCounts?: { category: string; count: number }[];
     createdByUserId: string;
   };
 };

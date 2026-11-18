@@ -35,7 +35,7 @@
  */
 
 import type { Prisma } from '../db.js';
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { buildQaSnapshot, snapshotNoteLine, type QaVaultSnapshot } from './shopBatchQa.js';
 
 /** Outcomes that already constitute a ledger event for the unit. */

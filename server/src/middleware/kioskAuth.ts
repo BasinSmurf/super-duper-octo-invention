@@ -7,7 +7,7 @@
 
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import type { AuthPayload } from './auth.js';
 
 export interface KioskAuth {

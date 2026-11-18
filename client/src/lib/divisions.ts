@@ -31,10 +31,6 @@ export const DIVISIONS: Division[] = [
   { code: 9, short: 'D9', label: 'SaaS & Development' },
 ]
 
-export function divisionLabel(code: number): string {
-  const d = DIVISIONS.find(d => d.code === code)
-  return d ? `${d.short} · ${d.label}` : `D${code}`
-}
 
 /**
  * Default catalog division per wizard work type. Seeds the picker's Div

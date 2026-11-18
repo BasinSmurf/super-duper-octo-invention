@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
+import { CustomerDescriptions } from '@/components/CustomerDescriptions'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/cn'
 import { hasPermission } from '@/lib/permissions'
-import { type RentalBom, type RentalBomProduct, type RentalBomType, RENTAL_EQUIPMENT_CATEGORIES, EQUIP_CAT_LABEL, BOM_TYPE_LABELS } from '@/lib/rentalBom'
+import { type RentalBom, type RentalBomProduct, type RentalBomType, RENTAL_EQUIPMENT_CATEGORIES, EQUIP_CAT_LABEL, BOM_TYPE_LABELS, bomDisplayName } from '@/lib/rentalBom'
 import { formatCalendarDate, todayKey } from '@/lib/dates'
 import {
   ArrowLeft,
@@ -47,6 +48,9 @@ interface Contact {
   isActive: boolean
 }
 
+// Where a profile's AFE / cost center come from: the fixed default, or the ticket's well/pad.
+type BillingFieldSource = 'fixed' | 'location'
+
 interface BillingProfile {
   id: string
   billingLevel: string
@@ -66,6 +70,11 @@ interface BillingProfile {
   defaultOrderedByName: string | null
   defaultAfeNumber: string | null
   defaultCostCenter: string | null
+  afeNumberSource: BillingFieldSource
+  costCenterSource: BillingFieldSource
+  buyerSiteSource: BillingFieldSource
+  buyerDepartmentSource: BillingFieldSource
+  defaultBuyerDepartment: string | null
   defaultPoNumber: string | null
   defaultServiceApprover: string | null
   defaultPriceBookNumber: string | null
@@ -73,6 +82,9 @@ interface BillingProfile {
   defaultAdditionalDataFields: { itemID?: string; code?: string; name?: string; value: string }[] | null
   requiresPo: boolean
   requiresAfe: boolean
+  requiresCostCenter: boolean
+  requiresBuyerSite: boolean
+  requiresBuyerDepartment: boolean
   appliesToTicketTypes: string[] | null
   appliesToDivisions: string[] | null
   approvalRequired: string
@@ -159,6 +171,10 @@ interface CompanyDetail {
 interface BomDraft {
   bomType: RentalBomType
   id?: string
+  // Tells this variant apart from the customer's other packages of the same
+  // type on the dispatch picker ("w/ gas detection", "no monitors").
+  name: string
+  isDefault: boolean
   manned: boolean
   includedTechs: string
   notes: string
@@ -251,6 +267,11 @@ interface BillingProfileDraft {
   defaultOrderedByName: string
   defaultAfeNumber: string
   defaultCostCenter: string
+  afeNumberSource: BillingFieldSource
+  costCenterSource: BillingFieldSource
+  buyerSiteSource: BillingFieldSource
+  buyerDepartmentSource: BillingFieldSource
+  defaultBuyerDepartment: string
   defaultPoNumber: string
   defaultServiceApprover: string
   defaultPriceBookNumber: string
@@ -267,6 +288,9 @@ interface BillingProfileDraft {
   defaultAdditionalDataFields: { name: string; itemID: string; code: string; value: string; _extra?: Record<string, any> }[]
   requiresPo: boolean
   requiresAfe: boolean
+  requiresCostCenter: boolean
+  requiresBuyerSite: boolean
+  requiresBuyerDepartment: boolean
   appliesToTicketTypes: string[]
   appliesToDivisions: string[]
   approvalRequired: string
@@ -297,6 +321,11 @@ const emptyProfileDraft: BillingProfileDraft = {
   defaultOrderedByName: '',
   defaultAfeNumber: '',
   defaultCostCenter: '',
+  afeNumberSource: 'fixed',
+  costCenterSource: 'fixed',
+  buyerSiteSource: 'fixed',
+  buyerDepartmentSource: 'fixed',
+  defaultBuyerDepartment: '',
   defaultPoNumber: '',
   defaultServiceApprover: '',
   defaultPriceBookNumber: '',
@@ -310,6 +339,9 @@ const emptyProfileDraft: BillingProfileDraft = {
   defaultAdditionalDataFields: [],
   requiresPo: false,
   requiresAfe: false,
+  requiresCostCenter: false,
+  requiresBuyerSite: false,
+  requiresBuyerDepartment: false,
   appliesToTicketTypes: [],
   appliesToDivisions: [],
   approvalRequired: 'never',
@@ -374,6 +406,7 @@ export function CompanyDetailPage() {
 
   // Billing Profile CRUD
   const canEditBilling = hasPermission(user?.role, 'billing:profiles')
+  const canEditRentalPackages = hasPermission(user?.role, 'rentals:edit_packages')
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null)
   const [addingProfile, setAddingProfile] = useState(false)
   const [profileDraft, setProfileDraft] = useState<BillingProfileDraft>(emptyProfileDraft)
@@ -460,6 +493,10 @@ export function CompanyDetailPage() {
   function startAddBom(bomType: RentalBomType) {
     setEditingBom({
       bomType,
+      name: '',
+      // The first package of a type is its default either way (the API settles
+      // that); a later variant only takes over when AR ticks it.
+      isDefault: !company?.rentalBoms?.some(b => b.bomType === bomType),
       manned: bomType !== 'unmanned',
       includedTechs: '0',
       notes: '',
@@ -472,6 +509,8 @@ export function CompanyDetailPage() {
     setEditingBom({
       bomType: bom.bomType,
       id: bom.id,
+      name: bom.name || '',
+      isDefault: !!bom.isDefault,
       manned: bom.manned,
       includedTechs: String(bom.includedTechs ?? 0),
       notes: bom.notes || '',
@@ -491,6 +530,8 @@ export function CompanyDetailPage() {
     try {
       const payload = {
         bomType: editingBom.bomType,
+        name: editingBom.name.trim() || null,
+        isDefault: editingBom.isDefault,
         manned: editingBom.manned,
         includedTechs: parseInt(editingBom.includedTechs) || 0,
         notes: editingBom.notes || null,
@@ -521,7 +562,7 @@ export function CompanyDetailPage() {
 
   async function deleteBom(bom: RentalBom) {
     if (!company) return
-    if (!window.confirm(`Delete the ${BOM_TYPE_LABELS[bom.bomType]} rental package for ${company.name}?`)) return
+    if (!window.confirm(`Delete the ${bomDisplayName(bom)} rental package for ${company.name}?\n\nRentals already using it keep their own copy and keep billing as they do now.`)) return
     try {
       await api.delete(`/companies/${company.id}/rental-boms/${bom.id}`)
       await loadCompany()
@@ -722,6 +763,11 @@ export function CompanyDetailPage() {
       defaultOrderedByName: bp.defaultOrderedByName || '',
       defaultAfeNumber: bp.defaultAfeNumber || '',
       defaultCostCenter: bp.defaultCostCenter || '',
+      afeNumberSource: bp.afeNumberSource || 'fixed',
+      costCenterSource: bp.costCenterSource || 'fixed',
+      buyerSiteSource: bp.buyerSiteSource || 'fixed',
+      buyerDepartmentSource: bp.buyerDepartmentSource || 'fixed',
+      defaultBuyerDepartment: bp.defaultBuyerDepartment || '',
       defaultPoNumber: bp.defaultPoNumber || '',
       defaultServiceApprover: (bp as any).defaultServiceApprover || '',
       defaultPriceBookNumber: (bp as any).defaultPriceBookNumber || '',
@@ -744,6 +790,9 @@ export function CompanyDetailPage() {
       }),
       requiresPo: bp.requiresPo,
       requiresAfe: bp.requiresAfe,
+      requiresCostCenter: !!bp.requiresCostCenter,
+      requiresBuyerSite: !!bp.requiresBuyerSite,
+      requiresBuyerDepartment: !!bp.requiresBuyerDepartment,
       appliesToTicketTypes: bp.appliesToTicketTypes || [],
       appliesToDivisions: bp.appliesToDivisions || [],
       approvalRequired: bp.approvalRequired || 'never',
@@ -785,6 +834,11 @@ export function CompanyDetailPage() {
         defaultOrderedByName: profileDraft.defaultOrderedByName || null,
         defaultAfeNumber: profileDraft.defaultAfeNumber || null,
         defaultCostCenter: profileDraft.defaultCostCenter || null,
+        afeNumberSource: profileDraft.afeNumberSource,
+        costCenterSource: profileDraft.costCenterSource,
+        buyerSiteSource: profileDraft.buyerSiteSource,
+        buyerDepartmentSource: profileDraft.buyerDepartmentSource,
+        defaultBuyerDepartment: profileDraft.defaultBuyerDepartment.trim() || null,
         defaultPoNumber: profileDraft.defaultPoNumber || null,
         defaultServiceApprover: profileDraft.defaultServiceApprover || null,
         defaultPriceBookNumber: profileDraft.defaultPriceBookNumber || null,
@@ -817,6 +871,9 @@ export function CompanyDetailPage() {
         })(),
         requiresPo: profileDraft.requiresPo,
         requiresAfe: profileDraft.requiresAfe,
+        requiresCostCenter: profileDraft.requiresCostCenter,
+        requiresBuyerSite: profileDraft.requiresBuyerSite,
+        requiresBuyerDepartment: profileDraft.requiresBuyerDepartment,
         // #4 job-type scope — empty array → null (unscoped company-wide default).
         appliesToTicketTypes: profileDraft.appliesToTicketTypes.length ? profileDraft.appliesToTicketTypes : null,
         appliesToDivisions: profileDraft.appliesToDivisions.length ? profileDraft.appliesToDivisions : null,
@@ -970,11 +1027,11 @@ New tickets and shop equipment releases will be allowed again.`
                 {co.qbSyncStatus && (
                   <span className={cn(
                     'text-xs px-2 py-0.5 rounded-full font-medium',
-                    co.qbSyncStatus === 'synced' ? 'bg-green-100 text-green-700' :
+                    co.qbCustomerListId && co.qbSyncStatus === 'synced' ? 'bg-green-100 text-green-700' :
                     co.qbSyncStatus === 'pending' ? 'bg-yellow-100 text-yellow-700' :
                     'bg-gray-100 text-gray-600'
                   )}>
-                    QB: {co.qbSyncStatus}
+                    QB: {co.qbCustomerListId ? co.qbSyncStatus : 'mapping missing'}
                   </span>
                 )}
               </div>
@@ -1188,6 +1245,8 @@ New tickets and shop equipment releases will be allowed again.`
             )}
           </div>
 
+          <CustomerDescriptions key={co.id} companyId={co.id} canEdit={canEditBilling} />
+
           {/* ND sales-tax exemption — defaults this customer's invoice lines
               non-taxable (resale / direct-pay / government cert on file). */}
           <div className="mt-3 pt-3 border-t border-gray-100">
@@ -1243,8 +1302,7 @@ New tickets and shop equipment releases will be allowed again.`
       </div>
 
       {/* Rental Packages Card — per-customer BOM: the baseline gear the flat
-          rig-up + daily rate covers. Manned / Unmanned / Other / Rig. AR edits;
-          field supers view (they need to know what a job must deploy). */}
+          rig-up + daily rate covers. Editing uses its own rental-package permission. */}
       <div className="bg-white rounded-lg border border-gray-200 shadow-sm">
         <div className="px-4 py-3 border-b border-gray-100">
           <h2 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
@@ -1254,77 +1312,92 @@ New tickets and shop equipment releases will be allowed again.`
         </div>
         <div className="divide-y divide-gray-100">
           {(['manned', 'unmanned', 'other', 'rig'] as const).map(type => {
-            const bom = co.rentalBoms?.find(b => b.bomType === type)
-            if (editingBom?.bomType === type) {
-              return (
-                <BomEditor
-                  key={type}
-                  draft={editingBom}
-                  products={bomProducts}
-                  onChange={setEditingBom}
-                  onSave={saveBom}
-                  onCancel={() => setEditingBom(null)}
-                  saving={bomSaving}
-                />
-              )
-            }
+            // Several variants of one type are normal — the MSA prices "with
+            // monitors" and "without" separately, so each is its own package
+            // bound to its own QB item. Dispatch preselects the default.
+            const boms = (co.rentalBoms || []).filter(b => b.bomType === type)
+            const editor = (key: string) => (
+              <BomEditor
+                key={key}
+                draft={editingBom!}
+                products={bomProducts}
+                onChange={setEditingBom}
+                onSave={saveBom}
+                onCancel={() => setEditingBom(null)}
+                saving={bomSaving}
+                variantCount={boms.length}
+              />
+            )
+            const addingHere = canEditRentalPackages && editingBom && !editingBom.id && editingBom.bomType === type
             return (
-              <div key={type} className="px-4 py-3">
+              <div key={type} className="px-4 py-3 space-y-2">
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-gray-900">{BOM_TYPE_LABELS[type]}</span>
-                    {bom && (
-                      <span className="text-xs text-gray-400">
-                        {bom.manned ? `Manned · ${bom.includedTechs} tech${bom.includedTechs === 1 ? '' : 's'} incl.` : 'Unmanned'}
-                      </span>
-                    )}
-                  </div>
-                  {canEditBilling && !editingBom && (
-                    bom ? (
-                      <div className="flex items-center gap-1">
-                        <button onClick={() => startEditBom(bom)} className="p-1.5 text-gray-400 hover:text-blue-600 rounded">
-                          <Pencil className="w-3.5 h-3.5" />
-                        </button>
-                        <button onClick={() => deleteBom(bom)} className="p-1.5 text-gray-400 hover:text-red-600 rounded">
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    ) : (
-                      <button onClick={() => startAddBom(type)} className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1">
-                        <Plus className="w-3.5 h-3.5" /> Add
-                      </button>
-                    )
+                  <span className="text-sm font-medium text-gray-900">
+                    {BOM_TYPE_LABELS[type]}
+                    {boms.length > 1 && <span className="ml-1.5 text-xs font-normal text-gray-400">{boms.length} variants</span>}
+                  </span>
+                  {canEditRentalPackages && !editingBom && (
+                    <button onClick={() => startAddBom(type)} className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1">
+                      <Plus className="w-3.5 h-3.5" /> {boms.length ? 'Add variant' : 'Add'}
+                    </button>
                   )}
                 </div>
-                {bom ? (
-                  bom.items.length ? (
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      {bom.items.map(i => (
-                        <span key={i.id} className="text-xs bg-gray-100 text-gray-700 px-2 py-0.5 rounded-full">
-                          {i.qty}× {EQUIP_CAT_LABEL[i.equipmentCategory] || i.equipmentCategory}{i.label ? ` (${i.label})` : ''}
+                {boms.map(bom => canEditRentalPackages && editingBom?.id === bom.id ? editor(bom.id) : (
+                  <div key={bom.id} className={boms.length > 1 ? 'border border-gray-100 rounded-md px-3 py-2' : ''}>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        {(bom.name || boms.length > 1) && (
+                          <span className="text-sm text-gray-800 truncate">{bom.name || bom.packageProduct?.name || 'Unnamed variant'}</span>
+                        )}
+                        {boms.length > 1 && bom.isDefault && (
+                          <span className="text-[10px] uppercase tracking-wide bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded">Default</span>
+                        )}
+                        <span className="text-xs text-gray-400 whitespace-nowrap">
+                          {bom.manned ? `Manned · ${bom.includedTechs} tech${bom.includedTechs === 1 ? '' : 's'} incl.` : 'Unmanned'}
                         </span>
-                      ))}
+                      </div>
+                      {canEditRentalPackages && !editingBom && (
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button onClick={() => startEditBom(bom)} aria-label="Edit package" className="p-1.5 text-gray-400 hover:text-blue-600 rounded">
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                          <button onClick={() => deleteBom(bom)} aria-label="Delete package" className="p-1.5 text-gray-400 hover:text-red-600 rounded">
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )}
                     </div>
-                  ) : (
-                    <p className="mt-1 text-xs text-gray-400 italic">No items — baseline is empty.</p>
-                  )
-                ) : null}
-                {bom && (
-                  bom.packageProduct ? (
-                    <p className="mt-1.5 text-xs text-gray-500">
-                      Bills as <span className="font-medium text-gray-700">{bom.packageProduct.name}</span>
-                      {bom.packageProduct.partNumber ? <span className="text-gray-400"> · {bom.packageProduct.partNumber}</span> : null}
-                    </p>
-                  ) : (
-                    <p className="mt-1.5 text-xs text-amber-600">No billing item — this package won&rsquo;t bill.</p>
-                  )
-                )}
-                {!bom && (
-                  <p className="mt-1 text-xs text-gray-400 italic">
+                    {bom.items.length ? (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {bom.items.map(i => (
+                          <span key={i.id} className="text-xs bg-gray-100 text-gray-700 px-2 py-0.5 rounded-full">
+                            {i.qty}× {EQUIP_CAT_LABEL[i.equipmentCategory] || i.equipmentCategory}{i.label ? ` (${i.label})` : ''}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="mt-1 text-xs text-gray-400 italic">No items — baseline is empty.</p>
+                    )}
+                    {bom.packageProduct ? (
+                      <p className="mt-1.5 text-xs text-gray-500">
+                        Bills as <span className="font-medium text-gray-700">{bom.packageProduct.name}</span>
+                        {bom.packageProduct.partNumber ? <span className="text-gray-400"> · {bom.packageProduct.partNumber}</span> : null}
+                        {bom.packageRate != null
+                          ? <span className="text-gray-400"> · ${Number(bom.packageRate)} ({bom.packagePriceLevel || 'price level'})</span>
+                          : <span className="text-amber-600"> · list price — not on this customer&rsquo;s QB price level</span>}
+                      </p>
+                    ) : (
+                      <p className="mt-1.5 text-xs text-amber-600">No billing item — this package won&rsquo;t bill.</p>
+                    )}
+                    {bom.notes && <p className="mt-1 text-xs text-gray-500">{bom.notes}</p>}
+                  </div>
+                ))}
+                {addingHere && editor('new')}
+                {!boms.length && !addingHere && (
+                  <p className="text-xs text-gray-400 italic">
                     No {BOM_TYPE_LABELS[type].toLowerCase()} package{type === 'rig' ? ' — rig jobs fall back to legacy drilling/none.' : '.'}
                   </p>
                 )}
-                {bom?.notes && <p className="mt-1 text-xs text-gray-500">{bom.notes}</p>}
               </div>
             )
           })}
@@ -1534,6 +1607,7 @@ New tickets and shop equipment releases will be allowed again.`
             </button>
           )}
         </div>
+        <p className="px-4 pb-3 text-xs text-slate-500">Profiles match the service date, ticket type and division. More specific scopes win; matching scopes use the most recent effective start date.</p>
         <div className="divide-y divide-gray-100">
           {/* Add new profile form */}
           {addingProfile && (
@@ -1582,6 +1656,9 @@ New tickets and shop equipment releases will be allowed again.`
                         {bp.stackedBillingEnabled && <span className="text-xs bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded">Stacked</span>}
                         {bp.requiresPo && <span className="text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded">PO Req</span>}
                         {bp.requiresAfe && <span className="text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded">AFE Req</span>}
+                        {bp.requiresCostCenter && <span className="text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded">CC Req</span>}
+                        {bp.requiresBuyerSite && <span className="text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded">Subcompany Req</span>}
+                        {bp.requiresBuyerDepartment && <span className="text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded">Dept Req</span>}
                         {!bp.isActive && <span className="text-xs bg-red-100 text-red-600 px-1.5 py-0.5 rounded">Inactive</span>}
                       </div>
                       <p className="text-xs text-gray-500 mt-0.5">
@@ -1621,8 +1698,10 @@ New tickets and shop equipment releases will be allowed again.`
                         {bp.defaultOrderedByName && <InfoRow label="Default Requisitioner" value={bp.defaultOrderedByName} />}
                         {(bp as any).defaultServiceApprover && <InfoRow label="Default Service Approver" value={(bp as any).defaultServiceApprover} />}
                         {bp.defaultPoNumber && <InfoRow label="Default PO" value={bp.defaultPoNumber} />}
-                        {bp.defaultAfeNumber && <InfoRow label={(bp as any).lineFieldLabels?.afeNumber || 'Default AFE'} value={bp.defaultAfeNumber} />}
-                        {bp.defaultCostCenter && <InfoRow label={(bp as any).lineFieldLabels?.costCenter || 'Default Cost Center'} value={bp.defaultCostCenter} />}
+                        {(bp.defaultAfeNumber || bp.afeNumberSource === 'location') && <InfoRow label={(bp as any).lineFieldLabels?.afeNumber || 'Default AFE'} value={fieldSourceText(bp.afeNumberSource, bp.defaultAfeNumber, 'facility code')} />}
+                        {(bp.defaultCostCenter || bp.costCenterSource === 'location') && <InfoRow label={(bp as any).lineFieldLabels?.costCenter || 'Default Cost Center'} value={fieldSourceText(bp.costCenterSource, bp.defaultCostCenter, 'cost code')} />}
+                        {bp.buyerSiteSource === 'location' && <InfoRow label="Subcompany" value="Well/pad subcompany, else the buyer site above" />}
+                        {(bp.defaultBuyerDepartment || bp.buyerDepartmentSource === 'location') && <InfoRow label="Department" value={fieldSourceText(bp.buyerDepartmentSource, bp.defaultBuyerDepartment, 'department')} />}
                         {(bp as any).defaultMajor && <InfoRow label={(bp as any).lineFieldLabels?.major || 'Activity Code (major)'} value={(bp as any).defaultMajor} />}
                         {(bp as any).defaultMinor && <InfoRow label={(bp as any).lineFieldLabels?.minor || 'Functional Area (minor)'} value={(bp as any).defaultMinor} />}
                         {(bp as any).defaultPriceBookNumber && <InfoRow label="Default Price Book" value={(bp as any).defaultPriceBookNumber} />}
@@ -1782,6 +1861,26 @@ function InfoRow({ label, value }: { label: string; value: string }) {
   )
 }
 
+function fieldSourceText(source: BillingFieldSource, fallback: string | null, codeLabel: string) {
+  if (source !== 'location') return fallback || ''
+  return `Well/pad ${codeLabel}${fallback ? `, else ${fallback}` : ''}`
+}
+
+function FieldSourceSelect({ value, codeLabel, onChange, defaultLabel = 'the default above' }: {
+  value: BillingFieldSource; codeLabel: string; onChange: (v: BillingFieldSource) => void; defaultLabel?: string
+}) {
+  return (
+    <label className="flex items-center gap-2 mt-1 text-xs text-gray-500">
+      Value
+      <select value={value} onChange={e => onChange(e.target.value as BillingFieldSource)}
+        className="border border-gray-300 rounded px-1.5 py-0.5 text-xs text-gray-700">
+        <option value="fixed">Always {defaultLabel}</option>
+        <option value="location">From the ticket's well/pad {codeLabel} ({defaultLabel} as fallback)</option>
+      </select>
+    </label>
+  )
+}
+
 function EditField({ label, value, onChange, placeholder, required }: {
   label: string; value: string; onChange: (v: string) => void; placeholder?: string; required?: boolean
 }) {
@@ -1842,26 +1941,30 @@ function ProductBindInput({ value, products, listId, placeholder, onChange }: {
   )
 }
 
-function BomEditor({ draft, products, onChange, onSave, onCancel, saving }: {
+function BomEditor({ draft, products, onChange, onSave, onCancel, saving, variantCount }: {
   draft: BomDraft
   products: RentalBomProduct[]
   onChange: (d: BomDraft) => void
   onSave: () => void
   onCancel: () => void
   saving: boolean
+  /** Packages of this type already on file — decides whether name/default matter. */
+  variantCount: number
 }) {
   const update = (patch: Partial<BomDraft>) => onChange({ ...draft, ...patch })
   const setItem = (idx: number, patch: Partial<BomDraft['items'][number]>) =>
     update({ items: draft.items.map((it, i) => (i === idx ? { ...it, ...patch } : it)) })
   const addItem = () => update({ items: [...draft.items, { equipmentCategory: RENTAL_EQUIPMENT_CATEGORIES[0]!.value, label: '', qty: 1, productId: '' }] })
   const removeItem = (idx: number) => update({ items: draft.items.filter((_, i) => i !== idx) })
-  const listId = `bom-products-${draft.bomType}`
+  const listId = `bom-products-${draft.id || `new-${draft.bomType}`}`
+  // Another variant of this type exists (or will, once this one saves).
+  const hasSiblings = variantCount > (draft.id ? 1 : 0)
   const packageProduct = products.find(p => p.id === draft.packageProductId)
 
   return (
     <div className="px-4 py-3 bg-blue-50/50 space-y-3">
       <div className="flex items-center justify-between">
-        <span className="text-sm font-semibold text-gray-800">{BOM_TYPE_LABELS[draft.bomType]} Package</span>
+        <span className="text-sm font-semibold text-gray-800">{BOM_TYPE_LABELS[draft.bomType]} Package{draft.id ? '' : hasSiblings ? ' — new variant' : ''}</span>
         <div className="flex items-center gap-2">
           <button onClick={onCancel} className="text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1">
             <X className="w-3.5 h-3.5" /> Cancel
@@ -1870,6 +1973,27 @@ function BomEditor({ draft, products, onChange, onSave, onCancel, saving }: {
             {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />} Save
           </button>
         </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3">
+        <input
+          type="text"
+          value={draft.name}
+          onChange={e => update({ name: e.target.value })}
+          placeholder={hasSiblings ? 'Variant name — e.g. w/ gas detection (2 monitors)' : 'Name (optional) — e.g. w/ gas detection'}
+          className="flex-1 min-w-[12rem] border border-gray-300 rounded px-2 py-1 text-sm"
+        />
+        {hasSiblings && (
+          <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={draft.isDefault}
+              onChange={e => update({ isDefault: e.target.checked })}
+              className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            Dispatch default
+          </label>
+        )}
       </div>
 
       <div className="flex items-center gap-4">
@@ -2452,6 +2576,10 @@ function BillingProfileForm({ draft, onChange, onSave, onCancel, saving }: {
                   <label className={labelCls}>Default Price Book / Contract # (Open Ticket)</label>
                   <input type="text" value={draft.defaultPriceBookNumber} onChange={e => onChange({ ...draft, defaultPriceBookNumber: e.target.value })} placeholder="e.g. 422493 - SOW - Bakken" className={inputCls} />
                 </div>
+              </>
+            )}
+            {draft.enverusReceiptMode !== 'none' && (
+              <>
                 <div className="col-span-2 border-t border-slate-100 pt-3">
                   <label className={labelCls}>Relabeled line fields (buyer vocabulary)</label>
                   <p className="text-xs text-gray-400 mb-2">
@@ -2506,6 +2634,7 @@ function BillingProfileForm({ draft, onChange, onSave, onCancel, saving }: {
               inputCls={inputCls}
               labelCls={labelCls}
             />
+            <FieldSourceSelect value={draft.afeNumberSource} codeLabel="facility code" onChange={v => onChange({ ...draft, afeNumberSource: v })} />
           </div>
           <div className="col-span-2">
             <EnverusComboField
@@ -2518,6 +2647,7 @@ function BillingProfileForm({ draft, onChange, onSave, onCancel, saving }: {
               inputCls={inputCls}
               labelCls={labelCls}
             />
+            <FieldSourceSelect value={draft.costCenterSource} codeLabel="cost code" onChange={v => onChange({ ...draft, costCenterSource: v })} />
           </div>
           <div className="col-span-2">
             <EnverusComboField
@@ -2531,6 +2661,16 @@ function BillingProfileForm({ draft, onChange, onSave, onCancel, saving }: {
               labelCls={labelCls}
             />
           </div>
+          <div className="col-span-2">
+            <label className={labelCls}>Subcompany (Enverus buyer site)</label>
+            <p className="text-xs text-gray-500">{draft.buyerSiteUuid ? 'Default: the buyer site picked above' : 'No default — pick a buyer site above, or source it from the location'}</p>
+            <FieldSourceSelect value={draft.buyerSiteSource} codeLabel="subcompany" defaultLabel="the buyer site above" onChange={v => onChange({ ...draft, buyerSiteSource: v })} />
+          </div>
+          <div className="col-span-2">
+            <label className={labelCls}>Default Department (remit-to, e.g. field office)</label>
+            <input type="text" value={draft.defaultBuyerDepartment} onChange={e => onChange({ ...draft, defaultBuyerDepartment: e.target.value })} placeholder="e.g. Killdeer Field Office" className={inputCls} />
+            <FieldSourceSelect value={draft.buyerDepartmentSource} codeLabel="department" onChange={v => onChange({ ...draft, buyerDepartmentSource: v })} />
+          </div>
           <div>
             <label className={labelCls}>Approval</label>
             <select value={draft.approvalRequired} onChange={e => onChange({ ...draft, approvalRequired: e.target.value })} className={inputCls}>
@@ -2543,7 +2683,7 @@ function BillingProfileForm({ draft, onChange, onSave, onCancel, saving }: {
               <input type="number" step="0.01" min="0" value={draft.approvalThresholdAmount} onChange={e => onChange({ ...draft, approvalThresholdAmount: e.target.value })} className={inputCls} />
             </div>
           )}
-          <div className="flex items-end gap-4 pb-1 col-span-2">
+          <div className="flex flex-wrap items-end gap-x-4 gap-y-2 pb-1 col-span-2">
             <label className="flex items-center gap-2 text-sm cursor-pointer">
               <input type="checkbox" checked={draft.requiresPo} onChange={e => onChange({ ...draft, requiresPo: e.target.checked })} className="rounded" />
               Requires PO
@@ -2551,6 +2691,18 @@ function BillingProfileForm({ draft, onChange, onSave, onCancel, saving }: {
             <label className="flex items-center gap-2 text-sm cursor-pointer">
               <input type="checkbox" checked={draft.requiresAfe} onChange={e => onChange({ ...draft, requiresAfe: e.target.checked })} className="rounded" />
               Requires AFE
+            </label>
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input type="checkbox" checked={draft.requiresCostCenter} onChange={e => onChange({ ...draft, requiresCostCenter: e.target.checked })} className="rounded" />
+              Requires Cost Center
+            </label>
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input type="checkbox" checked={draft.requiresBuyerSite} onChange={e => onChange({ ...draft, requiresBuyerSite: e.target.checked })} className="rounded" />
+              Requires Subcompany
+            </label>
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input type="checkbox" checked={draft.requiresBuyerDepartment} onChange={e => onChange({ ...draft, requiresBuyerDepartment: e.target.checked })} className="rounded" />
+              Requires Department
             </label>
           </div>
 
@@ -2563,7 +2715,7 @@ function BillingProfileForm({ draft, onChange, onSave, onCancel, saving }: {
               <div>
                 <span className={labelCls}>Ticket types</span>
                 <div className="flex flex-wrap gap-2 mt-1">
-                  {(['field_service', 'sale', 'rental', 'repair', 'inspection', 'training'] as const).map(tt => (
+                  {(['field_service', 'sale', 'rental', 'repair', 'inspection', 'ih_sampling', 'training'] as const).map(tt => (
                     <label key={tt} className="flex items-center gap-1.5 text-sm cursor-pointer">
                       <input
                         type="checkbox"
@@ -2576,7 +2728,7 @@ function BillingProfileForm({ draft, onChange, onSave, onCancel, saving }: {
                         })}
                         className="rounded"
                       />
-                      {tt.replace(/_/g, ' ')}
+                      {tt === 'ih_sampling' ? 'IH → Sampling' : tt.replace(/_/g, ' ')}
                     </label>
                   ))}
                 </div>

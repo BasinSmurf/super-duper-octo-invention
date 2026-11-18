@@ -1,7 +1,12 @@
+import { assertShopBinsAvailable } from './shopBins.js';
+import { EquipmentCategoryShop as CategoryValues, ShopServiceType as ServiceValues } from '../db.js';
+import { objectBody, enumValue, validDate, numberValue } from './writeValidation.js';
 import { Prisma } from '../db.js';
 import type { EquipmentCategoryShop, ShopServiceType, ShopTransitFailureReason } from '../db.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { assertCompanyActive } from '../utils/companyGuards.js';
+import { assertNewShopUnits } from './shopUnitIdentity.js';
+import { classifySerial } from './serialQuality.js';
 
 // Shared shop-work-order creation logic. Used by:
 //   - POST /api/shop-orders (online path, routes/shopOrders.ts)
@@ -154,6 +159,15 @@ export async function createShopWorkOrderWithItems(
   if (items.length === 0) {
     throw new AppError(400, 'At least one item is required');
   }
+  const massIntake = payload.massIntake === true;
+  if (massIntake && (items.length <= 10 || items.length > 1000)) throw new AppError(400, 'Mass intake requires 11–1000 pieces');
+  assertNewShopUnits(massIntake ? items.filter((item: any) => typeof item.serialNumber === 'string' && item.serialNumber.trim()) : items);
+
+  objectBody(payload);
+  if (payload.intakeDate) validDate(payload.intakeDate, 'intakeDate');
+  if (payload.priority != null) numberValue(payload.priority, 'priority', 1, 10);
+  await validateShopIntakeItems(tx, items, massIntake);
+  await assertShopBinsAvailable(tx, items, id);
 
   // Can't book new work against a deactivated customer (internal WOs use an
   // active internal company, so this is a no-op for them).
@@ -204,7 +218,6 @@ export async function createShopWorkOrderWithItems(
   const topLevelItemIds: string[] = [];
 
   for (const item of items) {
-    if (!item.serialNumber) continue;
 
     const parentItem = await tx.shopWorkOrderItem.create({
       data: {
@@ -364,4 +377,71 @@ export async function createShopWorkOrderWithItems(
   }
 
   return { id: wo.id, workOrderNumber: wo.workOrderNumber, totalItems, transitWarning };
+}
+
+/**
+ * A multipart assembly (SCBA today) often arrives incomplete: just a cylinder,
+ * just a regulator. A part that was not received is NOT a unit — it gets no
+ * child row, no label, no serial. It is recorded on the parent instead, as
+ * customData.partsNotIncluded, so "we never got this" survives to QA and return.
+ *
+ * Placeholder serials ("N/A", "NONE", …) on a component mean the same thing and
+ * are folded in here rather than rejected: stored as a serial, "N/A" became a
+ * real child unit that collided with the next "N/A" — in the same intake, or on
+ * any other open work order. Folding (not throwing) also keeps offline replays
+ * from older clients out of the dead-letter queue.
+ */
+export function normalizeIntakeComponents(items: any[]): void {
+  for (const item of items) {
+    if (!item || !Array.isArray(item.components)) continue;
+    const included: any[] = [];
+    const missing = new Set<string>();
+    for (const comp of item.components) {
+      if (!comp || typeof comp !== 'object') continue;
+      const verdict = classifySerial(typeof comp.serialNumber === 'string' ? comp.serialNumber : '');
+      if (comp.notIncluded === true || (!verdict.usable && verdict.defect === 'placeholder')) {
+        missing.add(typeof comp.type === 'string' && comp.type.trim() ? comp.type.trim().toLowerCase() : 'component');
+      } else {
+        included.push(comp);
+      }
+    }
+    item.components = included;
+    // Two bottles, one of them "N/A": a bottle did come in, so nothing is missing.
+    const present = new Set(included.map((c) => (typeof c.type === 'string' ? c.type.trim().toLowerCase() : '')));
+    const partsNotIncluded = [...missing].filter((type) => !present.has(type));
+    if (partsNotIncluded.length > 0) {
+      const customData = item.customData && typeof item.customData === 'object' && !Array.isArray(item.customData) ? item.customData : {};
+      item.customData = { ...customData, partsNotIncluded };
+    }
+  }
+}
+
+/** Shared by intake, append-items, and offline intake. */
+export async function validateShopIntakeItems(tx: Prisma.TransactionClient, items: any[], allowDeferredSerials = false): Promise<void> {
+  normalizeIntakeComponents(items);
+  const allUnits = items.flatMap((item: any) => [item, ...(item.components || [])]);
+  const serials = new Set<string>();
+  for (const item of allUnits) {
+    enumValue(item.equipmentCategory, CategoryValues, 'equipmentCategory');
+    enumValue(item.serviceType, ServiceValues, 'serviceType');
+    if (allowDeferredSerials && typeof item.serialNumber === 'string' && !item.serialNumber.trim() && items.includes(item)) {
+      if (item.serializedEquipmentId) throw new AppError(400, 'Linked equipment requires its serial number');
+      item.serialNumber = '';
+      continue;
+    }
+    if (typeof item.serialNumber !== 'string' || !item.serialNumber.trim()) throw new AppError(400, 'Every item requires a serial number');
+    item.serialNumber = item.serialNumber.trim();
+    const key = item.serialNumber.toLowerCase();
+    if (serials.has(key)) throw new AppError(409, 'Duplicate serial number in this intake');
+    serials.add(key);
+    enumValue(item.equipmentCategory, CategoryValues, 'equipmentCategory');
+    enumValue(item.serviceType, ServiceValues, 'serviceType');
+  }
+  // Serialize competing intakes for the same physical serial, across API and sync.
+  for (const serial of [...serials].sort()) {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${'shop-serial:' + serial}))`;
+    const open = await tx.shopWorkOrderItem.findFirst({ where: { serialNumber: { equals: serial, mode: 'insensitive' }, status: { not: 'returned' }, workOrder: { status: { not: 'closed' } } }, select: { id: true } });
+    if (open) throw new AppError(409, 'Serial number already belongs to an open work order');
+  }
+
 }

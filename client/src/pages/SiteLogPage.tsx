@@ -5,61 +5,7 @@ import { db } from '@/lib/db'
 import { api } from '@/lib/api'
 import { formatCalendarDateNumeric } from '@/lib/dates'
 import { ArrowLeft, Loader2, Phone, Mail, ClipboardList, ChevronRight, Truck } from 'lucide-react'
-import type { SiteLogEntry } from '@/lib/db-types'
-
-interface SiteContact {
-  name: string
-  phone: string
-  email: string
-}
-
-interface SiteLogTicket {
-  id: string
-  ticketNumber: string
-  ticketType: string
-  serviceSubtype: string | null
-  status: string
-  serviceDate: string
-  assignedTechName: string | null
-  workDescription: string | null
-}
-
-interface DailyLog {
-  id: string
-  logDate: string
-  loggedByName?: string | null
-  equipmentPresent?: boolean | null
-  equipmentStatus?: string | null
-  cascadeStatus?: string | null
-  bottlesFullCount?: number | null
-  bottlesTotalCount?: number | null
-  monitorsBumpTested?: boolean | null
-  monitorsOperationalCount?: number | null
-  monitorsTotalCount?: number | null
-  notes?: string | null
-  entries: SiteLogEntry[]
-}
-
-// The deploy ticket (the rental work order itself) sorts first; everything else
-// is a field ticket logged against the rental, newest first.
-function isDeploy(t: SiteLogTicket): boolean {
-  return t.ticketType === 'rental'
-}
-
-function sortSiteLog(tickets: SiteLogTicket[]): SiteLogTicket[] {
-  return [...tickets].sort((a, b) => {
-    const ad = isDeploy(a), bd = isDeploy(b)
-    if (ad !== bd) return ad ? -1 : 1
-    // Both deploy or both field: deploys oldest-first (the original), field tickets newest-first
-    return ad
-      ? a.serviceDate.localeCompare(b.serviceDate)
-      : b.serviceDate.localeCompare(a.serviceDate)
-  })
-}
-
-function sortDailyLogs(logs: DailyLog[]): DailyLog[] {
-  return [...logs].sort((a, b) => b.logDate.localeCompare(a.logDate))
-}
+import { emptySiteLog, loadSiteLog, type DailyLog, type SiteLogAgreement, type SiteLogSnapshot } from '@/lib/siteLogLoader'
 
 function humanize(value?: string | null): string {
   return value ? value.replace(/_/g, ' ') : ''
@@ -84,86 +30,22 @@ export function SiteLogPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { user } = useAuth()
-  const [agreementLabel, setAgreementLabel] = useState('')
-  const [siteContact, setSiteContact] = useState<SiteContact | null>(null)
+  const [snapshot, setSnapshot] = useState<SiteLogSnapshot | null>(null)
   const [contactExpanded, setContactExpanded] = useState(false)
-  const [dailyLogs, setDailyLogs] = useState<DailyLog[]>([])
-  const [tickets, setTickets] = useState<SiteLogTicket[]>([])
-  const [loading, setLoading] = useState(true)
+  const current = snapshot && snapshot.agreementId === id ? snapshot : emptySiteLog(id ?? '')
+  const { agreementLabel, siteContact, dailyLogs, tickets, loading } = current
 
   useEffect(() => {
-    if (id) loadSiteLog(id)
+    if (!id) return
+    let active = true
+    void loadSiteLog(id, {
+      localAgreement: agreementId => db.rentalAgreements.get(agreementId),
+      localLogs: agreementId => db.rentalDailyLogs.where('rentalAgreementId').equals(agreementId).toArray(),
+      remoteAgreement: agreementId => api.get<SiteLogAgreement>(`/rentals/${agreementId}`),
+      remoteLogs: agreementId => api.get<{ data: DailyLog[] }>(`/rentals/${agreementId}/daily-logs`),
+    }, setSnapshot, () => active)
+    return () => { active = false }
   }, [id])
-
-  async function loadSiteLog(agreementId: string) {
-    // Local agreement for an instant label/contact while the API loads.
-    try {
-      const local = await db.rentalAgreements.get(agreementId)
-      if (local) {
-        setAgreementLabel([local.agreementNumber, local.companyName].filter(Boolean).join(' — '))
-        if (local.siteContactName) {
-          setSiteContact({
-            name: local.siteContactName,
-            phone: local.siteContactPhone || '',
-            email: local.siteContactEmail || '',
-          })
-        }
-      }
-      const localLogs = await db.rentalDailyLogs
-        .where('rentalAgreementId')
-        .equals(agreementId)
-        .toArray()
-      setDailyLogs(sortDailyLogs(localLogs.map(log => ({
-        id: log.id,
-        logDate: log.logDate,
-        equipmentPresent: log.equipmentPresent,
-        equipmentStatus: log.equipmentStatus,
-        cascadeStatus: log.cascadeStatus,
-        bottlesFullCount: log.bottlesFullCount,
-        bottlesTotalCount: log.bottlesTotalCount,
-        monitorsBumpTested: log.monitorsBumpTested,
-        monitorsOperationalCount: log.monitorsOperationalCount,
-        monitorsTotalCount: log.monitorsTotalCount,
-        notes: log.notes,
-        entries: log.entries || [],
-      }))))
-    } catch {
-      // OK — API below is the source of truth
-    }
-
-    try {
-      const data = await api.get<any>(`/rentals/${agreementId}`)
-      if (data?.id) {
-        setAgreementLabel([data.agreementNumber, data.company?.name].filter(Boolean).join(' — '))
-        if (data.siteContactName) {
-          setSiteContact({
-            name: data.siteContactName,
-            phone: data.siteContactPhone || '',
-            email: data.siteContactEmail || '',
-          })
-        }
-        const mapped: SiteLogTicket[] = (data.linkedServiceTickets || []).map((t: any) => ({
-          id: t.id,
-          ticketNumber: t.ticketNumber,
-          ticketType: t.ticketType,
-          serviceSubtype: t.serviceSubtype || null,
-          status: t.status,
-          serviceDate: t.serviceDate,
-          assignedTechName: t.assignedTech?.name || null,
-          workDescription: t.workDescription || null,
-        }))
-        setTickets(sortSiteLog(mapped))
-      }
-      const logs = await api.get<{ data: DailyLog[] }>(`/rentals/${agreementId}/daily-logs`)
-      setDailyLogs(sortDailyLogs((logs.data || []).map(log => ({
-        ...log,
-        entries: Array.isArray(log.entries) ? log.entries : [],
-      }))))
-    } catch {
-      // Offline — keep local daily logs if we had them. Linked tickets aren't mirrored to Dexie.
-    }
-    setLoading(false)
-  }
 
   if (loading) {
     return (
@@ -334,7 +216,7 @@ export function SiteLogPage() {
           ) : (
             <div className="space-y-2">
               {tickets.map(t => {
-                const deploy = isDeploy(t)
+                const deploy = t.ticketType === 'rental'
                 return (
                   <button
                     key={t.id}

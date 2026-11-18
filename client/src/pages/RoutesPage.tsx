@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/cn'
 import { CustomerSearch } from '@/components/CustomerSearch'
@@ -213,6 +214,12 @@ export function RoutesPage() {
   }
 
   // ── Data loading ──
+
+  const [reportParams] = useSearchParams()
+  const linkedRouteId = reportParams.get('routeId')
+  useEffect(() => {
+    if (linkedRouteId) void loadDetail(linkedRouteId)
+  }, [linkedRouteId])
 
   useEffect(() => {
     loadRoutes()
@@ -975,6 +982,7 @@ export function RoutesPage() {
       </div>
 
       {/* Route list — grouped by company */}
+      {linkedRouteId && detail?.id === linkedRouteId && !routes.some(r => r.id === linkedRouteId) && <div className="bg-white border rounded-lg mb-4">{renderRouteCard(detail)}</div>}
       {loading ? (
         <div className="flex items-center justify-center py-12">
           <Loader2 className="w-6 h-6 text-slate-400 animate-spin" />

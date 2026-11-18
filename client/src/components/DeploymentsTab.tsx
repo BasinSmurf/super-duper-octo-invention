@@ -142,10 +142,9 @@ export function DeploymentsTab() {
         <div className="flex-1 text-sm">
           <div className="font-medium text-sky-900">Deployments awaiting a rental</div>
           <div className="text-sky-800 mt-0.5">
-            These rental / on-site jobs were dispatched before a rental agreement
-            existed. They can be worked, but won't move to billing until a rental
-            is attached. Manned on-site jobs show up here too — once a manned
-            rental is attached they log to it as a record of work instead of billing.
+            These jobs require a rental agreement before they can move to billing.
+            D4 On Site Supervision and Other / General Service tickets can bill
+            separately without a rental agreement.
           </div>
         </div>
       </div>

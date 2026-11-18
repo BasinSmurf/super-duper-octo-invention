@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { EquipmentInspectionEditor, type EquipmentInspectionCategory } from './EquipmentInspectionEditor'
 import type { OfflineEquipmentInspection } from '@/lib/db-types'
 import { cn } from '@/lib/cn'
+import { ShopServicePicker } from './ShopServicePicker'
 import { ClipboardCheck, Plus, Trash2, AlertTriangle } from 'lucide-react'
 
 // Field inspection capture for the ticket wizard (ShopWork Wave 4). Collects one
@@ -33,6 +34,7 @@ export function FieldInspectionCapture(props: {
   records: OfflineEquipmentInspection[]
   onChange: (records: OfflineEquipmentInspection[]) => void
   ticketId: string
+  submittedIds?: Set<string>
 }) {
   const [category, setCategory] = useState<EquipmentInspectionCategory>('fire_extinguisher')
   const [serial, setSerial] = useState('')
@@ -64,7 +66,8 @@ export function FieldInspectionCapture(props: {
       {props.records.length > 0 && (
         <div className="space-y-1.5">
           {props.records.map(r => (
-            <div key={r.id} className="flex items-center justify-between gap-2 rounded border border-slate-200 px-2 py-1.5">
+            <div key={r.id} className="rounded border border-slate-200 px-2 py-1.5 space-y-2">
+              <div className="flex items-center justify-between gap-2">
               <div className="min-w-0">
                 <span className="font-mono text-sm text-slate-800">{r.serialNumber}</span>
                 <span className="ml-2 text-xs text-slate-500">
@@ -75,10 +78,13 @@ export function FieldInspectionCapture(props: {
                 <span className={cn('text-[10px] font-bold uppercase px-2 py-0.5 rounded-full', OUTCOME_TONE[r.outcome] ?? 'bg-slate-100 text-slate-600')}>
                   {r.outcome.replace(/_/g, ' ')}
                 </span>
-                <button type="button" onClick={() => props.onChange(props.records.filter(x => x.id !== r.id))} className="text-slate-400 hover:text-red-600">
+                <button type="button" disabled={props.submittedIds?.has(r.id)} aria-label={`Remove inspection ${r.serialNumber}`} onClick={() => props.onChange(props.records.filter(x => x.id !== r.id))} className="text-slate-400 hover:text-red-600 disabled:opacity-30">
                   <Trash2 className="w-4 h-4" />
                 </button>
               </div>
+              </div>
+              {r.outcome === 'pass' && <ShopServicePicker value={r.fieldBillingServices ?? []} category={r.category} actions={['visual_only']}
+                onChange={services => props.onChange(props.records.map(record => record.id === r.id ? { ...record, fieldBillingServices: services } : record))} />}
             </div>
           ))}
         </div>

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-vi.mock('../index.js', () => ({ prisma: { $transaction: vi.fn() } }));
+vi.mock('../db.js', async importOriginal => ({ ...await importOriginal<typeof import('../db.js')>(), ...(() => ({ prisma: { $transaction: vi.fn() } }))() }));
 vi.mock('./shopBillingQueue.js', async importOriginal => ({ ...await importOriginal<typeof import('./shopBillingQueue.js')>(), getBilledShopWorkOrderIds: vi.fn() }));
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { getBilledShopWorkOrderIds, shopBillingExcluded } from './shopBillingQueue.js';
 import { assertShopBillingAllowed, invoiceWaiverBlocker, previewShopBillingWaiver, waiveShopBilling } from './shopBillingWaiver.js';
 import { DEFAULT_PERMISSIONS } from './permissions.js';

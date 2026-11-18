@@ -1,4 +1,5 @@
 import PDFDocument from 'pdfkit';
+import { drawCompanyHeader, drawPdfFooters, loadPdfBranding, type PdfBranding } from './pdfBranding.js';
 
 // ---- Types (mirrors the Prisma include from GET /tickets/:id) ----
 
@@ -146,14 +147,15 @@ export const TICKET_SIGNATURE_FIELDS = [
 
 // ---- Main Generator ----
 
-export function generateTicketPdf(ticket: TicketForPdf): PDFKit.PDFDocument {
+export async function generateTicketPdf(ticket: TicketForPdf, providedBranding?: PdfBranding): Promise<PDFKit.PDFDocument> {
+  const branding = providedBranding ?? await loadPdfBranding();
   const doc = new PDFDocument({
     size: 'LETTER',
     margins: { top: 36, bottom: 10, left: 50, right: 50 },
     bufferPages: true,
     info: {
       Title: `Ticket ${ticket.ticketNumber || 'Draft'}`,
-      Author: 'Basin Safety',
+      Author: branding.companyName,
       Creator: 'Sundog Field Service Platform',
     },
   });
@@ -169,7 +171,7 @@ export function generateTicketPdf(ticket: TicketForPdf): PDFKit.PDFDocument {
   let y = 36;
 
   // Company name — big bold text
-  doc.fontSize(22).font('Helvetica-Bold').fillColor(BRAND_DARK).text('BASIN SAFETY', contentLeft, y);
+  drawCompanyHeader(doc, branding, contentLeft, y, contentWidth / 2 - 14, BRAND_DARK);
 
   // Contact info
   doc.fontSize(7.5).font('Helvetica').fillColor('#666666');
@@ -436,7 +438,7 @@ export function generateTicketPdf(ticket: TicketForPdf): PDFKit.PDFDocument {
 
     // Side by side if both present
     if (hasTechSig) {
-      doc.fontSize(7.5).font('Helvetica').fillColor(labelClr).text('Basin Safety Technician', contentLeft, y);
+      doc.fontSize(7.5).font('Helvetica').fillColor(labelClr).text('Technician', contentLeft, y);
       y += 10;
       try {
         doc.image(ticket.techSignature!, contentLeft, y, { fit: [sigWidth, sigHeight] });
@@ -495,21 +497,7 @@ export function generateTicketPdf(ticket: TicketForPdf): PDFKit.PDFDocument {
   // ================================================================
   // Generated-at is a real timestamp — keep it in server-local time.
   const now = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-  const footerY = 752;
-
-  // Apply footer to all pages
-  // IMPORTANT: lineBreak: false prevents pdfkit from auto-creating pages
-  // when text is placed below the bottom margin boundary
-  const range = doc.bufferedPageRange();
-  const pageCount = range.count;
-  for (let i = 0; i < pageCount; i++) {
-    doc.switchToPage(range.start + i);
-    doc.moveTo(contentLeft, footerY - 6).lineTo(contentRight, footerY - 6).strokeColor('#e0e0e0').lineWidth(0.5).stroke();
-    doc.fontSize(7).font('Helvetica').fillColor('#aaaaaa')
-      .text(`Generated ${now}  |  Basin Safety  |  Williston, ND  |  701.572.8140`, contentLeft, footerY, { width: contentWidth - 60, align: 'center', lineBreak: false });
-    doc.fontSize(7).font('Helvetica').fillColor('#bbbbbb')
-      .text(`Page ${i + 1} of ${pageCount}`, contentRight - 55, footerY, { lineBreak: false });
-  }
+  drawPdfFooters(doc, branding, now, contentLeft, contentRight);
 
   // NOTE: caller is responsible for calling doc.end() — either via pdfToBuffer() or after .pipe()
   return doc;

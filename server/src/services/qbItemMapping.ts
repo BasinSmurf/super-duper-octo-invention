@@ -84,6 +84,7 @@ export function normalizeUoM(raw: string | null | undefined): string {
 export const QB_PULL_PROVENANCE = 'qbwc-item-pull';
 
 export interface QbPulledItem {
+  isTaxable?: boolean | null;
   listId: string;
   fullName: string;
   isActive: boolean;
@@ -123,6 +124,7 @@ export function productCreateFromQbItem(item: QbPulledItem, pulledAt: Date) {
     qbItemFullName: item.fullName,
     qbItemType,
     isActive: item.isActive,
+    ...(item.isTaxable != null ? { isTaxable: item.isTaxable } : {}),
     // Provenance: `custom_data->>'createdBy' = 'qbwc-item-pull'` finds every row
     // this pull minted, so a bad batch can be reviewed or removed as a set.
     customData: { createdBy: QB_PULL_PROVENANCE, pulledAt: pulledAt.toISOString() },

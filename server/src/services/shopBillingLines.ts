@@ -72,8 +72,10 @@ type ItemBilling = {
   rollup?: { enabled?: boolean; rate?: number | string; productId?: string } | null;
 };
 
-/** WO-level billing extras (wo.billingExtras JSONB) — mileage + order-level misc. */
+/** WO-level billing extras (wo.billingExtras JSONB), charged once for the job. */
 export type WoBillingExtras = {
+  labor?: { hours?: number | string; rate?: number | string } | null;
+  workNotes?: string;
   mileage?: { miles?: number | string; rate?: number | string; flat?: number | string } | null;
   misc?: Array<{ description?: string; amount?: number | string }> | null;
 };
@@ -518,6 +520,7 @@ export function buildWoExtraLines(
   extras: WoBillingExtras | null | undefined,
   startAt: number,
   travelProduct?: { id: string; partNumber: string } | null,
+  laborProduct?: { id: string; partNumber: string } | null,
 ): LineInput[] {
   if (!extras) return [];
   const lines: LineInput[] = [];
@@ -526,6 +529,14 @@ export function buildWoExtraLines(
     lines.push({ ...l, lineNumber: n, sortOrder: n });
     n++;
   };
+
+  if (extras.labor && num(extras.labor.hours) > 0) {
+    const hours = num(extras.labor.hours);
+    const rate = num(extras.labor.rate);
+    push({ lineType: 'labor', chargeKind: 'labor', productId: laborProduct?.id ?? null,
+      partNumber: laborProduct?.partNumber ?? null, description: 'Whole-job labor',
+      quantity: hours, unitOfMeasure: 'HR', rate, total: round2(hours * rate) });
+  }
 
   const m = extras.mileage;
   if (m) {

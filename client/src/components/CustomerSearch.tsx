@@ -1,3 +1,4 @@
+import { HelpTip } from '@/components/HelpTip'
 import { useState, useEffect, useRef } from 'react'
 import { db } from '@/lib/db'
 import { api } from '@/lib/api'
@@ -217,7 +218,7 @@ export function CustomerSearch({ value, onChange }: CustomerSearchProps) {
 
   return (
     <div ref={ref} className="relative">
-      <label className="block text-sm font-medium text-slate-700 mb-1">Customer</label>
+      <label className="block text-sm font-medium text-slate-700 mb-1">Customer <HelpTip text="Search for and select the customer this work is for before choosing a location." /></label>
       {value ? (
         <div className="flex items-center gap-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
           <Building2 className="w-5 h-5 text-blue-600 shrink-0" />

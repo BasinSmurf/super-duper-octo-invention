@@ -1,3 +1,5 @@
+import { reconcileEnverusFailures } from './enverusQueueReconciliation.js';
+import { applyCustomerDescriptions } from './customerDescriptions.js';
 /**
  * enverusQueueProcessor.ts
  *
@@ -24,6 +26,7 @@ import {
   EnverusApiError,
 } from './enverusClient.js';
 import { buildReceiptPayload } from './enverusPayloadBuilder.js';
+import { rebuildInvoiceSubmission } from './enverusInvoiceSubmission.js';
 import { runScheduledJob } from './jobs.js';
 import { heartbeat } from './supervisor.js';
 import { emitEvent } from './eventBus.js';
@@ -73,7 +76,12 @@ async function rebuildReceiptPayload(ticketId: string): Promise<unknown | null> 
     }
     if (!profile || !profile.enverusEnabled) return null;
 
-    return buildReceiptPayload(ticket, ticket.lineItems, profile);
+    const receiptLines = ticket.lineItems.map(line => ({ ...line,
+      description: line.description || line.product?.name || 'Service',
+      qbItemListId: line.product?.qbItemListId,
+    }));
+    await applyCustomerDescriptions(prisma, ticket.companyId, receiptLines);
+    return buildReceiptPayload(ticket, receiptLines, profile);
   } catch (err) {
     console.warn(
       '[Enverus Queue] Receipt payload rebuild failed, using stored snapshot:',
@@ -87,11 +95,12 @@ async function rebuildReceiptPayload(ticketId: string): Promise<unknown | null> 
 // Submission Loop
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function processNextSubmission(): Promise<void> {
+export async function processNextSubmission(): Promise<void> {
   if (isProcessing) return; // prevent overlap
   isProcessing = true;
 
   try {
+    await reconcileEnverusFailures(prisma).catch(error => console.warn('[Enverus] Alert reconciliation deferred:', error));
     // Pick oldest pending/retrying entry
     const entry = await prisma.enverusSyncQueue.findFirst({
       where: {
@@ -116,8 +125,8 @@ async function processNextSubmission(): Promise<void> {
       if (ep.includes('receipt.submit') || (entry.entityType === 'receipt' && entry.action === 'submit') || (entry.entityType === 'field_ticket' && entry.action === 'submit')) {
         // Rebuild ticket-receipt payloads from live data so config fixes (e.g. a
         // corrected buyerSiteUuid) take effect on retry instead of replaying the
-        // stale enqueue-time snapshot. Invoice/field_ticket entries carry per-submission
-        // overrides baked into the snapshot, so leave those as-is.
+        // stale enqueue-time snapshot. Invoice submissions keep their explicit
+        // input overrides separately, and also rebuild from current source data.
         if (entry.entityType === 'receipt') {
           const rebuilt = await rebuildReceiptPayload(entry.entityId);
           if (rebuilt) {
@@ -126,6 +135,10 @@ async function processNextSubmission(): Promise<void> {
               .update({ where: { id: entry.id }, data: { requestPayload: JSON.stringify(rebuilt) } })
               .catch(() => {}); // keep the queue record in sync; non-fatal if it fails
           }
+        } else if (entry.action === 'submit' && (entry.entityType === 'invoice' || entry.entityType === 'field_ticket')) {
+          const rebuilt = await rebuildInvoiceSubmission(prisma, entry);
+          payload = rebuilt.payload;
+          await prisma.enverusSyncQueue.update({ where: { id: entry.id }, data: { requestPayload: rebuilt.requestPayload } });
         }
 
         // Try to attach a PDF to the receipt
@@ -180,13 +193,14 @@ async function processNextSubmission(): Promise<void> {
         data: {
           status: 'submitted',
           responseStatusCode: response.statusCode,
-          responsePayload: JSON.stringify(response.body).slice(0, 10000),
+          responsePayload: JSON.stringify(response.body),
           enverusItemId,
           submittedAt: new Date(),
           errorMessage: null,
         },
       });
 
+      await reconcileEnverusFailures(prisma).catch(error => console.warn('[Enverus] Alert reconciliation deferred:', error));
       // Update source entity
       if (entry.entityType === 'receipt') {
         await prisma.serviceTicket.update({
@@ -378,7 +392,7 @@ async function pollReceiptEntry(entry: {
       data: {
         status: 'accepted',
         respondedAt: new Date(),
-        responsePayload: JSON.stringify(data).slice(0, 10000),
+        responsePayload: JSON.stringify(data),
       },
     });
 
@@ -411,7 +425,7 @@ async function pollReceiptEntry(entry: {
       data: {
         status: 'accepted', // queue exits via accepted; the ticket carries 'paid'
         respondedAt: new Date(),
-        responsePayload: JSON.stringify(data).slice(0, 10000),
+        responsePayload: JSON.stringify(data),
       },
     });
 
@@ -444,7 +458,7 @@ async function pollReceiptEntry(entry: {
       data: {
         status: 'rejected',
         respondedAt: new Date(),
-        responsePayload: JSON.stringify(data).slice(0, 10000),
+        responsePayload: JSON.stringify(data),
         errorMessage: `Disputed by ${data.disputedByName || 'buyer'}`,
       },
     });
@@ -558,7 +572,7 @@ async function pollInvoiceEntry(entry: {
         data: {
           status: 'accepted',
           respondedAt: new Date(),
-          responsePayload: JSON.stringify(matchData).slice(0, 10000),
+          responsePayload: JSON.stringify(matchData),
         },
       });
 
@@ -581,7 +595,7 @@ async function pollInvoiceEntry(entry: {
         data: {
           status: 'accepted',
           respondedAt: new Date(),
-          responsePayload: JSON.stringify(matchData).slice(0, 10000),
+          responsePayload: JSON.stringify(matchData),
         },
       });
 
@@ -604,7 +618,7 @@ async function pollInvoiceEntry(entry: {
         data: {
           status: 'rejected',
           respondedAt: new Date(),
-          responsePayload: JSON.stringify(matchData).slice(0, 10000),
+          responsePayload: JSON.stringify(matchData),
           errorMessage: `Disputed/Rejected by buyer`,
         },
       });
@@ -708,7 +722,7 @@ async function pollFieldTicketEntry(entry: {
       data: {
         status: 'accepted',
         respondedAt: new Date(),
-        responsePayload: JSON.stringify(data).slice(0, 10000),
+        responsePayload: JSON.stringify(data),
       },
     });
 
@@ -740,7 +754,7 @@ async function pollFieldTicketEntry(entry: {
       data: {
         status: 'accepted',
         respondedAt: new Date(),
-        responsePayload: JSON.stringify(data).slice(0, 10000),
+        responsePayload: JSON.stringify(data),
       },
     });
 
@@ -775,7 +789,7 @@ async function pollFieldTicketEntry(entry: {
       data: {
         status: 'rejected',
         respondedAt: new Date(),
-        responsePayload: JSON.stringify(data).slice(0, 10000),
+        responsePayload: JSON.stringify(data),
         errorMessage: `Disputed by ${data.disputedByName || 'buyer'}`,
       },
     });

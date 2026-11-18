@@ -31,6 +31,8 @@ export interface TicketForReceipt {
   afeNumber?: string | null;
   poNumber?: string | null;
   costCenter?: string | null;
+  /** Buyer subcompany (Enverus site) from the location; else the profile's. */
+  buyerSiteUuid?: string | null;
   contractNumber?: string | null;
   customerRepName?: string | null;
   subtotal?: Decimal | null;
@@ -50,6 +52,7 @@ export interface TicketLineItemForReceipt {
   enverusAfeNumber?: string | null;
   enverusCostCenter?: string | null;
   product?: {
+    partNumber?: string | null;
     enverusProductServiceCode?: string | null;
     enverusProductServiceDescription?: string | null;
     enverusUnitOfMeasure?: string | null;
@@ -106,6 +109,8 @@ function resolveProductCode(line: TicketLineItemForReceipt): string | undefined 
   return (
     line.enverusProductServiceCode ||
     line.product?.enverusProductServiceCode ||
+    line.partNumber ||
+    line.product?.partNumber ||
     undefined
   );
 }
@@ -270,10 +275,6 @@ export function buildReceiptPayload(
     const psc = resolveProductCode(line);
     if (psc) lineObj.productServiceCode = psc;
 
-    // Part # / Item ID — COP REQUIRED, maps to price book item ID
-    const partNum = line.partNumber || line.product?.enverusProductServiceCode;
-    if (partNum) lineObj.partNumber = partNum;
-
     const qty = toNum(line.quantity);
     if (qty != null) lineObj.quantity = qty;
 
@@ -317,7 +318,7 @@ export function buildReceiptPayload(
     currencyCode: 'USD',
     buyerParty: {
       partyDUNS: profile.buyerDuns,
-      ...(profile.buyerSiteUuid ? { buyerSiteUuid: profile.buyerSiteUuid } : {}),
+      ...(ticket.buyerSiteUuid || profile.buyerSiteUuid ? { buyerSiteUuid: ticket.buyerSiteUuid || profile.buyerSiteUuid } : {}),
       ...(profile.buyerCode ? { assignedBySeller: profile.buyerCode } : {}),
     },
     lineItems: receiptLines,
@@ -357,11 +358,6 @@ export function buildReceiptPayload(
     receipt.poNumber = po;
   }
 
-  // Header-level contract
-  if (ticket.contractNumber) {
-    receipt.contract = { number: ticket.contractNumber };
-  }
-
   // Header-level total
   const totalAmt = toNum(ticket.total);
   if (totalAmt != null) {
@@ -375,10 +371,9 @@ export function buildReceiptPayload(
     receipt.orderedByName = orderedBy;
   }
 
-  // Price Book — COP REQUIRED
-  if (profile.defaultPriceBookNumber) {
-    receipt.priceBookNumber = profile.defaultPriceBookNumber;
-  }
+  // receipt.submit represents its price book as contract.number.
+  const priceBook = ticket.contractNumber || profile.defaultPriceBookNumber;
+  if (priceBook) receipt.contract = { number: priceBook };
 
   // Additional data fields (buyer-specific custom fields, e.g. COP Safety).
   // Clone so per-location facility-code injection doesn't mutate the profile's stored default.
@@ -426,13 +421,18 @@ export interface InvoiceForSubmission {
   poNumber?: string | null;
   afeNumber?: string | null;
   costCenter?: string | null;
+  buyerSiteUuid?: string | null;
   notes?: string | null;
   qbInvoiceNumber?: string | null;
 }
 
 export interface InvoiceLineItemForSubmission {
+  serviceDateFrom?: Date | null;
+  serviceDateTo?: Date | null;
+  location?: string | null;
   lineNumber: number;
   description: string;
+  originalDescription?: string | null;
   quantity: Decimal;
   unitOfMeasure?: string | null;
   rate: Decimal;
@@ -444,100 +444,13 @@ export interface InvoiceLineItemForSubmission {
    *  route from sourceTicket.assignedTech; used as the COP Labor-line crewMember. */
   crewMember?: string | null;
   product?: {
+    partNumber?: string | null;
     enverusProductServiceCode?: string | null;
     enverusProductServiceDescription?: string | null;
     enverusUnitOfMeasure?: string | null;
   } | null;
 }
 
-/**
- * Build the invoice payload for `/supply-chain/v3/invoice`.
- *
- * Flat InvoiceModelV2 JSON (no event envelope).
- */
-export function buildInvoicePayload(
-  invoice: InvoiceForSubmission,
-  lineItems: InvoiceLineItemForSubmission[],
-  profile: BillingProfileForEnverus,
-) {
-  const supplierDuns = profile.supplierDuns || getSupplierDuns();
-
-  // Map line items
-  const invoiceLines = lineItems.map((line) => {
-    const lineObj: Record<string, unknown> = {
-      lineNumber: line.lineNumber,
-      description: line.description,
-      quantity: toNum(line.quantity),
-      rate: toNum(line.rate),
-      totalAmount: toNum(line.amount),
-    };
-
-    // Product/service mapping
-    const psc = line.product?.enverusProductServiceCode;
-    const psd = line.product?.enverusProductServiceDescription;
-    const uom = line.product?.enverusUnitOfMeasure || line.unitOfMeasure;
-    if (psc || psd || uom) {
-      lineObj.productService = {
-        ...(psc ? { code: psc } : {}),
-        ...(psd ? { description: psd } : {}),
-        ...(uom ? { unitOfMeasure: uom } : {}),
-      };
-    }
-
-    if (uom) lineObj.unitOfMeasure = uom;
-
-    // Service dates — use invoice period or invoice date
-    lineObj.serviceDateFrom = fmtDate(invoice.periodStart) || fmtDate(invoice.invoiceDate);
-    lineObj.serviceDateTo = fmtDate(invoice.periodEnd) || lineObj.serviceDateFrom;
-
-    // Cost allocation (AFE + CC from invoice header, could be per-line in future)
-    const afe = invoice.afeNumber || profile.defaultAfeNumber;
-    const cc = invoice.costCenter || profile.defaultCostCenter;
-    if (afe || cc) {
-      lineObj.costAllocation = [
-        {
-          ...(afe ? { afe: { number: afe } } : {}),
-          ...(cc ? { costCenter: { number: cc } } : {}),
-        },
-      ];
-    }
-
-    return lineObj;
-  });
-
-  // Build invoice payload
-  const payload: Record<string, unknown> = {
-    invoiceNumber: invoice.invoiceNumber,
-    invoiceDate: fmtDate(invoice.invoiceDate),
-    serviceDate: fmtDate(invoice.periodEnd) || fmtDate(invoice.invoiceDate),
-    status: 'SUBMITTED',
-    submissionTypeCode: 'Supplier_Link',
-    currencyCode: 'USD',
-    description: invoice.notes || `Invoice ${invoice.invoiceNumber} for ${invoice.companyName}`,
-    totalAmount: toNum(invoice.total),
-    subtotalAmount: toNum(invoice.subtotal),
-    taxTotal: toNum(invoice.taxAmount),
-    buyerParty: {
-      partyDUNS: profile.buyerDuns,
-      ...(profile.buyerDunsPlus4
-        ? { sites: [{ 'partyDUNS+4': profile.buyerDunsPlus4 }] }
-        : {}),
-    },
-    lineItems: invoiceLines,
-  };
-
-  // Supplier party
-  if (supplierDuns) {
-    payload.supplierParty = {
-      partyDUNS: supplierDuns,
-      ...(profile.supplierSiteDunsPlus4
-        ? { 'partyDUNS+4': profile.supplierSiteDunsPlus4 }
-        : {}),
-    };
-  }
-
-  return payload;
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Invoice-as-Receipt Payload Builder
@@ -564,6 +477,11 @@ export interface EnverusSubmitOverrides {
   afeNumber?: string;
   costCenter?: string;
   poNumber?: string;
+  /** Buyer subcompany (Enverus site uuid) — rides on buyerParty. */
+  buyerSiteUuid?: string;
+  /** Buyer remit-to department. The receipt API has no field for it; saved on the
+   *  invoice so billing can pick it when invoicing in OpenInvoice. */
+  buyerDepartment?: string;
   receiptType?: string;
   contractNumber?: string;
   superintendentName?: string;
@@ -580,7 +498,7 @@ export interface EnverusSubmitOverrides {
   //   Facility/Property → afeNumber    Cost Object → costCenter
   //   Activity Code     → major        Functional Area → minor
   //   Service Approver  → orderedByName (already above)
-  //   Invoice Approver  → additionalDataField itemID 99872 (header ADE)
+  //   Invoice Approver  → header ADE; identifiers come from the buyer profile
   priceBookNumber?: string;
   major?: string;               // COP "Activity Code" (e.g. "FA-L48")
   minor?: string;               // COP "Functional Area" (e.g. "L48_OPS_H_S")
@@ -614,6 +532,7 @@ export function buildInvoiceAsReceiptPayload(
   // Resolve AFE/CC with override priority
   const effectiveAfe = overrides?.afeNumber || invoice.afeNumber || profile.defaultAfeNumber;
   const effectiveCC = overrides?.costCenter || invoice.costCenter || profile.defaultCostCenter;
+  const buyerSiteUuid = overrides?.buyerSiteUuid || invoice.buyerSiteUuid || profile.buyerSiteUuid;
 
   // COP field mapping (from buyer-field-rules):
   //   afeNumber    → "Facility/Property" (e.g. "BK")
@@ -631,13 +550,13 @@ export function buildInvoiceAsReceiptPayload(
     const lineObj: Record<string, unknown> = {
       lineItemNumber: String(line.lineNumber || idx + 1),
       description: line.description || 'Service',
-      serviceDateFrom: fmtDate(invoice.periodStart) || fmtDate(invoice.invoiceDate),
-      serviceDateTo: fmtDate(invoice.periodEnd) || fmtDate(invoice.periodStart) || fmtDate(invoice.invoiceDate),
+      serviceDateFrom: fmtDate(line.serviceDateFrom) || fmtDate(invoice.periodStart) || fmtDate(invoice.invoiceDate),
+      serviceDateTo: fmtDate(line.serviceDateTo) || fmtDate(invoice.periodEnd) || fmtDate(invoice.periodStart) || fmtDate(invoice.invoiceDate),
     };
 
     // chargeType — REQUIRED for LEM, FORBIDDEN for General
     if (isLem) {
-      const desc = (line.description || '').toLowerCase();
+      const desc = (line.originalDescription || line.description || '').toLowerCase();
       let chargeType = 'Labor';
       if (desc.includes('equipment') || desc.includes('rental') || desc.includes('monitor')) {
         chargeType = 'Equipment';
@@ -659,17 +578,10 @@ export function buildInvoiceAsReceiptPayload(
       }
     }
 
-    // Part # / Item ID — COP REQUIRED, maps to the price book item. COP's field
-    // model exposes this as the line `serviceCode` (the 6/16 400 warned that an
-    // empty serviceCode defaults to "PRODUCT"). Send the QB item identifier here;
-    // keep partNumber too for buyers/readers that look there.
-    const partNum = line.partNumber || line.product?.enverusProductServiceCode;
-    if (partNum) {
-      lineObj.partNumber = partNum;
-      lineObj.serviceCode = partNum;
-    }
-
-    const psc = line.product?.enverusProductServiceCode;
+    // Enverus mappings take priority over local item identifiers. Keep display
+    // descriptions separate from the code used to resolve the price book item.
+    // serviceCode is an internal field-rule name, not the receipt input field.
+    const psc = line.product?.enverusProductServiceCode || line.partNumber || line.product?.partNumber;
     if (psc) lineObj.productServiceCode = psc;
 
     const qty = toNum(line.quantity);
@@ -688,16 +600,41 @@ export function buildInvoiceAsReceiptPayload(
     if (effectiveCC) lineObj.costCenter = { number: effectiveCC };
 
     // major = COP "Activity Code" (e.g. "FA-L48")
-    if (effectiveMajor) lineObj.major = effectiveMajor;
+    if (effectiveMajor) lineObj.major = { code: effectiveMajor };
 
     // minor = COP "Functional Area" (e.g. "L48_OPS_H_S")
-    if (effectiveMinor) lineObj.minor = effectiveMinor;
+    if (effectiveMinor) lineObj.minor = { code: effectiveMinor };
 
     // Per-line location
-    if (effectiveLocation) lineObj.location = effectiveLocation;
+    const lineLocation = effectiveLocation || line.location;
+    if (lineLocation) lineObj.location = lineLocation.slice(0, 100);
 
     return lineObj;
   });
+
+  // Sales tax rides as its own line. The receipt API has no tax field, and the
+  // header total is tax-inclusive: without this line Enverus drops the total
+  // ("different from the calculated total of the line items") and the buyer's
+  // receipt comes up short of the QuickBooks invoice by the tax.
+  const taxAmt = toNum(invoice.taxAmount);
+  if (taxAmt != null && taxAmt > 0) {
+    receiptLines.push({
+      lineItemNumber: String(receiptLines.length + 1),
+      description: 'Sales Tax',
+      serviceDateFrom: receiptLines.map(l => String(l.serviceDateFrom)).sort()[0] ?? fmtDate(invoice.invoiceDate),
+      serviceDateTo: receiptLines.map(l => String(l.serviceDateTo)).sort().at(-1) ?? fmtDate(invoice.invoiceDate),
+      // LEM needs a charge type on every line; tax follows the goods, not labor.
+      ...(isLem ? { chargeType: 'Material' } : {}),
+      quantity: 1,
+      unitOfMeasure: 'EA',
+      rate: taxAmt,
+      ...(effectiveAfe ? { afe: { number: effectiveAfe } } : {}),
+      ...(effectiveCC ? { costCenter: { number: effectiveCC } } : {}),
+      ...(effectiveMajor ? { major: { code: effectiveMajor } } : {}),
+      ...(effectiveMinor ? { minor: { code: effectiveMinor } } : {}),
+      ...(effectiveLocation ? { location: effectiveLocation.slice(0, 100) } : {}),
+    });
+  }
 
   // Build receipt header
   const receipt: Record<string, unknown> = {
@@ -705,12 +642,12 @@ export function buildInvoiceAsReceiptPayload(
     receiptType,
     // submissionSource is system-assigned by OpenInvoice (see ticket-path builder note).
     description: invoice.notes || `Invoice ${invoice.invoiceNumber} for ${invoice.companyName}`,
-    serviceDateFrom: fmtDate(invoice.periodStart) || fmtDate(invoice.invoiceDate),
-    serviceDateTo: fmtDate(invoice.periodEnd) || fmtDate(invoice.periodStart) || fmtDate(invoice.invoiceDate),
+    serviceDateFrom: receiptLines.map(l => String(l.serviceDateFrom)).sort()[0],
+    serviceDateTo: receiptLines.map(l => String(l.serviceDateTo)).sort().at(-1),
     currencyCode: 'USD',
     buyerParty: {
       partyDUNS: profile.buyerDuns,
-      ...(profile.buyerSiteUuid ? { buyerSiteUuid: profile.buyerSiteUuid } : {}),
+      ...(buyerSiteUuid ? { buyerSiteUuid } : {}),
       ...(profile.buyerCode ? { assignedBySeller: profile.buyerCode } : {}),
     },
     lineItems: receiptLines,
@@ -745,13 +682,10 @@ export function buildInvoiceAsReceiptPayload(
   const po = overrides?.poNumber || invoice.poNumber;
   if (po) receipt.poNumber = po;
 
-  // Contract
-  const contractNum = overrides?.contractNumber;
-  if (contractNum) receipt.contract = { number: contractNum };
-
-  // Price Book — COP REQUIRED
-  const priceBook = overrides?.priceBookNumber || profile.defaultPriceBookNumber;
-  if (priceBook) receipt.priceBookNumber = priceBook;
+  // The receipt API calls the selected price book `contract`. Keep the old
+  // contractNumber input as an alias, while an explicit priceBookNumber wins.
+  const priceBook = overrides?.priceBookNumber || overrides?.contractNumber || profile.defaultPriceBookNumber;
+  if (priceBook) receipt.contract = { number: priceBook };
 
   // Ordered-by / Service Approver — COP labels orderedByName as "Service Approver"
   // This is the COP individual or rig/frac fleet approving services
@@ -762,7 +696,7 @@ export function buildInvoiceAsReceiptPayload(
   }
 
   // Header-level location (COP: site where work was performed)
-  if (effectiveLocation) receipt.location = effectiveLocation;
+  if (effectiveLocation) receipt.location = effectiveLocation.slice(0, 100);
 
   // Superintendent / approvers (generic Enverus fields)
   if (overrides?.superintendentName) receipt.superintendentName = overrides.superintendentName;
@@ -774,25 +708,32 @@ export function buildInvoiceAsReceiptPayload(
   }
 
   // Additional data fields — build from overrides + profile defaults
-  // COP "Invoice Approver" = ADE field (itemID 99872, header-level, text, max 25)
+  // COP "Invoice Approver" = header ADE (identifiers vary by environment).
   const profileAdf2 = profile.defaultAdditionalDataFields as EnverusAdditionalDataField[] | null | undefined;
   const baseAdf = overrides?.additionalDataFields?.length
-    ? [...overrides.additionalDataFields]
-    : profileAdf2 ? [...profileAdf2] : [];
+    ? overrides.additionalDataFields.map(field => {
+      // A browser may still hold pre-correction field IDs. Preserve its value,
+      // but always use the current profile's resolver identifiers when matched.
+      const current = profileAdf2?.find(f =>
+        (field.itemID && f.itemID === field.itemID) ||
+        (field.code && f.code === field.code) ||
+        (field.name && f.name === field.name));
+      return current ? { ...field, ...current, value: field.value } : { ...field };
+    })
+    : profileAdf2 ? profileAdf2.map(field => ({ ...field })) : [];
 
   // Inject COP Invoice Approver as ADE if provided. MERGE onto the existing
-  // #99872 entry (from overrides or profile default) so its resolver identifiers
+  // Invoice Approver entry (from overrides or profile default) so its resolver identifiers
   // — code "FIPP" + referenceDetailId + type — are preserved; only the value
   // changes. Replacing with a bare {itemID,name,value} strips those and Enverus
   // 500s (the original bug).
   if (overrides?.invoiceApproverName) {
     const isApprover = (f: EnverusAdditionalDataField) =>
-      f.itemID === '99872' || f.name === 'Invoice Approver';
+      f.name === 'Invoice Approver' || f.code === 'FIPP';
     const existing = baseAdf.find(isApprover) || profileAdf2?.find(isApprover);
     const filtered = baseAdf.filter((f) => !isApprover(f));
     filtered.push({
       ...(existing || {}),
-      itemID: '99872',
       name: 'Invoice Approver',
       value: overrides.invoiceApproverName.slice(0, 25),
     });

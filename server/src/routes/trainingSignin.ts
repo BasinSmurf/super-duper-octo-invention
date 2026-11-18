@@ -12,7 +12,8 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import QRCode from 'qrcode';
-import { prisma } from '../index.js';
+import { Prisma } from '../generated/prisma/client.js';
+import { prisma } from '../db.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { authenticate } from '../middleware/auth.js';
 import { matchEmployer } from '../services/employerMatch.js';
@@ -145,9 +146,6 @@ trainingSigninRouter.post('/:token', async (req: Request, res: Response, next: N
     if (!sig.startsWith('data:image/') || sig.length > 500_000) {
       throw new AppError(400, 'A signature is required');
     }
-    if (ticket._count.trainingRosterRecords >= MAX_SELF_SIGNINS) {
-      throw new AppError(409, 'Roster is full — see the trainer');
-    }
 
     // Silent employer match (alias or exact normalized name — never fuzzy):
     // billing splits invoices per employerCompanyId, so a confident match here
@@ -155,22 +153,45 @@ trainingSigninRouter.post('/:token', async (req: Request, res: Response, next: N
     const employer = String(employerName || '').trim().slice(0, 120) || null;
     const employerCompanyId = employer ? ((await matchEmployer(employer))?.companyId ?? null) : null;
 
-    const cd = (ticket.customData as any) || {};
-    const record = await prisma.trainingRosterRecord.create({
-      data: {
+    const phone = String(contactPhone || '').trim().slice(0, 40) || null;
+    const email = String(contactEmail || '').trim().slice(0, 120) || null;
+    const normalize = (value: string | null) => (value || '').trim().replace(/\s+/g, ' ').toUpperCase();
+    const record = await prisma.$transaction(async tx => {
+      // Serialize arrivals and re-read status after the lock: simultaneous
+      // retries must not create extra billable seats or race a class closeout.
+      await tx.$queryRaw(Prisma.sql`SELECT id FROM service_tickets WHERE id = ${ticket.id} FOR UPDATE`);
+      const current = await tx.serviceTicket.findUnique({ where: { id: ticket.id }, select: { status: true, customData: true, serviceDate: true } });
+      if (!current || !OPEN_STATUSES.includes(current.status)) throw new AppError(409, 'Class is closed — see the trainer');
+      const roster = await tx.trainingRosterRecord.findMany({ where: { ticketId: ticket.id } });
+      const matches = roster.filter(row => normalize(row.employeeName) === normalize(name)
+        && (employerCompanyId ? row.employerCompanyId === employerCompanyId : normalize(row.employerName) === normalize(employer)));
+      if (matches.length > 1) throw new AppError(409, 'More than one student matches this name and employer — see the trainer');
+      const existing = matches[0];
+      if (existing) {
+        if (existing.participantSignature === sig) return { id: existing.id };
+        if (existing.participantSignature) throw new AppError(409, 'This student is already signed in — see the trainer if this is another person');
+        // Preserve trainer-entered results, card status, and contact details.
+        return tx.trainingRosterRecord.update({
+          where: { id: existing.id },
+          data: { participantSignature: sig, signedAt: new Date(), ...(phone ? { contactPhone: phone } : {}), ...(email ? { contactEmail: email } : {}) },
+          select: { id: true },
+        });
+      }
+      if (roster.length >= MAX_SELF_SIGNINS) throw new AppError(409, 'Roster is full — see the trainer');
+      const cd = (current.customData as any) || {};
+      return tx.trainingRosterRecord.create({ data: {
         ticketId: ticket.id,
         employeeName: name,
         employerName: employer,
         employerCompanyId,
-        contactPhone: String(contactPhone || '').trim().slice(0, 40) || null,
-        contactEmail: String(contactEmail || '').trim().slice(0, 120) || null,
+        contactPhone: phone,
+        contactEmail: email,
         courseName: courseDisplay(cd),
         passed: true, // trainer flips fails when closing out the class
-        trainedAt: new Date(),
+        trainedAt: current.serviceDate,
         participantSignature: sig,
         signedAt: new Date(),
-      },
-      select: { id: true },
+      }, select: { id: true } });
     });
 
     res.status(201).json({ ok: true, id: record.id });

@@ -1,4 +1,4 @@
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { AppError } from '../middleware/errorHandler.js';
 import type { Prisma } from '../db.js';
 import { canEditUnit } from './shopSoftClose.js';

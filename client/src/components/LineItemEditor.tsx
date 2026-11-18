@@ -26,6 +26,7 @@ import {
 
 export interface LineItem {
   id: string
+  fieldInspectionId?: string
   lineType: string
   description: string
   partNumber?: string
@@ -56,6 +57,7 @@ export interface LineItem {
 }
 
 interface LineItemEditorProps {
+  setupOnly?: boolean
   items: LineItem[]
   onChange: (items: LineItem[]) => void
   serviceType?: string
@@ -111,7 +113,7 @@ interface DefaultProduct {
   qbItemListId?: string | null
 }
 
-export function LineItemEditor({ items, onChange, serviceType, division = null, priceLevels }: LineItemEditorProps) {
+export function LineItemEditor({ items, onChange, serviceType, division = null, priceLevels, setupOnly = false }: LineItemEditorProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [defaults, setDefaults] = useState<Record<string, DefaultProduct>>({})
   // Per-line catalog scope: each product-search line has its OWN Div filter,
@@ -447,7 +449,7 @@ export function LineItemEditor({ items, onChange, serviceType, division = null, 
                     )}
 
                     {/* Serial numbers for deploy/swap/pickup/bump/cal */}
-                    {['monitor_deploy', 'monitor_swap', 'bump_test', 'calibration'].includes(item.lineType) && (
+                    {!setupOnly && ['monitor_deploy', 'monitor_swap', 'bump_test', 'calibration'].includes(item.lineType) && (
                       <SerialInput
                         label={`S/N ${item.lineType === 'monitor_swap' ? 'Installed' : ''}`}
                         value={item.serialNumberInstalled || ''}
@@ -455,7 +457,7 @@ export function LineItemEditor({ items, onChange, serviceType, division = null, 
                       />
                     )}
 
-                    {item.lineType === 'monitor_swap' && (
+                    {!setupOnly && item.lineType === 'monitor_swap' && (
                       <SerialInput
                         label="S/N Removed"
                         value={item.serialNumberRemoved || ''}
@@ -463,7 +465,7 @@ export function LineItemEditor({ items, onChange, serviceType, division = null, 
                       />
                     )}
 
-                    {['monitor_pickup'].includes(item.lineType) && (
+                    {!setupOnly && ['monitor_pickup'].includes(item.lineType) && (
                       <SerialInput
                         label="S/N Picked Up"
                         value={item.serialNumberRemoved || ''}
@@ -472,7 +474,7 @@ export function LineItemEditor({ items, onChange, serviceType, division = null, 
                     )}
 
                     {/* Bump test / calibration result */}
-                    {['bump_test', 'calibration'].includes(item.lineType) && (
+                    {!setupOnly && ['bump_test', 'calibration'].includes(item.lineType) && (
                       <div className="flex gap-3">
                         <div className="flex-1">
                           <label className="block text-xs font-medium text-slate-500 mb-1">Result</label>
@@ -511,29 +513,17 @@ export function LineItemEditor({ items, onChange, serviceType, division = null, 
                       </div>
                     )}
 
-                    {/* Notes — required "describe work done" on labor-rate lines
-                        (legacy 406 or any new-scheme [DIV]00002 labor number) */}
-                    {(() => {
-                      const isLabor406 = item.partNumber === '406' || /^0[0-9]00002$/.test(item.partNumber ?? '')
-                      const needsWork = isLabor406 && !item.notes?.trim()
-                      return (
-                        <div>
-                          <label className="block text-xs font-medium text-slate-500 mb-1">
-                            {isLabor406 ? 'Describe work done' : 'Notes'}
-                            {isLabor406 && <span className="text-red-500"> *</span>}
-                          </label>
-                          <input
-                            type="text"
-                            value={item.notes || ''}
-                            onChange={e => updateItem(item.id, { notes: e.target.value })}
-                            placeholder={isLabor406 ? 'Describe work done (required)' : 'Optional notes'}
-                            className={`w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none ${
-                              needsWork ? 'border-red-300 bg-red-50' : 'border-slate-300'
-                            }`}
-                          />
-                        </div>
-                      )
-                    })()}
+                    {/* Notes are optional, including on labor lines. */}
+                    <div>
+                      <label className="block text-xs font-medium text-slate-500 mb-1">Notes (optional)</label>
+                      <input
+                        type="text"
+                        value={item.notes || ''}
+                        onChange={e => updateItem(item.id, { notes: e.target.value })}
+                        placeholder="Optional notes"
+                        className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                      />
+                    </div>
 
                     {/* Delete */}
                     <button

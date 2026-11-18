@@ -1,15 +1,15 @@
-// D4 → Return (ADR-0013, net-new). Return rental gear with item-level
-// selection — partial OK (e.g. just the monitors today). Distinct from
-// "Finish Job", which force-returns everything remaining and completes the
-// agreement. Rides the same endpoints RentalDetailPage already uses
-// (PATCH /:id/items/:itemId/return, PATCH /:id/complete) — this page is a
-// new field-wizard entry point onto that machinery, not a new backend.
-
-import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { v4 as uuidv4 } from 'uuid'
+import { useAuth } from '@/contexts/AuthContext'
+import { saveManualRentalVisit } from '@/lib/manualRentalVisit'
+import { LineItemEditor, type LineItem } from '@/components/LineItemEditor'
+import { useCompanyPriceLevels } from '@/lib/priceLevels'
+import { loadSwapBillingLines } from '@/lib/rentalSwapBilling'
+import { useState, useEffect, useRef } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, Loader2, Package, CheckSquare, Square, RotateCcw } from 'lucide-react'
-import { db } from '@/lib/db'
+import type { ManualRentalEquipment } from '@/lib/db-types'
 import { api } from '@/lib/api'
+import { todayKey } from '@/lib/dates'
 import { CustomerSearch } from '@/components/CustomerSearch'
 import { RentalInspectionEditor, type InspectionData } from '@/components/RentalInspectionEditor'
 
@@ -20,64 +20,100 @@ interface AgreementSummary {
   agreementNumber: string | null
   padName?: string | null
   wellName?: string | null
-}
-
-interface DeployedItem {
-  id: string
-  productName: string
-  serialNumber: string
-  serializedEquipmentId: string
+  company?: { name: string } | null
+  field?: { name: string } | null
+  pad?: { name: string } | null
+  well?: { wellName: string } | null
 }
 
 export function RentalReturnPage() {
   const navigate = useNavigate()
+  const { user } = useAuth()
+  const [searchParams] = useSearchParams()
+  const submitting = useRef(false)
+  const [saving, setSaving] = useState(false)
+  const [inspecting, setInspecting] = useState(false)
+  const [ticketId] = useState(() => uuidv4())
+  const [rental, setRental] = useState<any>(null)
+  const [lineItems, setLineItems] = useState<LineItem[]>([])
+  const [billing, setBilling] = useState(false)
+  const [billingReady, setBillingReady] = useState(false)
+  const [batchItems, setBatchItems] = useState<ManualRentalEquipment[]>([])
+  const [inspectionIndex, setInspectionIndex] = useState(0)
+  const [itemInspections, setItemInspections] = useState<Record<string, InspectionData>>({})
+  const { levels: priceLevels, loaded: pricesLoaded } = useCompanyPriceLevels(rental?.companyId)
   const [customer, setCustomer] = useState<Customer | null>(null)
-  const [loadingAgreements, setLoadingAgreements] = useState(false)
+  const [loadingAgreements, setLoadingAgreements] = useState(true)
   const [agreements, setAgreements] = useState<AgreementSummary[]>([])
-  const [agreementId, setAgreementId] = useState<string | null>(null)
-  const [items, setItems] = useState<DeployedItem[]>([])
+  const [agreementId, setAgreementId] = useState<string | null>(searchParams.get('rentalId'))
+  const [items, setItems] = useState<ManualRentalEquipment[]>([])
   const [loadingItems, setLoadingItems] = useState(false)
   const [checked, setChecked] = useState<Set<string>>(new Set())
-  const [queue, setQueue] = useState<DeployedItem[]>([])
-  // Decided once when the batch starts (Finish Job, or the tech happened to
-  // check every deployed item) — NOT recomputed mid-drain, which would race
-  // against the still-updating items/checked state as each item completes.
   const [batchCompletesAgreement, setBatchCompletesAgreement] = useState(false)
   const [error, setError] = useState('')
   const [done, setDone] = useState(false)
+  const [returnDate, setReturnDate] = useState(() => searchParams.get('returnDate') || todayKey())
+  const [batchReturnDate, setBatchReturnDate] = useState('')
 
   useEffect(() => {
-    if (!customer) { setAgreements([]); setAgreementId(null); return }
+    let cancelled = false
+    setAgreements([])
+    setAgreementId(searchParams.get('rentalId'))
     setLoadingAgreements(true)
-    api.get<{ data: AgreementSummary[] }>(`/rentals?companyId=${customer.id}&status=active`)
-      .then(res => {
-        const data = res.data || []
-        setAgreements(data)
-        setAgreementId(data.length === 1 ? data[0].id : null)
-      })
-      .catch(() => setAgreements([]))
-      .finally(() => setLoadingAgreements(false))
-  }, [customer])
+    setError('')
+    async function loadAgreements() {
+      try {
+        const all: AgreementSummary[] = []
+        let total = Infinity
+        while (all.length < total && !cancelled) {
+          const params = new URLSearchParams({ status: 'active', limit: '100', offset: String(all.length) })
+          if (customer?.id) params.set('companyId', customer.id)
+          const res = await api.get<{ data: AgreementSummary[]; total: number }>(`/rentals?${params}`)
+          all.push(...res.data)
+          total = res.total
+          if (!res.data.length) break
+        }
+        if (!cancelled) setAgreements(all)
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : 'Could not load active rentals')
+      } finally {
+        if (!cancelled) setLoadingAgreements(false)
+      }
+    }
+    void loadAgreements()
+    return () => { cancelled = true }
+  }, [customer?.id])
 
   useEffect(() => {
-    if (!agreementId) { setItems([]); return }
+    let cancelled = false
+    setItems([])
+    setChecked(new Set())
+    if (!agreementId) { setLoadingItems(false); return }
     setLoadingItems(true)
     api.get<any>(`/rentals/${agreementId}`)
       .then(data => {
-        const deployed = (data.items || [])
-          .filter((i: any) => i.status === 'deployed')
-          .map((i: any) => ({
-            id: i.id,
-            productName: i.product?.name || 'Equipment',
-            serialNumber: i.serializedEquipment?.serialNumber || '?',
-            serializedEquipmentId: i.serializedEquipmentId,
-          }))
+        if (cancelled) return
+        setRental(data)
+        const deployed = (data.visitEquipment || data.composition?.manualEquipment || []).filter((row: ManualRentalEquipment) => row.status !== 'returned')
         setItems(deployed)
         setChecked(new Set())
       })
-      .catch(() => setItems([]))
-      .finally(() => setLoadingItems(false))
+      .catch(err => { if (!cancelled) setError(err instanceof Error ? err.message : 'Could not load deployed items') })
+      .finally(() => { if (!cancelled) setLoadingItems(false) })
+    return () => { cancelled = true }
   }, [agreementId])
+
+  useEffect(() => {
+    if (!rental || !pricesLoaded) return
+    let cancelled = false
+    setBillingReady(false)
+    loadSwapBillingLines(priceLevels).then(lines => {
+      if (cancelled) return
+      setLineItems(lines.map(line => line.lineType === 'labor' ? { ...line, notes: 'Equipment return' } : line))
+      setBillingReady(true)
+    }).catch(err => { if (!cancelled) setError(err instanceof Error ? err.message : 'Could not load billing defaults') })
+    return () => { cancelled = true }
+  }, [rental?.id, pricesLoaded, priceLevels])
 
   function toggleItem(id: string) {
     setChecked(prev => {
@@ -91,75 +127,44 @@ export function RentalReturnPage() {
   function startReturn(finishJob: boolean) {
     const targets = finishJob ? items : items.filter(i => checked.has(i.id))
     if (targets.length === 0) return
+    if (!returnDate || returnDate > todayKey()) {
+      setError('Choose a return date on or before today.')
+      return
+    }
+    if (targets.some(item => item.deployedAt?.slice(0, 10) > returnDate)) {
+      setError('Return date cannot precede deployment of the selected gear.')
+      return
+    }
+    setError('')
+    setBatchReturnDate(returnDate)
     setBatchCompletesAgreement(finishJob || targets.length === items.length)
-    setQueue(targets)
+    setBatchItems(targets)
+    setInspectionIndex(0)
+    setItemInspections({})
+    setBilling(true)
   }
 
-  async function handleInspected(item: DeployedItem, inspectionData: InspectionData) {
-    if (!agreementId) return
+  async function handleInspected(inspectionData: InspectionData) {
+    if (!agreementId || !rental || submitting.current) return
+    const current = batchItems[inspectionIndex]
+    if (!current) return
+    const inspections = { ...itemInspections, [current.id]: inspectionData }
+    setItemInspections(inspections)
+    if (inspectionIndex + 1 < batchItems.length) { setInspectionIndex(inspectionIndex + 1); return }
+    submitting.current = true
+    setSaving(true)
+    setError('')
     try {
-      await db.rentalAgreementItems.update(item.id, {
-        status: 'returned',
-        returnedDate: new Date().toISOString(),
-        _offlineStatus: 'pending',
-      })
-      await db.equipment.update(item.serializedEquipmentId, {
-        status: 'available',
-        currentRentalId: null,
-        currentCustomerId: null,
-      })
-      const now = new Date().toISOString()
-      await db.mutationQueue.add({
-        table: 'rentalAgreementItems',
-        action: 'update',
-        entityId: item.id,
-        payload: { status: 'returned', returnedDate: now },
-        createdAt: now,
-        status: 'pending',
-        retryCount: 0,
-      })
-      try {
-        await api.patch(`/rentals/${agreementId}/items/${item.id}/return`, { inspectionData })
-      } catch {
-        // Will sync later via the mutation queue
-      }
-
-      const remaining = queue.filter(i => i.id !== item.id)
-      setQueue(remaining)
-      setItems(prev => prev.filter(i => i.id !== item.id))
-
-      if (remaining.length === 0) {
-        if (batchCompletesAgreement) await completeAgreement()
-        setDone(true)
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to return item')
-    }
-  }
-
-  async function completeAgreement() {
-    if (!agreementId) return
-    const now = new Date().toISOString()
-    await db.rentalAgreements.update(agreementId, {
-      status: 'completed',
-      endDate: now,
-      updatedAt: now,
-      _offlineStatus: 'pending',
-    })
-    await db.mutationQueue.add({
-      table: 'rentalAgreements',
-      action: 'update',
-      entityId: agreementId,
-      payload: { status: 'completed', endDate: now },
-      createdAt: now,
-      status: 'pending',
-      retryCount: 0,
-    })
-    try {
-      await api.patch(`/rentals/${agreementId}/complete`, {})
-    } catch {
-      // Will sync later via the mutation queue
-    }
+      await saveManualRentalVisit(rental, {
+        requestId: ticketId, workType: 'rental_return', serviceDate: batchReturnDate,
+        selections: batchItems.map(item => ({ itemId: item.id, expected: item, inspection: inspections[item.id] })),
+        lineItems,
+      }, user?.id, user?.role)
+      setInspecting(false)
+      setItems(prev => prev.filter(item => !batchItems.some(returned => returned.id === item.id)))
+      setDone(true)
+    } catch (err) { setError(err instanceof Error ? err.message : 'Failed to return equipment') }
+    finally { submitting.current = false; setSaving(false) }
   }
 
   const selectedAgreement = agreements.find(a => a.id === agreementId)
@@ -183,7 +188,7 @@ export function RentalReturnPage() {
         <div className="bg-white rounded-xl border border-slate-200 p-6 text-center">
           <p className="text-slate-900 font-medium">Return recorded.</p>
           <p className="text-sm text-slate-500 mt-1">
-            {items.length === 0 ? 'All items returned — agreement completed.' : `${items.length} item(s) still deployed.`}
+            {items.length === 0 ? 'All equipment returned — rental ready for final billing.' : `${items.length} item(s) still deployed.`}
           </p>
           <button
             onClick={() => navigate(agreementId ? `/rentals/${agreementId}` : '/rentals')}
@@ -192,12 +197,30 @@ export function RentalReturnPage() {
             View rental agreement
           </button>
         </div>
+      ) : billing ? (
+        <div className="space-y-4">
+          <h2 className="text-lg font-semibold">Billing — Labor &amp; Mileage</h2>
+          <p className="text-sm text-slate-600">Enter return hours and miles. Charges bill with this job in the rental sweep.</p>
+          {billingReady ? <LineItemEditor items={lineItems} onChange={setLineItems} serviceType="general" division={4} priceLevels={priceLevels} /> : <p>Loading billing defaults…</p>}
+          <div className="flex justify-between">
+            <button onClick={() => setBilling(false)} className="border rounded-lg px-4 py-2">Back: Equipment</button>
+            <button disabled={!billingReady || lineItems.some(line => line.rate == null)} onClick={() => { setBilling(false); setInspecting(true) }} className="bg-blue-700 text-white rounded-lg px-4 py-2 disabled:opacity-50">Inspect &amp; Complete Return Ticket</button>
+          </div>
+        </div>
       ) : (
         <>
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Customer</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Filter by customer (optional)</label>
             <CustomerSearch value={customer} onChange={setCustomer} />
           </div>
+
+          <label className="block text-sm font-medium text-slate-700">
+            Return date <span className="text-red-500">*</span>
+            <input type="date" value={returnDate} max={todayKey()} required
+              onChange={e => setReturnDate(e.target.value)}
+              className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+            <span className="block text-xs font-normal text-slate-500 mt-1">Use the day the gear was returned. Finish Job uses this date to end the rental.</span>
+          </label>
 
           {loadingAgreements && (
             <div className="flex items-center gap-2 text-sm text-slate-400">
@@ -205,20 +228,31 @@ export function RentalReturnPage() {
             </div>
           )}
 
-          {customer && !loadingAgreements && agreements.length === 0 && (
-            <p className="text-sm text-slate-400 italic">No active rental for this customer.</p>
+          {!loadingAgreements && !error && agreements.length === 0 && (
+            <p className="text-sm text-slate-400 italic">{customer ? 'No active rental for this customer.' : 'No active rentals found.'}</p>
           )}
 
-          {agreements.length > 1 && !agreementId && (
+          {!loadingAgreements && agreements.length > 0 && (
             <div className="space-y-1.5">
-              <p className="text-sm font-medium text-slate-700">Which agreement?</p>
+              <p className="text-sm font-medium text-slate-700">Choose an active rental</p>
               {agreements.map(a => (
                 <button
                   key={a.id}
-                  onClick={() => setAgreementId(a.id)}
-                  className="w-full text-left border border-slate-200 rounded-lg p-3 hover:bg-slate-50"
+                  type="button"
+                  aria-pressed={agreementId === a.id}
+                  onClick={() => {
+                    if (agreementId === a.id) return
+                    setItems([])
+                    setChecked(new Set())
+                    setLoadingItems(true)
+                    setError('')
+                    setAgreementId(a.id)
+                  }}
+                  className={`w-full text-left border-2 rounded-lg p-3 ${agreementId === a.id ? 'border-blue-500 bg-blue-50' : 'border-slate-200 bg-white hover:border-slate-300'}`}
                 >
-                  <span className="text-sm font-medium text-slate-900">{[a.padName, a.wellName].filter(Boolean).join(' › ') || a.agreementNumber}</span>
+                  <span className="block text-sm font-medium text-slate-900">{a.agreementNumber || a.id.slice(0, 8)}</span>
+                  <span className="block text-xs text-slate-500 mt-1">Customer: {a.company?.name || 'Unknown'}</span>
+                  <span className="block text-xs text-slate-500 mt-1">Site: {[a.field?.name, a.pad?.name || a.padName, a.well?.wellName || a.wellName].filter(Boolean).join(' › ') || 'No site specified'}</span>
                 </button>
               ))}
             </div>
@@ -228,7 +262,7 @@ export function RentalReturnPage() {
             <div>
               <div className="flex items-center justify-between mb-2">
                 <p className="text-sm font-medium text-slate-700">
-                  Deployed items {selectedAgreement?.agreementNumber ? `(${selectedAgreement.agreementNumber})` : ''}
+                  Deployed equipment {selectedAgreement?.agreementNumber ? `(${selectedAgreement.agreementNumber})` : ''}
                 </p>
               </div>
 
@@ -252,25 +286,27 @@ export function RentalReturnPage() {
                         : <Square className="w-5 h-5 text-slate-300 shrink-0" />}
                       <Package className="w-4 h-4 text-slate-400 shrink-0" />
                       <span className="flex-1 min-w-0">
-                        <span className="block text-sm font-medium text-slate-900">{item.productName}</span>
-                        <span className="block text-xs text-slate-500">{item.serialNumber}</span>
+                        <span className="block text-sm font-medium text-slate-900">{item.type}</span>
+                        <span className="block text-xs text-slate-500">{item.serial} · Test date: {item.testDate}</span>
                       </span>
                     </button>
                   ))}
                 </div>
               )}
 
+              {items.length > 0 && !loadingItems && <button type="button" className="mt-2 text-sm text-blue-700" onClick={() => setChecked(checked.size === items.length ? new Set() : new Set(items.map(item => item.id)))}>{checked.size === items.length ? 'Clear selection' : 'Select all'}</button>}
               {items.length > 0 && !loadingItems && (
                 <div className="flex items-center gap-2 mt-3">
                   <button
                     onClick={() => startReturn(false)}
-                    disabled={checked.size === 0}
+                    disabled={checked.size === 0 || !returnDate || returnDate > todayKey()}
                     className="flex-1 px-4 py-2.5 bg-blue-700 text-white rounded-lg text-sm font-medium hover:bg-blue-800 disabled:opacity-50"
                   >
                     Return {checked.size || ''} checked item{checked.size === 1 ? '' : 's'}
                   </button>
                   <button
                     onClick={() => startReturn(true)}
+                    disabled={!returnDate || returnDate > todayKey()}
                     className="px-4 py-2.5 border border-slate-300 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-50"
                   >
                     Finish Job (return all)
@@ -282,14 +318,17 @@ export function RentalReturnPage() {
         </>
       )}
 
-      {queue.length > 0 && (
+      {inspecting && (
         <RentalInspectionEditor
-          key={queue[0].id}
-          equipmentName={queue[0].productName}
-          serialNumber={queue[0].serialNumber}
-          headerNote={batchCompletesAgreement ? 'Finishing job — this closes out the agreement' : undefined}
-          onComplete={(data) => handleInspected(queue[0], data)}
-          onCancel={() => setQueue([])}
+          key={batchItems[inspectionIndex]?.id}
+          equipmentName={batchItems[inspectionIndex]?.type || 'Equipment'}
+          serialNumber={batchItems[inspectionIndex]?.serial || ''}
+          headerNote={`Inspect item ${inspectionIndex + 1} of ${batchItems.length}.${batchCompletesAgreement ? ' Returning all deployed rows closes the rental and makes the final bill ready.' : ''}`}
+          submitLabel={inspectionIndex + 1 < batchItems.length ? 'Next equipment inspection' : 'Save return visit'}
+          saving={saving}
+          error={error}
+          onComplete={handleInspected}
+          onCancel={() => { if (!saving) { setInspecting(false); setBilling(true) } }}
         />
       )}
     </div>

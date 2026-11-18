@@ -1,4 +1,6 @@
 import { ShopServicePicker, type ShopServiceCharge } from './ShopServicePicker'
+import { SignaturePad } from './SignaturePad'
+import { inspectionApproval } from '@/lib/inspectionApproval'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { v4 as uuidv4 } from 'uuid'
 import { db } from '@/lib/db'
@@ -197,9 +199,10 @@ export interface EquipmentInspectionEditorProps {
    * why correcting one edits that record rather than the inspection: a serial
    * mistyped at intake is wrong everywhere it appears, not just here.
    */
-  intakeConstituents?: Array<{ id: string; label: string; serialNumber: string }>
+  intakeConstituents?: Array<{ id: string; label: string; serialNumber: string; notIncluded?: boolean }>
   /** Persist a constituent serial correction. Audited server-side. */
   onConstituentCorrected?: (childItemId: string, serialNumber: string) => Promise<void>
+  onSerialCorrected?: (serialNumber: string) => Promise<void>
   /** When editing or filing a correction. */
   existing?: OfflineEquipmentInspection | null
   /** Set when filing a correction — the new record will reference the prior. */
@@ -275,6 +278,7 @@ export function EquipmentInspectionEditor(props: EquipmentInspectionEditorProps)
   )
   const [billingServices, setBillingServices] = useState<ShopServiceCharge[]>([])
   const [servicesLoaded, setServicesLoaded] = useState(!showBilling)
+  const [error, setError] = useState('')
   useEffect(() => {
     if (!showBilling || isLocked) return
     let active = true
@@ -299,13 +303,25 @@ export function EquipmentInspectionEditor(props: EquipmentInspectionEditorProps)
   const [customerApprovedName, setCustomerApprovedName] = useState(
     props.existing?.customerApprovedName ?? '',
   )
+  const [customerApprovedSignature, setCustomerApprovedSignature] = useState<string | null>(props.existing?.customerApprovedSignature ?? null)
 
   // UI state
   const [saving, setSaving] = useState(false)
   const [locking, setLocking] = useState(false)
   const [showLockConfirm, setShowLockConfirm] = useState(false)
   const [showCorrectionEditor, setShowCorrectionEditor] = useState(false)
-  const [error, setError] = useState('')
+  const [serial, setSerial] = useState(props.serialNumber || props.existing?.serialNumber || '')
+  const [serialConfirmed, setSerialConfirmed] = useState(false)
+  const serialBlocked = !!props.shopItemId && (!serial.trim() || !serialConfirmed)
+
+  async function persistShopSerial() {
+    if (!props.shopItemId) return
+    if (serialBlocked) throw new Error('Record and confirm the serial on this piece before saving QA.')
+    if (serial.trim() !== props.serialNumber) {
+      if (!props.onSerialCorrected) throw new Error('Save this piece’s serial on the work order before QA.')
+      await props.onSerialCorrected(serial.trim())
+    }
+  }
 
   // ----- Attachments (condemn / cannot-service evidence + UE report PDF) -----
   const [attachments, setAttachments] = useState<AttachmentRow[]>([])
@@ -334,7 +350,7 @@ export function EquipmentInspectionEditor(props: EquipmentInspectionEditorProps)
     return getMissingRequiredShopKeys(props.category, data.qaChecklist, serviceActions)
   }, [props.captureOnly, outcome, props.category, data.qaChecklist, serviceActions])
   const lockBlockedReason =
-    qaBlockedKeys.length > 0
+    serialBlocked ? 'Record and confirm the serial before locking QA (all outcomes).' : qaBlockedKeys.length > 0
       ? `Finish the QA checklist before locking a pass — still required: ${labelsForKeys(
           props.category,
           qaBlockedKeys,
@@ -494,7 +510,7 @@ export function EquipmentInspectionEditor(props: EquipmentInspectionEditorProps)
       shopItemId: props.shopItemId ?? null,
       ticketId: props.ticketId ?? null,
       serializedEquipmentId: props.serializedEquipmentId ?? null,
-      serialNumber: props.serialNumber,
+      serialNumber: props.shopItemId ? serial.trim() : props.serialNumber,
       category: props.category,
       outcome,
       serviceActions,
@@ -502,11 +518,7 @@ export function EquipmentInspectionEditor(props: EquipmentInspectionEditorProps)
       data,
       partsReplaced: partsReplaced || null,
       notes: notes || null,
-      customerApprovedName: customerApprovedName || null,
-      customerApprovedSignature: props.existing?.customerApprovedSignature ?? null,
-      customerApprovedAt: customerApprovedName && !props.existing?.customerApprovedAt
-        ? now
-        : props.existing?.customerApprovedAt ?? null,
+      ...inspectionApproval(customerApprovedName, customerApprovedSignature, props.existing, now),
       correctsId: props.correctsId ?? null,
       inspectedAt: props.existing?.inspectedAt ?? now,
     }
@@ -546,6 +558,7 @@ export function EquipmentInspectionEditor(props: EquipmentInspectionEditorProps)
     try {
       // Try API first
       try {
+        await persistShopSerial()
         const result = props.existing
           ? await api.patch<OfflineEquipmentInspection>(
               `/equipment-inspections/${recordId}`,
@@ -628,8 +641,9 @@ export function EquipmentInspectionEditor(props: EquipmentInspectionEditorProps)
       try {
         // Lock the QA the tech is looking at, including the linked charges,
         // rather than locking the previous saved version of this form.
+        await persistShopSerial()
         if (props.shopItemId) await api.patch(`/equipment-inspections/${props.existing.id}`, {
-          outcome, serviceActions, ...(showBilling ? { billingServices } : {}), data, partsReplaced: partsReplaced || null, notes: notes || null,
+          serialNumber: serial.trim(), outcome, serviceActions, ...(showBilling ? { billingServices } : {}), data, partsReplaced: partsReplaced || null, notes: notes || null,
         })
         const locked = await api.post<OfflineEquipmentInspection>(
           `/equipment-inspections/${props.existing.id}/lock`,
@@ -722,6 +736,9 @@ export function EquipmentInspectionEditor(props: EquipmentInspectionEditorProps)
         category={props.category}
         equipmentDescription={props.equipmentDescription}
         correctsId={props.existing.id}
+        onSerialCorrected={props.onSerialCorrected}
+        intakeConstituents={props.intakeConstituents}
+        onConstituentCorrected={props.onConstituentCorrected}
         onSaved={props.onSaved}
         onClose={props.onClose}
       />
@@ -760,6 +777,17 @@ export function EquipmentInspectionEditor(props: EquipmentInspectionEditorProps)
         </div>
 
         {/* Locked banner */}
+        {props.shopItemId && !isLocked && (
+          <div className="p-4 bg-blue-50 border-b border-blue-200 space-y-2">
+            <label className="block text-sm font-medium text-slate-700">Serial number (required for every outcome)
+              <input value={serial} onChange={e => { setSerial(e.target.value); setSerialConfirmed(false) }} className="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-lg" />
+            </label>
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              <input type="checkbox" checked={serialConfirmed} disabled={!serial.trim()} onChange={e => setSerialConfirmed(e.target.checked)} />
+              I confirmed this serial on the piece being inspected
+            </label>
+          </div>
+        )}
         {isLocked && (
           <div className="bg-slate-50 border-b border-slate-200 px-4 py-2 flex items-center gap-2 text-xs text-slate-600 shrink-0">
             <Lock className="w-3.5 h-3.5" />
@@ -1037,13 +1065,17 @@ export function EquipmentInspectionEditor(props: EquipmentInspectionEditorProps)
               value={customerApprovedName}
               onChange={e => setCustomerApprovedName(e.target.value)}
               disabled={isLocked}
-              placeholder="Customer name (signature capture coming soon)"
+              placeholder="Customer name"
               className={cn(
                 'w-full px-3 py-2 border border-slate-300 rounded-lg text-sm',
                 isLocked && 'bg-slate-50 cursor-not-allowed',
               )}
             />
           </div>
+
+          {isLocked
+            ? customerApprovedSignature && <img src={customerApprovedSignature} alt="Customer approval signature" className="mt-2 max-h-24 border border-slate-200 rounded" />
+            : <SignaturePad value={customerApprovedSignature} onChange={setCustomerApprovedSignature} label="Customer approval signature (optional)" />}
 
           {error && (
             <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm flex items-start gap-2">
@@ -1077,7 +1109,7 @@ export function EquipmentInspectionEditor(props: EquipmentInspectionEditorProps)
               <button
                 type="button"
                 onClick={handleSave}
-                disabled={saving}
+                disabled={saving || serialBlocked}
                 className="flex items-center gap-2 px-5 py-2 bg-blue-700 text-white rounded-lg font-medium text-sm hover:bg-blue-600 disabled:opacity-40"
               >
                 {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
@@ -1426,11 +1458,8 @@ function CascadeBanner(props: {
 }) {
   const checkpoints: Record<string, any> =
     props.data.checkpoints && typeof props.data.checkpoints === 'object' ? props.data.checkpoints : {}
-  const actions: CascadeAction[] = useMemo(() => {
-    const results = extractCheckpointResults({ checkpoints })
-    return evaluateCascades(props.category, results, { model: props.equipmentDescription ?? '' })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.category, props.equipmentDescription, JSON.stringify(checkpoints)])
+  const results = extractCheckpointResults({ checkpoints })
+  const actions: CascadeAction[] = evaluateCascades(props.category, results, { model: props.equipmentDescription ?? '' })
 
   if (actions.length === 0) return null
 
@@ -1495,7 +1524,7 @@ function CascadeBanner(props: {
  * and a form full of editable serials invites accidental edits to identity.
  */
 function IntakeConstituents(props: {
-  constituents: Array<{ id: string; label: string; serialNumber: string }>
+  constituents: Array<{ id: string; label: string; serialNumber: string; notIncluded?: boolean }>
   onCorrected?: (childItemId: string, serialNumber: string) => Promise<void>
   disabled: boolean
 }) {
@@ -1526,7 +1555,10 @@ function IntakeConstituents(props: {
         {props.constituents.map(c => (
           <li key={c.id} className="flex items-center gap-2 text-sm">
             <span className="text-slate-500 w-24 shrink-0">{c.label}</span>
-            {editingId === c.id ? (
+            {c.notIncluded ? (
+              // Never arrived: no unit record exists, so there is nothing to correct.
+              <span className="text-amber-700 flex-1">Not included</span>
+            ) : editingId === c.id ? (
               <>
                 <input
                   autoFocus

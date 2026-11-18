@@ -21,6 +21,11 @@ import { v4 as uuidv4 } from 'uuid';
 // it back from here is a cycle — which breaks any one-off script that imports
 // this module (e.g. scripts/preview-qb-invoice.ts) mid-initialization.
 import { prisma } from '../db.js';
+import { rentalInvoiceLineNotes, rentalInvoiceNoteLines } from '../services/qbRentalNotes.js';
+import { rentalSweepLines } from '../services/rentalSweepLines.js';
+import { invoiceServiceEndDate } from '../services/invoiceServiceDate.js';
+import type { RentalComposition } from '../services/rentalComposition.js';
+import { loadSandboxQbScope, sandboxQueueFilter } from '../services/qbSandboxScope.js';
 import { authenticate } from '../middleware/auth.js';
 import { requirePermission } from '../middleware/rbac.js';
 import {
@@ -29,7 +34,7 @@ import {
   buildSalesOrderQueryForLinkedInvoice, buildInvoiceQueryByRefNumber, parseInvoiceQueryResponse,
   buildInvoiceQueryByTxnId, parseInvoiceDiffResponse,
   buildSalesReceiptAdd, parseSalesReceiptResponse,
-  buildItemQueryRq, parseItemQueryResponse,
+  parseItemQueryResponse,
   buildPriceLevelQueryRq, parsePriceLevelQueryResponse,
   buildSalesTaxQueryRq, parseSalesTaxQueryResponse,
   type QbSalesOrderData, type QbSalesOrderLine, type QbSalesReceiptData,
@@ -48,6 +53,13 @@ import {
 import { decodeHtmlEntities } from '../utils/htmlEntities.js';
 import { recordDocRefObservationByDocNumber } from '../services/billingObservations.js';
 import { upsertDocRefAndLines } from '../services/billingLineage.js';
+import { buildCustomerQueueRequest, processCustomerResponse } from '../services/qbCustomerSync.js';
+import { buildPagedItemQuery, nextItemQueryIterators, type ItemQueryIterators } from '../services/qbItemPaging.js';
+import {
+  buildCustomerListQuery, parseCustomerListPage, applyCustomerListPage,
+  type CustomerPageResult,
+} from '../services/qbCustomerListSync.js';
+import { newQbSessionDetails, recordQbSessionOutcome, formatQbSessionSummary, type QbSessionDetails } from '../services/qbSessionSummary.js';
 
 export const qbwcRouter = Router();
 
@@ -83,6 +95,8 @@ const QBWC_APP_NAME = process.env.QBWC_APP_NAME || 'Service Pro - Basin Safety';
 // where the failure mode of a registration authorised against the wrong file is
 // test invoices in the real ledger.
 const QBWC_COMPANY_FILE = process.env.QBWC_COMPANY_FILE || '';
+const sandboxScope = loadSandboxQbScope(process.env);
+const queueScope = sandboxQueueFilter(sandboxScope);
 
 // Auto-run interval baked into the .qwc, in minutes. 0 registers the app with
 // no <Scheduler> block at all, so it only ever runs when someone clicks Update
@@ -122,10 +136,18 @@ interface QbwcSession {
   currentQueueId: string | null;   // which queue entry we're currently processing
   totalItems: number;              // total pending at session start
   processedItems: number;
+  successfulItems: number;
+  failedItems: number;
+  invoiceAdds: number;
+  details: QbSessionDetails;
+  companyFile?: string;
   lastError: string | null;
+  itemQueryIterators?: ItemQueryIterators;
+  customerListIterator?: string;
 }
 
 const sessions = new Map<string, QbwcSession>();
+let lastObservedCompanyFile: string | null = null;
 
 // Track last item sync time — auto-queue every hour
 let lastItemSyncQueuedAt = 0;
@@ -242,6 +264,14 @@ async function handleAuthenticate(xml: string): Promise<string> {
     </tns:authenticateResponse>`);
   }
 
+  // Durable heartbeat for the operations report, including idle polls with no queue work.
+  const contactAt = new Date();
+  await prisma.jobRun.upsert({
+    where: { id: 'qb-connector-contact' },
+    create: { id: 'qb-connector-contact', jobName: 'qb.connector.contact', status: 'success', startedAt: contactAt, finishedAt: contactAt },
+    update: { startedAt: contactAt, finishedAt: contactAt, status: 'success' },
+  }).catch(err => console.warn('[QBWC] Could not persist connector contact:', err.message));
+
   // ── Recover stuck 'sent' entries ──
   // If a previous QBWC session died mid-flight (server restart, network drop, timeout),
   // entries can get stuck in 'sent' status forever. Reset them back to 'pending'.
@@ -250,6 +280,7 @@ async function handleAuthenticate(xml: string): Promise<string> {
 
   const stuckRecovered = await prisma.qbSyncQueue.updateMany({
     where: {
+      ...queueScope,
       status: 'sent',
       sentAt: { lt: stuckCutoff },
     },
@@ -267,7 +298,7 @@ async function handleAuthenticate(xml: string): Promise<string> {
   // Invoices stuck in 'so_created' that don't already have a pending query
   // get a new query queued each QBWC cycle (up to MAX_INVOICE_QUERY_ATTEMPTS).
   const soCreatedInvoices = await prisma.invoice.findMany({
-    where: { status: 'so_created', qbSalesOrderTxnId: { not: null } },
+    where: { status: 'so_created', qbSalesOrderTxnId: { not: null }, ...(sandboxScope ? { id: { in: sandboxScope.invoiceIds } } : {}) },
     select: { id: true, invoiceNumber: true },
   });
 
@@ -278,7 +309,7 @@ async function handleAuthenticate(xml: string): Promise<string> {
 
   // ── Auto-queue item sync if overdue ──
   const now = Date.now();
-  if (now - lastItemSyncQueuedAt > ITEM_SYNC_INTERVAL_MS) {
+  if (!sandboxScope && now - lastItemSyncQueuedAt > ITEM_SYNC_INTERVAL_MS) {
     // Check there isn't already a pending item query
     const existingItemQuery = await prisma.qbSyncQueue.findFirst({
       where: { entityType: 'item', action: 'query', status: { in: ['pending', 'sent'] } },
@@ -299,7 +330,7 @@ async function handleAuthenticate(xml: string): Promise<string> {
   }
 
   // ── Auto-queue sales-tax sync if overdue ──
-  if (now - lastSalesTaxSyncQueuedAt > SALES_TAX_SYNC_INTERVAL_MS) {
+  if (!sandboxScope && now - lastSalesTaxSyncQueuedAt > SALES_TAX_SYNC_INTERVAL_MS) {
     const existingTaxQuery = await prisma.qbSyncQueue.findFirst({
       where: { entityType: 'sales_tax', action: 'query', status: { in: ['pending', 'sent'] } },
     });
@@ -320,7 +351,7 @@ async function handleAuthenticate(xml: string): Promise<string> {
 
   // Check if there's anything in the queue
   const pendingCount = await prisma.qbSyncQueue.count({
-    where: { status: 'pending', retryCount: { lt: MAX_RETRIES } },
+    where: { ...queueScope, status: 'pending', retryCount: { lt: MAX_RETRIES } },
   });
 
   const ticket = uuidv4();
@@ -330,6 +361,10 @@ async function handleAuthenticate(xml: string): Promise<string> {
     currentQueueId: null,
     totalItems: pendingCount,
     processedItems: 0,
+    successfulItems: 0,
+    failedItems: 0,
+    invoiceAdds: 0,
+    details: newQbSessionDetails(),
     lastError: null,
   });
 
@@ -367,9 +402,39 @@ async function handleSendRequestXML(xml: string): Promise<string> {
     </tns:sendRequestXMLResponse>`);
   }
 
+  // QBWC supplies the actual file it opened. Keep it visible for diagnostics
+  // even when this registration has no configured company-file pin.
+  const companyFile = unescapeXml(extractElement(xml, 'strCompanyFileName'));
+  if (companyFile && companyFile !== session.companyFile) {
+    session.companyFile = companyFile;
+    lastObservedCompanyFile = companyFile;
+    console.log(`[QBWC] Active company file: ${companyFile}`);
+  }
+
+  // Finish the current catalog pull before claiming another job. QuickBooks
+  // iterator IDs are only usable within this session.
+  if (session.currentQueueId && (session.itemQueryIterators || session.customerListIterator)) {
+    const entry = await prisma.qbSyncQueue.findUnique({ where: { id: session.currentQueueId } });
+    let qbxmlRequest: string | null = null;
+    if (entry?.status === 'sent' && entry.action === 'query') {
+      if (entry.entityType === 'item' && session.itemQueryIterators) {
+        qbxmlRequest = buildPagedItemQuery(session.itemQueryIterators);
+      } else if (entry.entityType === 'customer_list' && session.customerListIterator) {
+        qbxmlRequest = buildCustomerListQuery(session.customerListIterator);
+      }
+    }
+    if (entry && qbxmlRequest) {
+      await prisma.qbSyncQueue.update({ where: { id: entry.id }, data: { qbxmlRequest, sentAt: new Date() } });
+      return soapEnvelope(`<tns:sendRequestXMLResponse><tns:sendRequestXMLResult>${escapeXmlForSoap(qbxmlRequest)}</tns:sendRequestXMLResult></tns:sendRequestXMLResponse>`);
+    }
+    session.currentQueueId = null;
+    session.itemQueryIterators = undefined;
+    session.customerListIterator = undefined;
+  }
+
   // Get next pending queue entry
   const entry = await prisma.qbSyncQueue.findFirst({
-    where: { status: 'pending', retryCount: { lt: MAX_RETRIES } },
+    where: { ...queueScope, status: 'pending', retryCount: { lt: MAX_RETRIES } },
     orderBy: [{ priority: 'asc' }, { createdAt: 'asc' }],
   });
 
@@ -400,7 +465,10 @@ async function handleSendRequestXML(xml: string): Promise<string> {
       },
     });
     session.processedItems++;
-    // Return empty to get next item
+    session.failedItems++;
+    session.lastError = `Build error: ${err.message}`;
+    recordQbSessionOutcome(session.details, entry, 'error', null, session.lastError);
+    // Returning empty ends this connector session; getLastError explains why.
     return soapEnvelope(`
     <tns:sendRequestXMLResponse>
       <tns:sendRequestXMLResult></tns:sendRequestXMLResult>
@@ -460,13 +528,46 @@ async function handleReceiveResponseXML(xml: string): Promise<string> {
   const entry = await prisma.qbSyncQueue.findUnique({ where: { id: queueId } });
   if (!entry) {
     session.processedItems++;
+    session.failedItems++;
+    session.lastError = 'The current QuickBooks queue entry could not be found';
     session.currentQueueId = null;
     return progressResponse(session);
   }
 
   // Parse the qbXML response
+  const responseDetails: { invoiceCheck?: string; customerPage?: CustomerPageResult } = {};
   try {
-    await processQbResponse(entry, decodedResponse, hresult, message);
+    const itemPage = entry.entityType === 'item' && entry.action === 'query' && !hresult;
+    const next = itemPage ? nextItemQueryIterators(decodedResponse, session.itemQueryIterators) : undefined;
+    const customerPage = entry.entityType === 'customer_list' && entry.action === 'query' && !hresult;
+    const nextCustomerIterator = customerPage ? parseCustomerListPage(decodedResponse).nextIteratorId : null;
+    const morePages = (!!next && Object.keys(next).length > 0) || !!nextCustomerIterator;
+    await processQbResponse(entry, decodedResponse, hresult, message, morePages, responseDetails);
+    if (itemPage) {
+      session.details.catalogPages++;
+      session.details.catalogItems += parseItemQueryResponse(decodedResponse).length;
+    }
+    if (responseDetails.customerPage) {
+      session.details.customerPages++;
+      session.details.customersRead += responseDetails.customerPage.read;
+      session.details.customersLinked += responseDetails.customerPage.linked;
+      session.details.customersCreated += responseDetails.customerPage.created;
+    }
+    if (morePages) {
+      session.itemQueryIterators = next;
+      session.customerListIterator = nextCustomerIterator ?? undefined;
+      return progressResponse(session);
+    }
+    const outcome = await prisma.qbSyncQueue.findUnique({ where: { id: queueId } });
+    if (outcome) recordQbSessionOutcome(session.details, entry, outcome.status,
+      extractElement(decodedResponse, 'RefNumber'), outcome.errorMessage, responseDetails.invoiceCheck);
+    if (outcome?.status === 'success') {
+      session.successfulItems++;
+      if (entry.entityType === 'invoice' && entry.action === 'add') session.invoiceAdds++;
+    } else if (outcome?.status === 'error' || outcome?.status === 'pending') {
+      session.failedItems++;
+      session.lastError = outcome.errorMessage || 'QuickBooks request failed; inspect the sync queue';
+    }
   } catch (err: any) {
     console.error(`[QBWC] Error processing response for ${queueId}:`, err.message);
     await prisma.qbSyncQueue.update({
@@ -478,10 +579,15 @@ async function handleReceiveResponseXML(xml: string): Promise<string> {
         completedAt: new Date(),
       },
     });
+    session.failedItems++;
+    session.lastError = err.message;
+    recordQbSessionOutcome(session.details, entry, 'error', null, err.message);
   }
 
   session.processedItems++;
   session.currentQueueId = null;
+  session.itemQueryIterators = undefined;
+  session.customerListIterator = undefined;
 
   return progressResponse(session);
 }
@@ -500,14 +606,14 @@ function handleGetLastError(xml: string): string {
 function handleCloseConnection(xml: string): string {
   const ticket = extractElement(xml, 'ticket');
   const session = sessions.get(ticket);
-  const processed = session?.processedItems || 0;
+  const summary = formatQbSessionSummary(session);
 
-  console.log(`[QBWC] closeConnection: processed ${processed} items`);
+  console.log(`[QBWC] closeConnection: ${summary}`);
   sessions.delete(ticket);
 
   return soapEnvelope(`
     <tns:closeConnectionResponse>
-      <tns:closeConnectionResult>OK, processed ${processed} items</tns:closeConnectionResult>
+    <tns:closeConnectionResult>${escapeXmlForSoap(summary)}</tns:closeConnectionResult>
     </tns:closeConnectionResponse>`);
 }
 
@@ -565,6 +671,7 @@ function handleConnectionError(xml: string): string {
  * Supports: invoice/add, sales_order/add, invoice/query
  */
 async function buildQbxmlForEntry(entry: { id: string; entityType: string; action: string; entityId: string }): Promise<string> {
+  if (entry.entityType === 'customer' && ['add', 'query'].includes(entry.action)) return buildCustomerQueueRequest(entry);
   if (entry.entityType === 'invoice' && entry.action === 'add') {
     return buildInvoiceAddFromInvoice(entry.entityId);
   }
@@ -585,7 +692,7 @@ async function buildQbxmlForEntry(entry: { id: string; entityType: string; actio
     // For delta syncs, we could pass a fromModifiedDate.
     // For now, pull all items (first sync / full refresh).
     // Future: store last sync date and pass it here.
-    return buildItemQueryRq();
+    return buildPagedItemQuery();
   }
 
   if (entry.entityType === 'price_level' && entry.action === 'query') {
@@ -598,6 +705,12 @@ async function buildQbxmlForEntry(entry: { id: string; entityType: string; actio
     // Pull QB's Sales Tax Items + Groups so qbTaxItemName can be reconciled
     // against real QB names (fixes recurring 3140 invalid-tax-ref rejects).
     return buildSalesTaxQueryRq();
+  }
+
+  if (entry.entityType === 'customer_list' && entry.action === 'query') {
+    // First page of the customer list; later pages come from the session's
+    // iterator in handleSendRequestXML. Queued by hand only — never scheduled.
+    return buildCustomerListQuery();
   }
 
   throw new Error(`Unsupported queue entry: ${entry.entityType}/${entry.action}`);
@@ -790,7 +903,7 @@ export async function buildQbDocDataFromInvoice(invoiceId: string): Promise<QbSa
       lineItems: {
         orderBy: { sortOrder: 'asc' },
         include: {
-          product: { select: { qbItemListId: true, qbItemFullName: true } },
+          product: { select: { partNumber: true, qbItemListId: true, qbItemFullName: true } },
         },
       },
     },
@@ -841,8 +954,9 @@ export async function buildQbDocDataFromInvoice(invoiceId: string): Promise<QbSa
   // Wave 5 Slice 5A — drop lines flagged qbSkip (Tier 1 surcharge etc.).
   // These ride on the SP invoice + Enverus push but are intentionally
   // excluded from QB.
-  const billableLines = invoice.lineItems.filter(li => !li.qbSkip);
-  const skippedCount = invoice.lineItems.length - billableLines.length;
+  const includedLines = invoice.lineItems.filter(li => !li.qbSkip);
+  const billableLines = invoice.rentalAgreementId ? rentalSweepLines(includedLines) : includedLines;
+  const skippedCount = invoice.lineItems.length - includedLines.length;
   if (skippedCount > 0) {
     console.log(
       `[QBWC] Invoice ${invoice.invoiceNumber}: skipping ${skippedCount} qbSkip line${skippedCount === 1 ? '' : 's'} (billing rule)`,
@@ -850,6 +964,7 @@ export async function buildQbDocDataFromInvoice(invoiceId: string): Promise<QbSa
   }
 
   const lines: QbSalesOrderLine[] = billableLines.map(li => ({
+    useAmount: (li as typeof li & { useAmount?: boolean }).useAmount,
     qbItemListId: li.qbItemListId || li.product?.qbItemListId || null,
     qbItemFullName: li.qbItemFullName || li.product?.qbItemFullName || null,
     description: li.description || '',
@@ -883,7 +998,6 @@ export async function buildQbDocDataFromInvoice(invoiceId: string): Promise<QbSa
 
   const cls = await resolveInvoiceClassAndLocation(invoice);
   const classFullName = resolveQbClassFullName(cls.division, cls.isDickinson);
-  const serviceDate = invoice.periodEnd || invoice.invoiceDate;
 
   const sourceTicketIds = [...new Set(
     invoice.lineItems.map(li => li.sourceTicketId).filter((id): id is string => !!id),
@@ -896,11 +1010,28 @@ export async function buildQbDocDataFromInvoice(invoiceId: string): Promise<QbSa
     : [];
   const ticketById = new Map(sourceTickets.map(t => [t.id, t]));
   const orderedTickets = sourceTicketIds.map(id => ticketById.get(id)).filter((t): t is NonNullable<typeof t> => !!t);
+  const serviceDate = invoiceServiceEndDate(invoice, sourceTickets);
 
   const rental = invoice.rentalAgreementId
     ? await prisma.rentalAgreement.findUnique({
         where: { id: invoice.rentalAgreementId },
-        select: { agreementNumber: true, siteContactName: true, pics: true },
+        select: {
+          agreementNumber: true, siteContactName: true, pics: true, composition: true,
+          items: {
+            select: {
+              id: true, productId: true, replacesItemId: true, deployedDate: true, returnedDate: true,
+              product: { select: { name: true, category: true, qbItemListId: true, qbItemFullName: true } },
+              serializedEquipment: { select: { serialNumber: true, safeCoreSerial: true } },
+            },
+          },
+          linkedServiceTickets: {
+            where: {
+              status: { not: 'void' }, serviceDate: { lte: invoice.periodEnd || invoice.invoiceDate },
+              customData: { path: ['workType'], equals: 'rental_deploy' },
+            },
+            select: { serviceDate: true, customData: true },
+          },
+        },
       })
     : null;
   const shopWorkOrder = invoice.shopWorkOrderId
@@ -932,7 +1063,7 @@ export async function buildQbDocDataFromInvoice(invoiceId: string): Promise<QbSa
     .find((n): n is string => !!n);
 
   const memo = invoice.rentalAgreementId
-    ? cleanQbHeaderText(rental?.agreementNumber) || firstTicketNumber
+    ? cleanQbHeaderText(rental?.agreementNumber)
     : firstTicketNumber || cleanQbHeaderText(shopWorkOrder?.workOrderNumber);
   const fob = allHeaderTickets
     .map(t => firstPicName((t.customData as any)?.pics) || cleanQbHeaderText(t.customerRepName))
@@ -948,10 +1079,14 @@ export async function buildQbDocDataFromInvoice(invoiceId: string): Promise<QbSa
     || allHeaderTickets.map(t => cleanQbHeaderText(t.afeNumber)).find((v): v is string => !!v)
     || null;
 
+  const rentalLineNotes = rental
+    ? rentalInvoiceLineNotes(invoice.periodStart, invoice.periodEnd, rental.items, billableLines,
+      rental.composition as RentalComposition | null, rental.linkedServiceTickets, (invoice.customData as any)?.rentalQbNotes)
+    : undefined;
   const data: QbSalesOrderData = {
     customerListId,
     customerFullName,
-    txnDate: invoice.invoiceDate,
+    txnDate: serviceDate,
     refNumber: invoice.invoiceNumber,
     poNumber: combinePoAfeForQb(poNumber, afeNumber),
     fob,
@@ -959,7 +1094,18 @@ export async function buildQbDocDataFromInvoice(invoiceId: string): Promise<QbSa
     classFullName,
     otherLocation: cls.location,
     salesTaxItemFullName,
-    lines: lines.map(line => ({ ...line, serviceDate })),
+    noteLines: rental
+      ? rentalInvoiceNoteLines(invoice.periodStart, invoice.periodEnd, []).slice(0, 1)
+      : undefined,
+    lines: lines.map((line, index) => ({
+      ...line, serviceDate,
+      // Composition invoices may already carry a combined equipment roster.
+      // The associated description-only rows replace that roster in QB.
+      ...(rentalLineNotes ? {
+        description: line.description.split('\nItems deployed:')[0],
+        noteLines: rentalLineNotes[index],
+      } : {}),
+    })),
   };
 
   return data;
@@ -1152,6 +1298,8 @@ async function processQbResponse(
   responseXml: string,
   hresult: string,
   message: string,
+  moreItemPages = false,
+  responseDetails?: { invoiceCheck?: string; customerPage?: CustomerPageResult },
 ): Promise<void> {
   // QBWC-level error (connection/transport issue)
   if (hresult) {
@@ -1166,6 +1314,34 @@ async function processQbResponse(
         qbxmlResponse: responseXml || null,
         completedAt: retryCount + 1 >= MAX_RETRIES ? new Date() : null,
         sentAt: null, // reset so it gets picked up again
+      },
+    });
+    return;
+  }
+
+  if (entry.entityType === 'customer' && ['add', 'query'].includes(entry.action)) {
+    await processCustomerResponse(entry, responseXml);
+    return;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Customer list pull — one page of CustomerQueryRs. Mirrors into qb_customers
+  // links exact-name matches, and creates top-level customers Sundog lacks. Intermediate pages
+  // leave the job 'sent'; only the last page completes it.
+  // ---------------------------------------------------------------------------
+  if (entry.entityType === 'customer_list' && entry.action === 'query') {
+    const { customers } = parseCustomerListPage(responseXml);
+    const page = await applyCustomerListPage(customers);
+    if (responseDetails) responseDetails.customerPage = page;
+    console.log(`[QBWC] Customer pull page: ${page.read} from QB, ${page.linked} linked, ${page.created} created, ${page.renamed} renamed`);
+    if (moreItemPages) return;
+    await prisma.qbSyncQueue.update({
+      where: { id: entry.id },
+      data: {
+        status: 'success',
+        qbxmlResponse: responseXml?.slice(0, 10000) || null,
+        completedAt: new Date(),
+        errorMessage: null,
       },
     });
     return;
@@ -1371,8 +1547,15 @@ async function processQbResponse(
   if (entry.entityType === 'invoice' && entry.action === 'query') {
     const invoiceForBranching = await prisma.invoice.findUnique({
       where: { id: entry.entityId },
-      select: { qbInvoiceTxnId: true, total: true, invoiceNumber: true, lineItems: { select: { id: true } } },
+      select: { qbInvoiceTxnId: true, total: true, invoiceNumber: true, rentalAgreementId: true,
+        lineItems: { where: { qbSkip: false }, select: { id: true, description: true, partNumber: true,
+          quantity: true, rate: true, amount: true, isTaxable: true, product: { select: { partNumber: true } } } } },
     });
+    const exportedLineCount = invoiceForBranching?.rentalAgreementId
+      ? rentalSweepLines(invoiceForBranching.lineItems).length
+      : invoiceForBranching?.lineItems.length ?? 0;
+
+    if (responseDetails) responseDetails.invoiceCheck = `${invoiceForBranching?.invoiceNumber || entry.entityId}: sales-order conversion check completed`;
 
     if (invoiceForBranching?.qbInvoiceTxnId) {
       const diff = parseInvoiceDiffResponse(responseXml);
@@ -1386,6 +1569,7 @@ async function processQbResponse(
       });
 
       if (!diff.found) {
+        if (responseDetails) responseDetails.invoiceCheck = `${invoiceForBranching.invoiceNumber}: ${['0', '1', '500'].includes(diff.statusCode) ? 'NOT FOUND in QB' : 'QUERY ERROR'} (status ${diff.statusCode})`;
         // QB has no record for our TxnID — could be a void on QB's side.
         // Flag as a diff with a clear note; don't keep retrying every cycle.
         await prisma.invoice.update({
@@ -1396,7 +1580,7 @@ async function processQbResponse(
               kind: 'qb_record_missing',
               ourTotal: invoiceForBranching.total ? Number(invoiceForBranching.total) : null,
               theirTotal: null,
-              ourLineCount: invoiceForBranching.lineItems.length,
+              ourLineCount: exportedLineCount,
               theirLineCount: 0,
               statusCode: diff.statusCode,
               statusMessage: diff.statusMessage,
@@ -1414,11 +1598,12 @@ async function processQbResponse(
       } else {
         const ourTotal = invoiceForBranching.total ? Number(invoiceForBranching.total) : 0;
         const theirTotal = diff.qbTotal ?? 0;
-        const ourLineCount = invoiceForBranching.lineItems.length;
+        const ourLineCount = exportedLineCount;
         const theirLineCount = diff.qbLineCount;
         // 1¢ tolerance — float math from Decimal coercion shouldn't trip this.
         const totalsDiverge = Math.abs(ourTotal - theirTotal) > 0.01;
         const linesDiverge = ourLineCount !== theirLineCount;
+        if (responseDetails) responseDetails.invoiceCheck = `${invoiceForBranching.invoiceNumber}: ${diff.qbTotal === null ? 'QB TOTAL UNAVAILABLE' : totalsDiverge || linesDiverge ? 'DIFFERENCE' : 'matches'}; SP $${ourTotal.toFixed(2)} / QB ${diff.qbTotal === null ? 'unavailable' : '$' + theirTotal.toFixed(2)}; lines ${ourLineCount} / ${theirLineCount}`;
 
         if (totalsDiverge || linesDiverge) {
           await prisma.invoice.update({
@@ -1579,6 +1764,7 @@ async function processQbResponse(
     let created = 0;
     let skippedConflict = 0;
     let skippedInactive = 0;
+    let deletedInactive = 0;
     const createdNames: string[] = [];
     const conflicts: string[] = [];
 
@@ -1614,6 +1800,33 @@ async function processQbResponse(
             continue;
           }
           existing = byPart;
+        }
+
+        if (existing && !item.isActive) {
+          // Remove unused catalog numbers. Guard EVERY relation, including
+          // optional SetNull relations: deleting a part must not detach history
+          // or equipment mappings. Referenced parts remain hidden/inactive.
+          const removed = await prisma.product.deleteMany({
+            where: {
+              id: existing.id,
+              assemblyComponents: { none: {} }, componentOf: { none: {} },
+              inventory: { none: {} }, serializedEquipment: { none: {} },
+              ticketLineItems: { none: {} }, ticketAssemblyParts: { none: {} },
+              rentalAgreementItems: { none: {} }, repairOrders: { none: {} },
+              repairOrderParts: { none: {} }, shopWorkOrderItems: { none: {} },
+              invoiceLineItems: { none: {} }, rentalBomPackages: { none: {} },
+              rentalBomItems: { none: {} }, novaraTypeMaps: { none: {} },
+            },
+          }).catch((err: unknown) => {
+            // A new reference can race the relation guards. Keep the part and
+            // still deactivate it rather than leaving it available for use.
+            if ((err as { code?: string })?.code === 'P2003') return { count: 0 };
+            throw err;
+          });
+          if (removed.count) {
+            deletedInactive++;
+            continue;
+          }
         }
 
         // Nothing in Sundog matches this QB item — mint it. QB owns the item
@@ -1655,6 +1868,8 @@ async function processQbResponse(
         if (item.description) updateData.name = item.description;
         if (item.unitOfMeasure) updateData.unitOfMeasure = item.unitOfMeasure;
         if (item.price != null && item.price > 0) updateData.defaultSellPrice = item.price;
+        // Missing/unknown codes preserve the current setting; false is a real update.
+        if (item.isTaxable != null) updateData.isTaxable = item.isTaxable;
 
         // Company-wide renumber: when QB renames an item to a new-scheme
         // 7-digit division-prefixed number, adopt it as our partNumber (QB is
@@ -1698,8 +1913,8 @@ async function processQbResponse(
     }
 
     console.log(
-      `[QBWC] Item sync complete: ${items.length} from QB, ${updated} updated, ${created} created, ` +
-      `${skippedInactive} skipped (inactive in QB, not in Sundog), ${skippedConflict} skipped (mapping conflict)`,
+      `[QBWC] Item sync page complete: ${items.length} from QB, ${updated} updated, ${created} created, ` +
+      `${deletedInactive} deleted (inactive, unused), ${skippedInactive} skipped (inactive in QB, not in Sundog), ${skippedConflict} skipped (mapping conflict)`,
     );
     if (createdNames.length > 0) {
       console.log(
@@ -1709,6 +1924,10 @@ async function processQbResponse(
     if (conflicts.length > 0) {
       console.warn(`[QBWC] Item sync conflicts (left untouched): ${conflicts.join(', ')}`);
     }
+
+    // Intermediate pages leave the queue job sent, and don't increment session
+    // progress. Only the last page completes the catalog pull.
+    if (moreItemPages) return;
 
     await prisma.qbSyncQueue.update({
       where: { id: entry.id },
@@ -2134,7 +2353,9 @@ qbwcRouter.get('/test', ...qbAdminGuard, async (req: Request, res: Response) => 
     ownerId: QBWC_OWNER_ID,
     companyFile: QBWC_COMPANY_FILE || '(whichever file is open in QuickBooks)',
     companyFilePinned: QBWC_COMPANY_FILE.length > 0,
+    lastObservedCompanyFile,
     enabled: QBWC_ENABLED,
+    sandboxScope: sandboxScope ? { invoices: sandboxScope.invoiceIds.length, customers: sandboxScope.companyIds.length } : null,
     autoRun: QBWC_RUN_EVERY_N_MINUTES > 0
       ? `every ${QBWC_RUN_EVERY_N_MINUTES} min`
       : 'manual only (no scheduler in the .qwc)',
@@ -2148,6 +2369,7 @@ qbwcRouter.get('/test', ...qbAdminGuard, async (req: Request, res: Response) => 
 
   // 2. Check queue state
   const queueStats = await prisma.qbSyncQueue.groupBy({
+    where: queueScope,
     by: ['status'],
     _count: true,
   });
@@ -2159,13 +2381,13 @@ qbwcRouter.get('/test', ...qbAdminGuard, async (req: Request, res: Response) => 
   const STUCK_TIMEOUT_MS = 5 * 60 * 1000;
   const stuckCutoff = new Date(Date.now() - STUCK_TIMEOUT_MS);
   const stuckSent = await prisma.qbSyncQueue.count({
-    where: { status: 'sent', sentAt: { lt: stuckCutoff } },
+    where: { ...queueScope, status: 'sent', sentAt: { lt: stuckCutoff } },
   });
   results.queue.stuckSentItems = stuckSent;
 
   // 4. Peek at pending items
   const pending = await prisma.qbSyncQueue.findMany({
-    where: { status: 'pending', retryCount: { lt: MAX_RETRIES } },
+    where: { ...queueScope, status: 'pending', retryCount: { lt: MAX_RETRIES } },
     orderBy: [{ priority: 'asc' }, { createdAt: 'asc' }],
     take: 5,
     select: { id: true, entityType: true, action: true, entityId: true, status: true, retryCount: true, createdAt: true, sentAt: true },

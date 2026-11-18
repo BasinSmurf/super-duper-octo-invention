@@ -1,4 +1,4 @@
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import type { Prisma } from '../db.js';
 import { priceShopCharges } from './shopChargePreview.js';
 import { billingRoute } from './paidAtDrop.js';

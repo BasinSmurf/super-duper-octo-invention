@@ -1,10 +1,8 @@
 /**
- * opsStats.ts — "how much got done" snapshot: tickets closed + $ billed over
- * an arbitrary period. Built for the dashboard's Activity Summary widget, but
- * deliberately a standalone service function (not inline in a route) so the
- * future notifications digest (daily/weekly "N tickets closed, $X billed"
- * email) can call the exact same on-the-fly calculation instead of a second,
- * possibly-drifting implementation. See project_notifications_layer.md.
+ * Activity Summary: closed tickets by service date and QB-accepted invoice
+ * value by invoice date. dollarsBilled retains its API name for compatibility;
+ * drafts, approvals and queued exports without a QB transaction ID are excluded.
+ * The daily operations report separately presents mutually exclusive stages.
  */
 import type { PrismaClient } from '../db.js';
 
@@ -55,7 +53,7 @@ export async function getPeriodActivity(
       where: { status: 'closed', serviceDate: { gte: from, lt: toExclusive } },
     }),
     prisma.invoice.aggregate({
-      where: { status: { not: 'void' }, invoiceDate: { gte: from, lt: toExclusive } },
+      where: { status: { not: 'void' }, OR: [{ qbSalesOrderTxnId: { not: null } }, { qbInvoiceTxnId: { not: null } }], invoiceDate: { gte: from, lt: toExclusive } },
       _sum: { total: true },
     }),
   ]);

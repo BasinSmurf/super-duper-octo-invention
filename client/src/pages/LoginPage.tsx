@@ -1,3 +1,4 @@
+import { CompanyBrand } from '@/components/CompanyBrand'
 import { useState, useEffect, useRef } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
 import { cn } from '@/lib/cn'
@@ -101,12 +102,8 @@ export function LoginPage() {
       <div className="w-full max-w-md bg-white rounded-xl shadow-lg p-8">
         {/* Logo / Header */}
         <div className="text-center mb-8">
-          <img
-            src="/servicepro-logo.png"
-            alt="Service Pro — Remote Ticketing and Management System"
-            className="h-16 mx-auto mb-2"
-          />
-          <p className="text-slate-500 mt-1">Basin Safety Field Service</p>
+          <CompanyBrand className="h-16 max-w-full mx-auto mb-2 object-contain" />
+          <p className="text-slate-500 mt-1">Field Service</p>
         </div>
 
         {/* Error banner */}

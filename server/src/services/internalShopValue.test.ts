@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-vi.mock('../index.js', () => ({ prisma: { shopWorkOrder: { findMany: vi.fn() }, product: { findMany: vi.fn() } } }));
+vi.mock('../db.js', async importOriginal => ({ ...await importOriginal<typeof import('../db.js')>(), ...(() => ({ prisma: { shopWorkOrder: { findMany: vi.fn() }, product: { findMany: vi.fn() } } }))() }));
 vi.mock('../utils/servicePartMap.js', () => ({ getLaborProduct: vi.fn().mockResolvedValue(null), getMileageProduct: vi.fn().mockResolvedValue(null) }));
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { internalShopValue, retailShopItems } from './internalShopValue.js';
 import { buildShopBillingLines, toBillingItem } from './shopBillingLines.js';
 

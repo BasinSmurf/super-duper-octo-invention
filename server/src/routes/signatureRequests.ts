@@ -1,17 +1,20 @@
+import { assertBillingEligible } from '../services/ticketWritePolicy.js';
+import { billingCardLocation, billingLocationSelect, invoiceCardLocations } from '../services/billingCardLocation.js';
 /**
  * signatureRequests.ts — Routes for email-based signature flow.
  *
  * Endpoints:
  *   POST /send                — Send ticket/invoice PDF for signing via email
- *   POST /resend/:id          — Resend a pending signature request
+ *   POST /send also resends an existing pending request.
  *   GET  /                    — List signature requests (holding tank feed)
  *   PATCH /:id/resolve        — Mark as received (billing uploads signed doc)
  *   PATCH /:id/void           — Void a pending request
  */
 
 import { Router, Request, Response } from 'express';
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { AppError } from '../middleware/errorHandler.js';
+import { requireRole } from '../middleware/rbac.js';
 import { createAuditLog } from '../utils/auditLog.js';
 import { sendForSigning } from '../services/sendForSigning.js';
 
@@ -132,6 +135,9 @@ signatureRequestsRouter.get('/', async (req: Request, res: Response, next) => {
       include: {
         ticket: {
           select: {
+            ...billingLocationSelect,
+            locationDisplay: true,
+            fieldAreaName: true,
             id: true,
             ticketNumber: true,
             ticketType: true,
@@ -144,6 +150,10 @@ signatureRequestsRouter.get('/', async (req: Request, res: Response, next) => {
         },
         invoice: {
           select: {
+            billingGroupId: true,
+            shopWorkOrderId: true,
+            rentalAgreementId: true,
+            lineItems: { select: { sourceTicketId: true } },
             id: true,
             invoiceNumber: true,
             status: true,
@@ -157,7 +167,12 @@ signatureRequestsRouter.get('/', async (req: Request, res: Response, next) => {
       },
     });
 
-    res.json({ data: requests, total: requests.length });
+    const locations = await invoiceCardLocations(prisma, requests.flatMap(r => r.invoice ? [r.invoice] : []));
+    const data = requests.map(r => ({
+      ...r,
+      locationName: r.ticket ? billingCardLocation(r.ticket) : r.invoice ? locations.get(r.invoice.id) ?? null : null,
+    }));
+    res.json({ data, total: requests.length });
   } catch (err) {
     next(err);
   }
@@ -165,7 +180,7 @@ signatureRequestsRouter.get('/', async (req: Request, res: Response, next) => {
 
 // ── PATCH /:id/resolve ──────────────────────────────────────────────────────
 // Body: { notes?: string, signedDocumentUrl?: string }
-signatureRequestsRouter.patch('/:id/resolve', async (req: Request, res: Response, next) => {
+signatureRequestsRouter.patch('/:id/resolve', requireRole('billing_ar', 'ar_supervisor', 'platform_admin'), async (req: Request, res: Response, next) => {
   try {
     const { notes, signedDocumentUrl } = req.body;
 
@@ -175,29 +190,39 @@ signatureRequestsRouter.patch('/:id/resolve', async (req: Request, res: Response
     if (!sigReq) throw new AppError(404, 'Signature request not found');
     if (sigReq.status !== 'PENDING') throw new AppError(400, `Cannot resolve — status is ${sigReq.status}`);
 
-    const updated = await prisma.signatureRequest.update({
-      where: { id: sigReq.id },
-      data: {
-        status: 'RECEIVED',
-        resolvedAt: new Date(),
-        resolvedById: req.user!.userId,
-        notes,
-        signedDocumentUrl,
-      },
-    });
-
-    // Transition parent record forward
-    if (updated.ticketId) {
-      await prisma.serviceTicket.update({
-        where: { id: updated.ticketId },
-        data: { signatureStatus: 'RECEIVED', status: 'billing_queue' },
-      });
-    } else if (updated.invoiceId) {
-      await prisma.invoice.update({
-        where: { id: updated.invoiceId },
-        data: { signatureStatus: 'RECEIVED', status: 'queued' },
-      });
+    if (sigReq.ticketId) {
+      if (typeof signedDocumentUrl !== 'string' || !signedDocumentUrl.trim()) throw new AppError(400, 'A signed document is required');
+      const ticket = await prisma.serviceTicket.findUnique({ where: { id: sigReq.ticketId } });
+      if (!ticket || ticket.status !== 'awaiting_signature') throw new AppError(409, 'Ticket is no longer awaiting a signature');
+      await assertBillingEligible(ticket, true);
     }
+    const updated = await prisma.$transaction(async tx => {
+      const resolved = await tx.signatureRequest.update({
+        where: { id: sigReq.id, status: 'PENDING' },
+        data: {
+          status: 'RECEIVED',
+          resolvedAt: new Date(),
+          resolvedById: req.user!.userId,
+          notes,
+          signedDocumentUrl,
+        },
+      });
+
+      // Transition parent record forward
+      if (resolved.ticketId) {
+        await tx.serviceTicket.update({
+          where: { id: resolved.ticketId, status: 'awaiting_signature' },
+          data: { signatureStatus: 'RECEIVED', status: 'billing_queue' },
+        });
+      } else if (resolved.invoiceId) {
+        await tx.invoice.update({
+          where: { id: resolved.invoiceId },
+          data: { signatureStatus: 'RECEIVED', status: 'queued' },
+        });
+      }
+
+      return resolved;
+    });
 
     await createAuditLog({
       userId: req.user!.userId,

@@ -201,8 +201,7 @@ export function PayAtDropPanel({ workOrderId, workOrderNumber, companyId, refres
         </span>
         {data.unitsPending > 0 && (
           <span className="text-[11px] text-amber-700">
-            {data.unitsPending} unit{data.unitsPending === 1 ? '' : 's'} still inside the 48-hour
-            window — the total can still move
+            {data.unitsPending} unit{data.unitsPending === 1 ? '' : 's'} not final — this total includes saved work and may change
           </span>
         )}
       </div>

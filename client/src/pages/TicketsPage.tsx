@@ -6,13 +6,14 @@ import { useSync } from '@/contexts/SyncContext'
 import { db } from '@/lib/db'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/cn'
-import { formatCalendarDateNumeric, todayKey, localDateKey } from '@/lib/dates'
+import { formatCalendarDateNumeric } from '@/lib/dates'
 import { Plus, ClipboardList, CloudOff, ChevronDown, Search, Ban } from 'lucide-react'
 
 interface Ticket {
   id: string
   ticketNumber: string | null
   ticketType: string
+  customData?: { workType?: string } | null
   serviceSubtype: string | null
   status: string
   serviceDate: string
@@ -82,6 +83,7 @@ export function TicketsPage() {
             id: t.id,
             ticketNumber: t.ticketNumber ?? null,
             ticketType: t.ticketType,
+            customData: t.customData,
             serviceSubtype: t.serviceSubtype ?? null,
             status: t.status,
             serviceDate: t.serviceDate,
@@ -105,6 +107,7 @@ export function TicketsPage() {
             id: t.id,
             ticketNumber: t.ticketNumber,
             ticketType: t.ticketType,
+            customData: t.customData,
             serviceSubtype: t.serviceSubtype,
             status: t.status,
             serviceDate: t.serviceDate,
@@ -121,20 +124,21 @@ export function TicketsPage() {
             offset: String(offset),
           })
           if (tab === 'today') {
-            const todayStr = todayKey()
-            params.set('dateFrom', todayStr)
-            params.set('dateTo', todayStr)
+            const start = new Date(); start.setHours(0, 0, 0, 0)
+            const end = new Date(start); end.setDate(end.getDate() + 1)
+            params.set('createdFrom', start.toISOString())
+            params.set('createdTo', end.toISOString())
             params.set('excludeVoid', 'true')
           } else if (tab === 'week') {
             // Calendar week (Sun–Sat) containing today, not a rolling window
             // pinned to "active" tickets from months ago.
             const now = new Date()
             const weekStart = new Date(now)
-            weekStart.setDate(now.getDate() - now.getDay())
+            weekStart.setDate(now.getDate() - now.getDay()); weekStart.setHours(0, 0, 0, 0)
             const weekEnd = new Date(weekStart)
-            weekEnd.setDate(weekStart.getDate() + 6)
-            params.set('dateFrom', localDateKey(weekStart))
-            params.set('dateTo', localDateKey(weekEnd))
+            weekEnd.setDate(weekStart.getDate() + 7)
+            params.set('createdFrom', weekStart.toISOString())
+            params.set('createdTo', weekEnd.toISOString())
             params.set('excludeVoid', 'true')
           }
           if (searchQuery) params.set('search', searchQuery)
@@ -144,6 +148,7 @@ export function TicketsPage() {
             id: t.id,
             ticketNumber: t.ticketNumber,
             ticketType: t.ticketType,
+            customData: t.customData,
             serviceSubtype: t.serviceSubtype,
             status: t.status,
             serviceDate: t.serviceDate,
@@ -276,7 +281,7 @@ export function TicketsPage() {
             tab === 'today' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700',
           )}
         >
-          Today
+          Created Today
         </button>
         <button
           onClick={() => setTab('week')}
@@ -285,7 +290,7 @@ export function TicketsPage() {
             tab === 'week' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700',
           )}
         >
-          This Week
+          Created This Week
         </button>
         <button
           onClick={() => setTab('all')}
@@ -352,7 +357,7 @@ export function TicketsPage() {
         <div className="text-center py-12">
           <ClipboardList className="w-12 h-12 text-slate-300 mx-auto mb-3" />
           <p className="text-slate-500">
-            {tab === 'today' ? 'No tickets for today' : tab === 'week' ? 'No tickets this week' : tab === 'mine' ? 'No dispatched tickets assigned to you' : 'No tickets found'}
+            {tab === 'today' ? 'No tickets created today' : tab === 'week' ? 'No tickets created this week' : tab === 'mine' ? 'No dispatched tickets assigned to you' : 'No tickets found'}
           </p>
         </div>
       ) : (
@@ -385,7 +390,7 @@ export function TicketsPage() {
                 <div className="flex items-start gap-3">
                   <div className="text-right text-sm text-slate-500 shrink-0">
                     <p>{formatCalendarDateNumeric(ticket.serviceDate)}</p>
-                    <p className="text-xs">{ticket.ticketType.replace('_', ' ')}</p>
+                    <p className="text-xs">{({ rental_deploy: 'Deploy', rental_swap: 'Swap', rental_return: 'Return' } as Record<string, string>)[String(ticket.customData?.workType)] || ticket.ticketType.replace('_', ' ')}</p>
                     {ticket._count && ticket._count.lineItems > 0 && (
                       <p className="text-xs text-slate-400">{ticket._count.lineItems} items</p>
                     )}

@@ -19,6 +19,8 @@ interface Company {
   _count: { billingProfiles: number; contacts: number }
 }
 
+const PAGE_SIZE = 50
+
 export function CompaniesPage() {
   const navigate = useNavigate()
   const { user } = useAuth()
@@ -27,25 +29,69 @@ export function CompaniesPage() {
   const [search, setSearch] = useState('')
   const [showInactive, setShowInactive] = useState(false)
   const [loading, setLoading] = useState(true)
+  // The list is paged: `total` is how many match, so a short page never reads
+  // as "that's every customer".
+  const [total, setTotal] = useState(0)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [adding, setAdding] = useState(false)
+  const [newName, setNewName] = useState('')
+  const [addBusy, setAddBusy] = useState(false)
+  const [addError, setAddError] = useState<string | null>(null)
+
+  async function addCustomer() {
+    const name = newName.trim()
+    if (!name) return
+    setAddBusy(true)
+    setAddError(null)
+    try {
+      const created = await api.post<{ id: string }>('/companies', { name, companyType: 'customer' })
+      // Straight to the profile: that is where the rest of the setup lives.
+      navigate(`/companies/${created.id}`)
+    } catch (e: any) {
+      setAddError(e?.message || 'Could not add the customer')
+    } finally {
+      setAddBusy(false)
+    }
+  }
 
   useEffect(() => {
     loadCompanies()
   }, [search, showInactive])
 
+  function fetchPage(offset: number) {
+    const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(offset) })
+    // Default to active-only; the toggle shows all (incl. deactivated) so an
+    // admin can find and reactivate a customer.
+    if (!showInactive) params.set('active', 'true')
+    if (search) params.set('search', search)
+    return api.get<{ data: Company[]; total: number }>(`/companies?${params}`)
+  }
+
   async function loadCompanies() {
     setLoading(true)
     try {
-      const params = new URLSearchParams({ limit: '50' })
-      // Default to active-only; the toggle shows all (incl. deactivated) so an
-      // admin can find and reactivate a customer.
-      if (!showInactive) params.set('active', 'true')
-      if (search) params.set('search', search)
-      const data = await api.get<{ data: Company[] }>(`/companies?${params}`)
+      const data = await fetchPage(0)
       setCompanies(data.data)
+      setTotal(data.total)
     } catch {
       setCompanies([])
+      setTotal(0)
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function loadMore() {
+    setLoadingMore(true)
+    try {
+      const data = await fetchPage(companies.length)
+      // De-dupe by id: a customer added or renamed between pages can shift rows.
+      setCompanies(prev => [...prev, ...data.data.filter(c => !prev.some(p => p.id === c.id))])
+      setTotal(data.total)
+    } catch {
+      // Keep what is already shown; the button stays for a retry.
+    } finally {
+      setLoadingMore(false)
     }
   }
 
@@ -53,11 +99,52 @@ export function CompaniesPage() {
     <div>
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-slate-900">Customers</h1>
-        <button className="flex items-center gap-2 px-4 py-2 bg-blue-800 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium">
-          <Plus className="w-5 h-5" />
-          Add Customer
-        </button>
+        {canManage && (
+          <button
+            onClick={() => { setAdding(a => !a); setNewName(search); setAddError(null) }}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-800 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium"
+          >
+            <Plus className="w-5 h-5" />
+            Add Customer
+          </button>
+        )}
       </div>
+
+      {adding && (
+        <form
+          onSubmit={e => { e.preventDefault(); addCustomer() }}
+          className="mb-4 bg-white rounded-lg border border-slate-200 p-4"
+        >
+          <label className="block text-sm font-medium text-slate-700 mb-1" htmlFor="new-customer-name">
+            Customer name
+          </label>
+          <div className="flex gap-2">
+            <input
+              id="new-customer-name"
+              autoFocus
+              type="text"
+              value={newName}
+              onChange={e => setNewName(e.target.value)}
+              className="flex-1 px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+            />
+            <button
+              type="submit"
+              disabled={addBusy || !newName.trim()}
+              className="px-4 py-2 bg-blue-800 text-white rounded-lg hover:bg-blue-700 font-medium disabled:opacity-50"
+            >
+              {addBusy ? 'Adding…' : 'Add'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setAdding(false)}
+              className="px-4 py-2 border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50 font-medium"
+            >
+              Cancel
+            </button>
+          </div>
+          {addError && <p className="text-sm text-red-600 mt-2">{addError}</p>}
+        </form>
+      )}
 
       {canManage && <CompanyMergePanel onMerged={loadCompanies} />}
 
@@ -123,6 +210,20 @@ export function CompaniesPage() {
               </div>
             </button>
           ))}
+          {companies.length > 0 && (
+            <div className="flex items-center justify-between pt-2 text-sm text-slate-500">
+              <span>Showing {companies.length} of {Math.max(total, companies.length)} customers</span>
+              {companies.length < total && (
+                <button
+                  onClick={loadMore}
+                  disabled={loadingMore}
+                  className="px-4 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 font-medium disabled:opacity-50"
+                >
+                  {loadingMore ? 'Loading…' : `Show ${Math.min(PAGE_SIZE, total - companies.length)} more`}
+                </button>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

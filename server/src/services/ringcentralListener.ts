@@ -10,10 +10,11 @@
  * — an unconfigured channel just means that event's handler no-ops.
  */
 
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { onEvent } from './eventBus.js';
 import { notify, isConfigured } from './ringcentralNotify.js';
 import type { RentalComposition } from './rentalComposition.js';
+import { humanizeCategory } from './shopBoard.js';
 
 /**
  * "What equipment does this job need" — one line, for a "get it ready"
@@ -60,20 +61,59 @@ function humanize(value: string): string {
     .join(' ');
 }
 
+const locationRelations = {
+  field: { select: { name: true } },
+  pad: { select: { name: true } },
+  well: { select: { wellName: true } },
+  facility: { select: { name: true } },
+} as const;
+
+async function locationText(record: {
+  field?: { name: string } | null;
+  pad?: { name: string } | null;
+  well?: { wellName: string | null } | null;
+  facility?: { name: string } | null;
+  workPoint?: { name: string } | null;
+  locationDisplay?: string | null;
+  fieldAreaName?: string | null;
+}, wellIds: unknown): Promise<string> {
+  const ids = Array.isArray(wellIds) ? [...new Set(wellIds.filter((id): id is string => typeof id === 'string' && !!id))] : [];
+  const wells = ids.length ? await prisma.well.findMany({ where: { id: { in: ids } }, select: { id: true, wellName: true } }) : [];
+  const names = [...new Set([record.well?.wellName, ...ids.map(id => wells.find(well => well.id === id)?.wellName)].filter(Boolean))];
+  const parts = [record.field?.name, record.pad?.name, record.facility?.name, ...names, record.workPoint?.name].filter(Boolean);
+  return [...new Set(parts)].join(' > ') || record.locationDisplay || record.fieldAreaName || 'no location set';
+}
+
+function recordLink(kind: 'tickets' | 'rentals', id: string, label: string): string {
+  const base = (process.env.PUBLIC_APP_URL || 'https://service.basinsafetyus.com').replace(/\/+$/, '');
+  return `[${label}](${base}/${kind}/${encodeURIComponent(id)})`;
+}
+
 export function startRingcentralListener(): void {
   onEvent('rental.agreement.created', async (payload) => {
-    if (!isConfigured('dispatch')) return;
+    const channel = 'rentals';
+    if (!await isConfigured(channel)) return;
+    const agreement = await prisma.rentalAgreement.findUnique({
+      where: { id: payload.agreementId },
+      select: { ...locationRelations, wellIds: true, startDate: true },
+    });
+    const location = agreement ? await locationText(agreement, agreement.wellIds) : 'no location set';
     const equipment = summarizeEquipment(payload.composition, payload.items);
+    // startDate is a DATE column (UTC midnight) — format in UTC or it reads a day early.
+    const start = agreement?.startDate
+      ? agreement.startDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
+      : 'not set';
     const text =
       `🆕 **Rental job created** — ${payload.companyName}\n` +
+      `Location: ${location}\n` +
+      `Start: ${start}\n` +
       `${equipment}\n` +
-      `Agreement #${payload.agreementNumber}`;
-    await notify('dispatch', text);
+      recordLink('rentals', payload.agreementId, `Agreement #${payload.agreementNumber}`);
+    await notify(channel, text);
   });
 
   onEvent('ticket.transitioned', async (payload) => {
     if (payload.toStatus !== 'dispatched') return;
-    if (!isConfigured('dispatch')) return;
     const ticket = await prisma.serviceTicket.findUnique({
       where: { id: payload.ticketId },
       select: {
@@ -81,36 +121,44 @@ export function startRingcentralListener(): void {
         ticketType: true,
         locationDisplay: true,
         fieldAreaName: true,
+        division: true,
+        customData: true,
+        ...locationRelations,
+        workPoint: { select: { name: true } },
         company: { select: { name: true } },
       },
     });
     if (!ticket) return;
-    const location = ticket.locationDisplay || ticket.fieldAreaName || 'no location set';
+    const data = ticket.customData as { dispatchNotificationDivision?: string; wellIds?: unknown } | null;
+    const division = data?.dispatchNotificationDivision === 'D3' || data?.dispatchNotificationDivision === 'D4'
+      ? data.dispatchNotificationDivision : ticket.division === 'D3' ? 'D3' : 'D4';
+    const channel = division === 'D3' ? 'dispatch_d3' : 'dispatch';
+    if (!await isConfigured(channel)) return;
+    const location = await locationText(ticket, data?.wellIds);
     const text =
       `🚚 **Field ticket dispatched** — ${ticket.company.name}\n` +
-      `${humanize(ticket.ticketType)} — ${location}\n` +
-      `Ticket #${ticket.ticketNumber}`;
-    await notify('dispatch', text);
+      `${division} · ${humanize(ticket.ticketType)}\n` +
+      `Location: ${location}\n` +
+      recordLink('tickets', payload.ticketId, `Ticket #${ticket.ticketNumber}`);
+    await notify(channel, text);
   });
 
   onEvent('shopwo.intake.created', async (payload) => {
-    if (!isConfigured('intake')) return;
+    if (!await isConfigured('intake')) return;
     const items = payload.itemCount === 1 ? '1 item' : `${payload.itemCount} items`;
+    // "3 × SCBA, 2 × Fire Extinguisher" — biggest group first. Falls back to
+    // the bare item count when the emitter sent no breakdown.
+    const breakdown = [...(payload.categoryCounts ?? [])]
+      .sort((a, b) => b.count - a.count)
+      .map(c => `${c.count} × ${humanizeCategory(c.category)}`)
+      .join(', ');
     const text =
+      (payload.priority === 1 ? `🚨 **!! URGENT !!** 🚨\n` : '') +
       `📥 **Shop intake** — ${payload.companyName}\n` +
-      `${items} dropped off\n` +
+      (breakdown ? `Dropped off: ${breakdown}\n` : `${items} dropped off\n`) +
       `Work Order #${payload.workOrderNumber}`;
     await notify('intake', text);
   });
 
-  const active = [
-    isConfigured('billing') ? 'billing' : null,
-    isConfigured('dispatch') ? 'dispatch' : null,
-    isConfigured('intake') ? 'intake' : null,
-  ].filter(Boolean);
-  console.log(
-    active.length > 0
-      ? `[RingCentral] notifications active for: ${active.join(', ')}`
-      : '[RingCentral] no webhook URLs configured — notifications disabled',
-  );
+  console.log('[RingCentral] notification listener started; destinations managed in Settings');
 }

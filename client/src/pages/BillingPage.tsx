@@ -1,12 +1,17 @@
+import { InvoiceCustomerAttribution } from '@/components/InvoiceCustomerAttribution'
+import { EnverusWarnings } from '@/components/EnverusWarnings'
+import { RebillingReport } from '@/components/RebillingReport'
 import { ShopBillingWaiverButton } from '@/components/ShopBillingWaiverButton'
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/cn'
 import { useAuth } from '@/contexts/AuthContext'
 import { usePermissions } from '@/contexts/PermissionsContext'
 import { hasPermission } from '@/lib/permissions'
-import { formatCalendarDateNumeric, calendarDateKey } from '@/lib/dates'
+import { defaultRentalBillingPeriod } from '@/lib/rentalBillingPeriod'
+import { invoiceListQuery } from '@/lib/invoiceList'
+import { formatCalendarDateNumeric } from '@/lib/dates'
 import { BillingProvenancePill, type BillingObservationLite } from '@/components/BillingProvenancePill'
 import {
   DollarSign,
@@ -34,19 +39,23 @@ import {
   ChevronDown,
   ChevronUp,
   CornerUpLeft,
+  ShieldAlert,
 } from 'lucide-react'
 
-type TabFilter = 'ready' | 'drafts' | 'approved' | 'in_qb' | 'invoiced' | 'enverus' | 'signatures' | 'all'
+type TabFilter = 'ready' | 'drafts' | 'approved' | 'in_qb' | 'invoiced' | 'enverus' | 'signatures' | 'all' | 'rebilling'
 // Ready-tab type filter — mirrors the sections the Ready tab is broken into.
 type ReadyType = 'all' | 'shop' | 'rentals' | 'training' | 'field'
 
 interface Invoice {
+  locationName?: string | null
   id: string
+  qbExportError?: string | null
   invoiceNumber: string
   status: string
   sourceType: string
   companyId: string
   companyName: string
+  qbCustomerOverride?: string | null
   poNumber: string | null
   afeNumber: string | null
   invoiceDate: string
@@ -86,6 +95,7 @@ interface EnverusAlert {
 }
 
 interface EnverusQueueEntry {
+  responsePayload?: string | null
   id: string
   entityType: string
   entityId: string
@@ -112,6 +122,7 @@ interface EnverusQueueStats {
 }
 
 interface BillingStats {
+  statusCounts?: Record<string, number>
   drafts: number
   approved: number
   queued: number
@@ -123,6 +134,7 @@ interface BillingStats {
 }
 
 interface UninvoicedShopWO {
+  locationName?: string | null
   id: string
   workOrderNumber: string
   status: string
@@ -147,6 +159,7 @@ interface UninvoicedTicketGroup {
   month: string | null
   monthLabel: string | null
   tickets: Array<{
+    locationName?: string | null
     id: string
     ticketNumber: string
     ticketType: string
@@ -162,6 +175,7 @@ interface UninvoicedTicketGroup {
 }
 
 interface UninvoicedRental {
+  locationName?: string | null
   id: string
   agreementNumber: string | null
   status: string
@@ -174,7 +188,16 @@ interface UninvoicedRental {
   _count: { items: number }
   lastBilledThrough: string | null
   deployedItemCount: number
+  finalInvoice?: { id: string; invoiceNumber: string } | null
   needsFinalBill: boolean
+  /** Send-for-billing state. `unreleased` / `closed_blocked` only ever reach
+   *  this page for an AR Supervisor who asked to see unsent rentals. */
+  releaseState: 'unreleased' | 'released' | 'closed_blocked' | 'closed_ready' | null
+  releaseBlockers: Array<{ id: string; ticketNumber: string; status: string; serviceDate: string }>
+  billingReleasedThrough: string | null
+  billingReleasedAt: string | null
+  billingReleasedBy?: { id: string; name: string } | null
+  billingReleaseForceReason: string | null
   /** Tickets attached to this rental that are still waiting to be billed
    *  through it. They're deliberately absent from the standalone ticket queue
    *  (double-invoice guard), so this card is where they become visible. */
@@ -189,11 +212,14 @@ interface UninvoicedRental {
 }
 
 interface UninvoicedTrainingTicket {
+  locationName?: string | null
   ticketId: string
   ticketNumber: string
   serviceDate: string
   courseName: string
   bookingCompany: string
+  bookingCompanyId?: string | null
+  billingBasis?: 'per_student' | 'per_class'
   rosterCount: number
   technicianName?: string | null
   createdByName?: string | null
@@ -210,7 +236,7 @@ const STATUS_BADGE: Record<string, { label: string; color: string; icon: any }> 
   draft: { label: 'Draft', color: 'bg-slate-100 text-slate-600', icon: FileText },
   approved: { label: 'Approved', color: 'bg-blue-100 text-blue-700', icon: CheckCircle2 },
   queued: { label: 'QB Queued', color: 'bg-amber-100 text-amber-700', icon: Clock },
-  so_created: { label: 'Sales Order', color: 'bg-purple-100 text-purple-700', icon: Send },
+  so_created: { label: 'QB Accepted · Sales Order', color: 'bg-purple-100 text-purple-700', icon: Send },
   invoiced: { label: 'Invoiced', color: 'bg-green-100 text-green-700', icon: DollarSign },
   sent: { label: 'Sent', color: 'bg-emerald-100 text-emerald-700', icon: Send },
   paid: { label: 'Paid', color: 'bg-emerald-200 text-emerald-800', icon: CheckCircle2 },
@@ -225,10 +251,15 @@ const SOURCE_LABELS: Record<string, string> = {
 }
 
 export function BillingPage() {
+  const [trainingPayers, setTrainingPayers] = useState<Record<string, string>>({})
   const navigate = useNavigate()
   const { user } = useAuth()
   const { can } = usePermissions()
   const canEnverus = hasPermission(user?.role, 'billing:enverus')
+  // AR Supervisor escape hatch: list rentals the field has not sent, to force them.
+  const canForceRelease = can('rentals:force_billing_release')
+  const [showUnreleased, setShowUnreleased] = useState(false)
+  const showUnreleasedRef = useRef(false)
   const [invoices, setInvoices] = useState<Invoice[]>([])
   // Latest mirrored fact per (invoiceNumber, factKey) — one batch fetch for
   // the whole visible list, not one lineage lookup per card. See
@@ -238,11 +269,22 @@ export function BillingPage() {
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<TabFilter>('ready')
   const [search, setSearch] = useState('')
-  const [readyType, setReadyType] = useState<ReadyType>('all')
+  // `/billing?tab=rentals` (the rental "final bill" link and the dashboard
+  // unbilled-rentals banner) opens the Ready queue already narrowed to rentals.
+  const [readyType, setReadyType] = useState<ReadyType>(() =>
+    new URLSearchParams(window.location.search).get('tab') === 'rentals' ? 'rentals' : 'all')
+  const [invoiceTotal, setInvoiceTotal] = useState(0)
+  const [invoiceOffset, setInvoiceOffset] = useState(0)
+  const [invoiceListLoading, setInvoiceListLoading] = useState(false)
+  const [invoiceListError, setInvoiceListError] = useState(false)
+  const invoiceRequest = useRef(0)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
   const [collapsedGroupKeys, setCollapsedGroupKeys] = useState<Set<string>>(new Set())
-  // Return-for-review modal target (a single billing-queue ticket).
-  const [returnModal, setReturnModal] = useState<{ id: string; ticketNumber: string } | null>(null)
+  // Kick-back modal target: one billing-queue ticket, or every ticket in a
+  // Ready group. `key` is the actionLoading key for the button that opened it.
+  // `invoice` is set when the ticket is being taken off a draft invoice rather
+  // than out of the Ready queue.
+  const [returnModal, setReturnModal] = useState<{ key: string; label: string; tickets: { id: string; ticketNumber: string }[]; invoice?: { id: string; invoiceNumber: string } } | null>(null)
   const [returnNote, setReturnNote] = useState('')
 
   // Uninvoiced items
@@ -254,6 +296,7 @@ export function BillingPage() {
   // section reads as "couldn't load" rather than "nothing to bill".
   const [loadErrors, setLoadErrors] = useState<string[]>([])
   const [rentalPeriods, setRentalPeriods] = useState<Record<string, { start: string; end: string }>>({})
+  const [rentalPreview, setRentalPreview] = useState<{ id: string; start: string; end: string; data: { periodStart: string; periodEnd: string; days: { total: number; paused: number; manned: number; unmanned: number }; attendanceBased: boolean; subtotal: number; taxAmount: number; total: number; lineItems: { description: string; quantity: number; unitOfMeasure: string; rate: number; amount: number }[]; rateChanges: { effectiveDate: string; manned: number; unmanned: number }[]; equipment: { serial: string; deployed: string; returned: string | null; replacesItemId: string | null }[]; lateMannedDays?: { date: string; ticketNumbers: string[]; billedOn: string; difference: number }[] } } | null>(null)
 
   // Enverus alerts & queue
   const [enverusAlerts, setEnverusAlerts] = useState<EnverusAlert | null>(null)
@@ -293,9 +336,42 @@ export function BillingPage() {
   const [sigActionLoading, setSigActionLoading] = useState<string | null>(null)
 
 
+  async function loadInvoicePage(append = false) {
+    if (tab === 'ready' || tab === 'enverus' || tab === 'signatures' || tab === 'rebilling') return
+    const request = ++invoiceRequest.current
+    const offset = append ? invoiceOffset : 0
+    setInvoiceListLoading(true)
+    setInvoiceListError(false)
+    try {
+      const result = await api.get<{ data: Invoice[]; total: number }>(invoiceListQuery(tab, search, offset))
+      if (request !== invoiceRequest.current) return
+      setInvoices(previous => append ? [...previous, ...result.data.filter(row => !previous.some(i => i.id === row.id))] : result.data)
+      setInvoiceTotal(result.total)
+      setInvoiceOffset(offset + result.data.length)
+      const docNumbers = result.data.map(i => i.invoiceNumber).filter(Boolean)
+      if (docNumbers.length) {
+        api.get<Record<string, Record<string, Omit<BillingObservationLite, 'factKey'>>>>(
+          `/billing/observations/latest?docNumbers=${docNumbers.map(encodeURIComponent).join(',')}`,
+        ).then(rows => { if (request === invoiceRequest.current) setLatestObservations(previous => append ? { ...previous, ...rows } : rows) }).catch(() => {})
+      }
+    } catch {
+      if (request === invoiceRequest.current) setInvoiceListError(true)
+    } finally {
+      if (request === invoiceRequest.current) setInvoiceListLoading(false)
+    }
+  }
+
+  useEffect(() => { loadData() }, [])
   useEffect(() => {
-    loadData()
-  }, [])
+    ++invoiceRequest.current
+    setInvoices([])
+    setLatestObservations({})
+    setInvoiceTotal(0)
+    setInvoiceOffset(0)
+    setInvoiceListLoading(true)
+    const timer = setTimeout(() => { void loadInvoicePage() }, 200)
+    return () => { clearTimeout(timer); ++invoiceRequest.current }
+  }, [tab, search])
 
   const loadEnverusData = useCallback(async () => {
     if (!canEnverus) return
@@ -319,12 +395,12 @@ export function BillingPage() {
       // reading "All caught up!" while real work sat unbilled. A queue that can't
       // load must not be able to hide the other five.
       const settled = await Promise.allSettled([
-        api.get<{ data: Invoice[]; total: number }>('/invoices?limit=200'),
+        loadInvoicePage(),
         api.get<BillingStats>('/invoices/stats'),
         api.get<{ data: UninvoicedShopWO[] }>('/invoices/uninvoiced/shop-wos'),
         api.get<{ data: UninvoicedTicketGroup[] }>('/invoices/uninvoiced/tickets'),
         api.get<{ data: UninvoicedTrainingTicket[] }>('/invoices/uninvoiced/training-tickets'),
-        api.get<{ data: UninvoicedRental[] }>('/invoices/uninvoiced/rentals'),
+        api.get<{ data: UninvoicedRental[] }>(`/invoices/uninvoiced/rentals${showUnreleasedRef.current ? '?includeUnreleased=1' : ''}`),
       ])
       const failedQueues: string[] = []
       const QUEUE_LABELS = ['Invoices', 'Stats', 'Shop WOs', 'Tickets', 'Training', 'Rentals']
@@ -337,57 +413,22 @@ export function BillingPage() {
       setLoadErrors(failedQueues)
       const valueOf = <T,>(i: number): T | undefined =>
         settled[i]!.status === 'fulfilled' ? ((settled[i] as PromiseFulfilledResult<T>).value) : undefined
-      const invResult = valueOf<{ data: Invoice[]; total: number }>(0)
       const statsResult = valueOf<BillingStats>(1)
       const woResult = valueOf<{ data: UninvoicedShopWO[] }>(2)
       const ticketResult = valueOf<{ data: UninvoicedTicketGroup[] }>(3)
       const trainingResult = valueOf<{ data: UninvoicedTrainingTicket[] }>(4)
       const rentalResult = valueOf<{ data: UninvoicedRental[] }>(5)
-      if (invResult?.data) {
-        setInvoices(invResult.data)
-        const docNumbers = invResult.data.map((inv) => inv.invoiceNumber).filter(Boolean)
-        if (docNumbers.length > 0) {
-          api.get<Record<string, Record<string, Omit<BillingObservationLite, 'factKey'>>>>(
-            `/billing/observations/latest?docNumbers=${docNumbers.map(encodeURIComponent).join(',')}`,
-          ).then(setLatestObservations).catch(() => setLatestObservations({}))
-        }
-      }
       if (statsResult) setStats(statsResult)
       if (woResult?.data) setUninvoicedWOs(woResult.data)
       if (ticketResult?.data) setUninvoicedTicketGroups(ticketResult.data)
       if (trainingResult?.data) setUninvoicedTraining(trainingResult.data)
       if (rentalResult?.data) {
         setUninvoicedRentals(rentalResult.data)
-        // Pre-populate billing periods.
-        //  - Active rentals: default to current calendar month
-        //  - Completed rentals (final bill): default end to the rental's
-        //    endDate, start to the day after lastBilledThrough (or rental
-        //    startDate if never billed)
-        const now = new Date()
-        const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
-        const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0)
-        const monthEnd = `${lastDay.getFullYear()}-${String(lastDay.getMonth() + 1).padStart(2, '0')}-${String(lastDay.getDate()).padStart(2, '0')}`
-        // Rental start/end are DATE-ONLY columns, so they arrive as UTC
-        // midnight ("2026-09-02T00:00:00.000Z"). calendarDateKey reads them
-        // back in UTC; the local-getter version this replaced shifted the whole
-        // window a day earlier west of Greenwich, pre-filling a 09-02→09-04
-        // rental as 09-01→09-03. AR clicking Generate without touching the
-        // dates then billed a day short AND left lastBilledThrough < endDate,
-        // so the rental never cleared "needs final bill" — bill it, and it
-        // doesn't go away.
+        // Catch up one calendar month at a time, starting after the last invoice.
         const periods: Record<string, { start: string; end: string }> = {}
         for (const r of rentalResult.data) {
-          if (r.needsFinalBill && r.endDate) {
-            const startBase = r.lastBilledThrough
-              ? new Date(new Date(r.lastBilledThrough).getTime() + 86400000)
-              : new Date(r.startDate)
-            periods[r.id] = {
-              start: calendarDateKey(startBase),
-              end: calendarDateKey(r.endDate),
-            }
-          } else {
-            periods[r.id] = { start: monthStart, end: monthEnd }
-          }
+          periods[r.id] = defaultRentalBillingPeriod({ ...r, endDate: r.needsFinalBill ? r.endDate : null,
+            releasedThrough: r.releaseState === 'released' ? r.billingReleasedThrough : null })
         }
         setRentalPeriods(periods)
       }
@@ -400,42 +441,8 @@ export function BillingPage() {
     loadEnverusData()
   }
 
-  const filtered = useMemo(() => {
-    let list = invoices
-
-    switch (tab) {
-      case 'ready':
-        return [] // handled separately
-      case 'drafts':
-        list = list.filter(i => i.status === 'draft')
-        break
-      case 'approved':
-        list = list.filter(i => i.status === 'approved' || i.status === 'queued' || i.status === 'awaiting_signature')
-        break
-      case 'in_qb':
-        list = list.filter(i => i.status === 'so_created')
-        break
-      case 'invoiced':
-        list = list.filter(i => i.status === 'invoiced' || i.status === 'sent' || i.status === 'paid')
-        break
-    }
-
-    if (search.trim()) {
-      const q = search.trim().toLowerCase()
-      list = list.filter(i =>
-        i.invoiceNumber?.toLowerCase().includes(q) ||
-        i.companyName?.toLowerCase().includes(q) ||
-        i.poNumber?.toLowerCase().includes(q) ||
-        i.qbSalesOrderNumber?.toLowerCase().includes(q) ||
-        i.qbInvoiceNumber?.toLowerCase().includes(q) ||
-        i.createdBy?.name?.toLowerCase().includes(q)
-      )
-    }
-
-    return list.sort((a, b) =>
-      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    )
-  }, [invoices, tab, search])
+  // The server filters the complete collection before applying pagination.
+  const filtered = invoices
 
   // Ready-tab lists with the search box applied. The Type dropdown gates which
   // sections render; search narrows the items within them.
@@ -507,10 +514,11 @@ export function BillingPage() {
     : 'Tickets in Billing Queue'
 
   const readyCount = uninvoicedWOs.length + uninvoicedTicketGroups.reduce((sum, g) => sum + g.tickets.length, 0) + uninvoicedTraining.length + uninvoicedRentals.length
-  const draftCount = invoices.filter(i => i.status === 'draft').length
-  const approvedCount = invoices.filter(i => i.status === 'approved' || i.status === 'queued' || i.status === 'awaiting_signature').length
-  const inQbCount = invoices.filter(i => i.status === 'so_created').length
-  const invoicedCount = invoices.filter(i => i.status === 'invoiced' || i.status === 'sent' || i.status === 'paid').length
+  const counts = stats?.statusCounts || {}
+  const draftCount = counts.draft || 0
+  const approvedCount = (counts.approved || 0) + (counts.awaiting_signature || 0)
+  const inQbCount = (counts.so_created || 0) + (counts.queued || 0)
+  const invoicedCount = (counts.invoiced || 0) + (counts.sent || 0) + (counts.paid || 0)
 
   const enverusIssueCount = enverusAlerts?.totalIssues || 0
 
@@ -518,11 +526,12 @@ export function BillingPage() {
     { key: 'ready', label: 'Ready', count: readyCount },
     { key: 'drafts', label: 'Drafts', count: draftCount },
     { key: 'approved', label: 'Approved', count: approvedCount },
-    { key: 'in_qb', label: 'In QB', count: inQbCount },
+    { key: 'in_qb', label: 'QB Pipeline', count: inQbCount },
     { key: 'invoiced', label: 'Invoiced', count: invoicedCount },
     { key: 'signatures' as TabFilter, label: 'Signatures', count: signatureRequests.length, alert: signatureRequests.length > 0 },
     ...(canEnverus ? [{ key: 'enverus' as TabFilter, label: 'Enverus', count: enverusIssueCount, alert: enverusIssueCount > 0 }] : []),
-    { key: 'all', label: 'All', count: invoices.length },
+    { key: 'all', label: 'All', count: Object.values(counts).reduce((sum, count) => sum + count, 0) },
+    { key: 'rebilling', label: 'Tier 1 / rebilling', count: 0 },
   ]
 
   // Load Enverus queue detail when switching to the Enverus tab
@@ -836,29 +845,43 @@ export function BillingPage() {
     try {
       await api.post('/invoices/generate/from-shop-wo', { shopWorkOrderId: woId })
       await loadData()
+      setTab('drafts')
     } catch (err: any) {
       alert(err?.message || 'Failed to generate invoice')
     }
     setActionLoading(null)
   }
 
-  // Return-for-review: bounce a ticket from the Ready queue back to Approvals
+  // Kick back: bounce tickets from the Ready queue back to Approvals
   // (supervisor_review) with a note. Captured in a small modal.
+  // One call per ticket through the single-transition route on purpose —
+  // /tickets/bulk-transition doesn't record the returnedForReview note that
+  // the Approvals dashboard shows.
   async function handleReturnForReview() {
     if (!returnModal) return
-    setActionLoading(`return-${returnModal.id}`)
-    try {
-      await api.post(`/tickets/${returnModal.id}/transition`, {
-        targetStatus: 'supervisor_review',
-        reason: returnNote.trim(),
-      })
-      setReturnModal(null)
-      setReturnNote('')
-      await loadData()
-    } catch (err: any) {
-      alert(err?.message || 'Failed to return ticket for review')
+    const reason = returnNote.trim()
+    setActionLoading(returnModal.key)
+    const draft = returnModal.invoice
+    const settled = await Promise.allSettled(returnModal.tickets.map(t => draft
+      // Off a draft: the server removes the ticket's lines and moves it in one step.
+      ? api.patch(`/invoices/${draft.id}/kick-back-ticket`, { ticketId: t.id, reason })
+      : api.post(`/tickets/${t.id}/transition`, { targetStatus: 'supervisor_review', reason }),
+    ))
+    const failures = settled.flatMap((r, i) => r.status === 'rejected'
+      ? [`${returnModal.tickets[i]!.ticketNumber}: ${(r.reason as any)?.message || 'failed'}`]
+      : [])
+    if (failures.length) {
+      alert(`Kicked back ${settled.length - failures.length} of ${settled.length}. Not kicked back:\n${failures.join('\n')}`)
     }
+    setReturnModal(null)
+    setReturnNote('')
+    await loadData()
     setActionLoading(null)
+  }
+
+  function openKickBack(key: string, label: string, tickets: { id: string; ticketNumber: string }[], invoice?: { id: string; invoiceNumber: string }) {
+    setReturnModal({ key, label, tickets, invoice })
+    setReturnNote('')
   }
 
   async function handleGenerateFromTickets(companyId: string, ticketIds: string[], loadingKey?: string) {
@@ -866,6 +889,7 @@ export function BillingPage() {
     try {
       await api.post('/invoices/generate/from-tickets', { companyId, ticketIds })
       await loadData()
+      setTab('drafts')
     } catch (err: any) {
       alert(err?.message || 'Failed to generate invoice')
     }
@@ -875,15 +899,41 @@ export function BillingPage() {
   async function handleGenerateFromTraining(ticketId: string) {
     setActionLoading(ticketId)
     try {
-      await api.post<{ count: number }>('/invoices/generate/from-training-ticket', { ticketId })
+      await api.post<{ count: number }>('/invoices/generate/from-training-ticket', { ticketId, billingCompanyId: trainingPayers[ticketId] || undefined })
       await loadData()
+      setTab('drafts')
     } catch (err: any) {
       alert(err?.message || 'Failed to generate training invoices')
     }
     setActionLoading(null)
   }
 
-  async function handleGenerateFromRental(rentalId: string) {
+  // AR Supervisor: put a rental in the queue without the field sending it.
+  // Skips the ticket-approval gate, so the server requires and records a reason.
+  async function handleForceRelease(rental: UninvoicedRental) {
+    const waiting = rental.releaseBlockers.length
+    const reason = prompt(
+      `Force ${rental.agreementNumber || 'this rental'} into billing without the field sending it?`
+      + (waiting ? `\n\n${waiting} ticket${waiting === 1 ? ' is' : 's are'} not approved yet and will NOT bill on this invoice.` : '')
+      + '\n\nReason (required, recorded on the rental):',
+    )
+    if (!reason?.trim()) return
+    setActionLoading(rental.id)
+    try {
+      const res = await api.post<{ results: { success: boolean; error?: string }[] }>('/rentals/billing-release', {
+        ids: [rental.id], force: true, reason: reason.trim(),
+      })
+      const failed = res.results.find(r => !r.success)
+      if (failed) alert(failed.error || 'Failed to force this rental into billing')
+      await loadData()
+    } catch (err: any) {
+      alert(err?.message || 'Failed to force this rental into billing')
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
+  async function handleGenerateFromRental(rentalId: string, preview = false) {
     const period = rentalPeriods[rentalId]
     if (!period?.start || !period?.end) {
       alert('Set a billing period first')
@@ -891,12 +941,14 @@ export function BillingPage() {
     }
     setActionLoading(rentalId)
     try {
-      await api.post('/invoices/generate/from-rental', {
+      const result = await api.post<NonNullable<typeof rentalPreview>['data']>('/invoices/generate/from-rental', {
         rentalAgreementId: rentalId,
         periodStart: period.start,
         periodEnd: period.end,
+        preview,
       })
-      await loadData()
+      if (preview) setRentalPreview({ id: rentalId, start: period.start, end: period.end, data: result })
+      else { setRentalPreview(null); await loadData(); setTab('drafts') }
     } catch (err: any) {
       alert(err?.message || 'Failed to generate rental invoice')
     }
@@ -925,12 +977,22 @@ export function BillingPage() {
     setActionLoading(null)
   }
 
+  // Approved → back to draft for editing. Draft → the server voids the draft
+  // and kicks its tickets back to the Approvals dashboard with the note.
   async function handleReject(invoice: Invoice) {
-    const reason = prompt('Rejection reason (optional):')
+    const isDraft = invoice.status === 'draft'
+    const reason = prompt(isDraft
+      ? `Reject ${invoice.invoiceNumber}: this voids the draft and sends its tickets back to the Approvals dashboard.\n\nNote for the reviewer (required):`
+      : `Send ${invoice.invoiceNumber} back to draft for editing. Its tickets stay on the draft.\n\nReason (optional):`)
     if (reason === null) return
+    if (isDraft && !reason.trim()) {
+      alert('A note for the reviewer is required.')
+      return
+    }
     setActionLoading(invoice.id)
     try {
-      await api.patch(`/invoices/${invoice.id}/reject`, { reason })
+      const result = await api.patch<{ warnings?: string[] }>(`/invoices/${invoice.id}/reject`, { reason })
+      if (result?.warnings?.length) alert(result.warnings.join('\n'))
       await loadData()
     } catch (err: any) {
       alert(err?.message || 'Failed to reject')
@@ -1116,7 +1178,7 @@ export function BillingPage() {
           type="text"
           value={search}
           onChange={e => setSearch(e.target.value)}
-          placeholder={tab === 'ready' ? 'Search by customer, WO#, ticket#, PO, tech, created by...' : 'Search by invoice#, customer, PO, SO#, created by...'}
+          placeholder={tab === 'rebilling' ? 'Search original customer or QB billed customer…' : tab === 'ready' ? 'Search by customer, WO#, ticket#, PO, tech, created by...' : 'Search by invoice#, customer, QB billed customer, PO, SO#, created by...'}
           className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
         />
       </div>
@@ -1177,6 +1239,21 @@ export function BillingPage() {
                 <option value="training">Training</option>
                 <option value="field">Field Tickets</option>
               </select>
+              {canForceRelease && (
+                <label className="flex items-center gap-2 text-sm text-slate-600 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={showUnreleased}
+                    onChange={e => {
+                      showUnreleasedRef.current = e.target.checked
+                      setShowUnreleased(e.target.checked)
+                      void loadData()
+                    }}
+                    className="w-4 h-4 rounded border-slate-300"
+                  />
+                  Show rentals the field has not sent
+                </label>
+              )}
             </div>
 
             {/* Uninvoiced Shop WOs */}
@@ -1202,6 +1279,7 @@ export function BillingPage() {
                         </span>
                       </div>
                       <p className="text-sm text-slate-600">{wo.company.name}</p>
+                      {wo.locationName && <p className="text-sm text-slate-600">{wo.locationName}</p>}
                       <div className="flex items-center gap-3 text-xs text-slate-400 mt-1">
                         {wo.completedDate && <span>Completed {formatCalendarDateNumeric(wo.completedDate)}</span>}
                         {wo.poNumber && <span>PO: {wo.poNumber}</span>}
@@ -1231,6 +1309,8 @@ export function BillingPage() {
                   {readyLists.rentals.map(rental => {
                     const period = rentalPeriods[rental.id] || { start: '', end: '' }
                     const isFinal = rental.needsFinalBill
+                    // Only present when an AR Supervisor asked for unsent rentals.
+                    const notSent = rental.releaseState === 'unreleased' || rental.releaseState === 'closed_blocked'
                     return (
                       <div
                         key={rental.id}
@@ -1259,6 +1339,7 @@ export function BillingPage() {
                           </div>
                         </div>
                         <p className="text-sm text-slate-600">{rental.company.name}</p>
+                        {rental.locationName && <p className="text-sm text-slate-600">{rental.locationName}</p>}
                         <div className="flex items-center gap-3 text-xs text-slate-400 mt-1 flex-wrap">
                           <span>{rental.deployedItemCount} deployed / {rental._count.items} total</span>
                           {rental.poNumber && <span>PO: {rental.poNumber}</span>}
@@ -1278,6 +1359,30 @@ export function BillingPage() {
                           <p className="text-xs text-amber-700 mt-1">
                             Never billed — generate the only invoice for this rental.
                           </p>
+                        )}
+                        {rental.releaseState === 'released' && rental.billingReleasedThrough && (
+                          <p className="text-xs text-slate-500 mt-1">
+                            Sent for billing through {formatCalendarDateNumeric(rental.billingReleasedThrough)}
+                            {rental.billingReleasedBy ? ` by ${rental.billingReleasedBy.name}` : ' at cutover'}
+                            {rental.billingReleaseForceReason && <span className="text-amber-700 font-medium"> · forced: {rental.billingReleaseForceReason}</span>}
+                          </p>
+                        )}
+                        {rental.releaseState === 'closed_ready' && rental.billingReleaseForceReason && (
+                          <p className="text-xs text-amber-700 font-medium mt-1">Forced into billing: {rental.billingReleaseForceReason}</p>
+                        )}
+                        {notSent && (
+                          <div className="mt-2 rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
+                            <p className="font-medium">
+                              {rental.releaseState === 'closed_blocked'
+                                ? 'Closed, but not in the billing queue yet: tickets still need supervisor approval.'
+                                : 'Not sent for billing by the field.'}
+                            </p>
+                            {rental.releaseBlockers.length > 0 && (
+                              <p className="mt-1">
+                                Not approved: {rental.releaseBlockers.map(b => b.ticketNumber).join(', ')}. These will not bill until a supervisor approves them.
+                              </p>
+                            )}
+                          </div>
                         )}
 
                         {/* Tickets riding this rental. Without this they show
@@ -1314,6 +1419,11 @@ export function BillingPage() {
                           </div>
                         )}
 
+                        {rental.finalInvoice ? <div className="mt-3 rounded border border-amber-300 bg-amber-50 p-3 text-sm">
+                          <p className="font-medium">Final invoice {rental.finalInvoice.invoiceNumber} already exists.</p>
+                          <p className="mt-1">Review these late charges with the final invoice. Correct or void and replace it as needed; do not generate another final.</p>
+                          <button onClick={() => navigate(`/billing/${rental.finalInvoice!.id}`)} className="mt-2 text-blue-700 underline">Review final invoice</button>
+                        </div> : <>
                         {/* Period pickers */}
                         <div className="flex items-center gap-2 mt-3">
                           <div className="flex-1">
@@ -1342,6 +1452,27 @@ export function BillingPage() {
                           </div>
                         </div>
 
+                        <button className="mt-3 mr-3 px-3 py-1.5 border border-purple-300 text-purple-800 rounded-lg text-xs" disabled={actionLoading === rental.id} onClick={() => handleGenerateFromRental(rental.id, true)}>Preview billing</button>
+                        {rentalPreview?.id === rental.id && rentalPreview.start === period.start && rentalPreview.end === period.end && <div className="mt-3 bg-purple-50 border rounded p-3 text-xs space-y-2">
+                          <p className="font-semibold">Billing preview · {rentalPreview.data.periodStart} through {rentalPreview.data.periodEnd}</p>
+                          <p>{rentalPreview.data.days.total - rentalPreview.data.days.paused} active days · {rentalPreview.data.days.paused} paused days{rentalPreview.data.attendanceBased ? ` · ${rentalPreview.data.days.manned} manned / ${rentalPreview.data.days.unmanned} unmanned days` : ''}</p>
+                          <div className="overflow-x-auto"><table className="w-full text-left"><thead><tr><th>Charge</th><th>Quantity</th><th>Effective rate</th><th>Amount</th></tr></thead><tbody>{rentalPreview.data.lineItems.map((line, i) => <tr key={i}><td className="py-1 pr-2 whitespace-pre-line">{line.description}</td><td>{line.quantity} {line.unitOfMeasure}</td><td>${line.rate.toFixed(2)}</td><td>${line.amount.toFixed(2)}</td></tr>)}</tbody></table></div>
+                          {(rentalPreview.data.lateMannedDays ?? []).map(late => <p key={late.date} className="rounded border border-amber-300 bg-amber-50 p-2 text-amber-900">{late.date} was billed unmanned on {late.billedOn}; manned ticket {late.ticketNumbers.join(', ')} arrived late. A $0 adjustment line is added at ${late.difference.toFixed(2)}/day — set its quantity to 1 on the draft to bill the difference.</p>)}
+                          {rentalPreview.data.rateChanges.map(change => <p key={change.effectiveDate}>Rate change {change.effectiveDate}: manned ${change.manned}, unmanned ${change.unmanned}</p>)}
+                          {rentalPreview.data.equipment.map((item, i) => <p key={i}>{item.serial}: deployed {item.deployed.slice(0, 10)}{item.returned ? ` · picked up ${item.returned.slice(0, 10)}` : ' · still deployed'}{item.replacesItemId ? ' · replacement/swap' : ''}</p>)}
+                          <p>Subtotal: ${rentalPreview.data.subtotal.toFixed(2)}</p><p>Sales tax: ${rentalPreview.data.taxAmount.toFixed(2)}</p><p className="font-semibold">Total including tax: ${rentalPreview.data.total.toFixed(2)}</p>
+                          <p>Preview only. Generate recalculates using current records. Explicit $0 rates mean included/free; missing prices must be entered. Delivery/pickup placeholders need actual quantities before approval.</p>
+                        </div>}
+                        {notSent ? (
+                          <button
+                            onClick={() => handleForceRelease(rental)}
+                            disabled={actionLoading === rental.id}
+                            className="mt-3 flex items-center gap-1.5 px-3 py-1.5 text-white rounded-lg text-xs font-medium disabled:opacity-50 bg-red-700 hover:bg-red-600"
+                          >
+                            {actionLoading === rental.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ShieldAlert className="w-3.5 h-3.5" />}
+                            Force into billing
+                          </button>
+                        ) : (
                         <button
                           onClick={() => handleGenerateFromRental(rental.id)}
                           disabled={actionLoading === rental.id}
@@ -1355,6 +1486,8 @@ export function BillingPage() {
                           {actionLoading === rental.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
                           {isFinal ? 'Generate Final Invoice' : 'Generate Invoice'}
                         </button>
+                        )}
+                        </>}
                       </div>
                     )
                   })}
@@ -1385,7 +1518,11 @@ export function BillingPage() {
                         </span>
                       </div>
                       <p className="text-sm text-slate-600">
-                        {tt.bookingCompany} &middot; {formatCalendarDateNumeric(tt.serviceDate)}
+                        {tt.bookingCompany}
+                      </p>
+                      {tt.locationName && <p className="text-sm text-slate-600">{tt.locationName}</p>}
+                      <p className="text-sm text-slate-600">
+                        {formatCalendarDateNumeric(tt.serviceDate)}
                         &middot; {tt.rosterCount} trainee{tt.rosterCount !== 1 ? 's' : ''}
                       </p>
                       {tt.employers.length > 0 && (
@@ -1405,14 +1542,41 @@ export function BillingPage() {
                           ))}
                         </div>
                       )}
+                      {tt.billingBasis === 'per_class' && (
+                        <label className="mt-3 block text-sm text-slate-700">
+                          Customer paying the class fee
+                          <select aria-label={`Class fee customer for ${tt.ticketNumber}`} value={trainingPayers[tt.ticketId] || ''}
+                            onChange={e => setTrainingPayers(current => ({ ...current, [tt.ticketId]: e.target.value }))}
+                            className="ml-2 border rounded px-2 py-1">
+                            <option value="">Select customer</option>
+                            {tt.bookingCompanyId && !tt.employers.some(e => e.employerCompanyId === tt.bookingCompanyId) && <option value={tt.bookingCompanyId}>{tt.bookingCompany}</option>}
+                            {tt.employers.filter(e => e.employerCompanyId).map(e => <option key={e.employerCompanyId} value={e.employerCompanyId!}>{e.employerName}</option>)}
+                          </select>
+                          <span className="block text-xs text-slate-500">One class fee goes to this customer. Each employer receives its own no-charge attendee list.</span>
+                        </label>
+                      )}
+                      <div className="mt-3 flex items-center gap-2 flex-wrap">
                       <button
                         onClick={() => handleGenerateFromTraining(tt.ticketId)}
-                        disabled={actionLoading === tt.ticketId}
-                        className="mt-3 flex items-center gap-1.5 px-3 py-1.5 bg-indigo-700 text-white rounded-lg text-xs font-medium hover:bg-indigo-600 disabled:opacity-50"
+                        disabled={actionLoading === tt.ticketId || (tt.billingBasis === 'per_class' && !trainingPayers[tt.ticketId])}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-700 text-white rounded-lg text-xs font-medium hover:bg-indigo-600 disabled:opacity-50"
                       >
                         {actionLoading === tt.ticketId ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
-                        Generate Invoice{tt.employers.length > 1 ? `s (${tt.employers.length})` : ''}
+                        Generate Invoice{(() => {
+                          const count = tt.employers.length + (tt.billingBasis === 'per_class' && trainingPayers[tt.ticketId] && !tt.employers.some(e => e.employerCompanyId === trainingPayers[tt.ticketId]) ? 1 : 0)
+                          return count > 1 ? `s (${count})` : ''
+                        })()}
                       </button>
+                      <button
+                        onClick={() => openKickBack(`return-${tt.ticketId}`, tt.ticketNumber, [{ id: tt.ticketId, ticketNumber: tt.ticketNumber }])}
+                        disabled={actionLoading === `return-${tt.ticketId}`}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-orange-700 bg-orange-50 border border-orange-200 rounded-lg text-xs font-medium hover:bg-orange-100 disabled:opacity-50"
+                        title="Send back to the Approvals dashboard with a note"
+                      >
+                        {actionLoading === `return-${tt.ticketId}` ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CornerUpLeft className="w-3.5 h-3.5" />}
+                        Kick Back
+                      </button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -1430,6 +1594,7 @@ export function BillingPage() {
                   {visibleGroups.map(group => {
                     const isExpanded = !collapsedGroupKeys.has(group.groupKey)
                     const groupTotal = group.tickets.reduce((sum, t) => sum + (t.total ? parseFloat(String(t.total)) : 0), 0)
+                    const locationName = [...new Set(group.tickets.map(t => t.locationName).filter(Boolean))].join(', ') || group.field?.name
 
                     return (
                       <div key={group.groupKey} className="bg-white rounded-lg border border-slate-200 overflow-hidden">
@@ -1446,14 +1611,12 @@ export function BillingPage() {
                         >
                           <div className="flex-1 min-w-0">
                             <p className="font-medium text-slate-900 truncate">{group.company.name}</p>
+                            {locationName && <p className="font-medium text-slate-900">{locationName}</p>}
                             <div className="flex items-center gap-2 mt-0.5">
-                              {group.field && (
-                                <span className="text-xs text-slate-500">{group.field.name}</span>
-                              )}
                               {group.monthLabel && (
                                 <span className="text-xs text-blue-600 font-medium">{group.monthLabel}</span>
                               )}
-                              {!group.field && !group.monthLabel && (
+                              {!locationName && !group.monthLabel && (
                                 <span className="text-xs text-slate-400 italic">No field / ungrouped</span>
                               )}
                             </div>
@@ -1469,7 +1632,7 @@ export function BillingPage() {
 
                         {/* Collapsed: batch invoice button */}
                         {!isExpanded && (
-                          <div className="px-4 pb-3 border-t border-slate-100">
+                          <div className="px-4 pb-3 border-t border-slate-100 flex items-center gap-2">
                             <button
                               onClick={(e) => {
                                 e.stopPropagation()
@@ -1481,21 +1644,43 @@ export function BillingPage() {
                               {actionLoading === group.groupKey ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
                               Generate Invoice ({group.tickets.length} tickets)
                             </button>
+                            <button
+                              onClick={() => openKickBack(`return-group-${group.groupKey}`, `${group.tickets.length} ticket${group.tickets.length !== 1 ? 's' : ''} for ${group.company.name}`, group.tickets)}
+                              disabled={actionLoading === `return-group-${group.groupKey}`}
+                              className="mt-2 flex items-center gap-1.5 px-3 py-1.5 text-orange-700 bg-orange-50 border border-orange-200 rounded-lg text-xs font-medium hover:bg-orange-100 disabled:opacity-50"
+                              title="Send every ticket in this group back to the Approvals dashboard with a note"
+                            >
+                              {actionLoading === `return-group-${group.groupKey}` ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CornerUpLeft className="w-3.5 h-3.5" />}
+                              Kick Back All
+                            </button>
                           </div>
                         )}
 
                         {/* Expanded: ticket list with individual invoice buttons */}
                         {isExpanded && (
                           <div className="px-4 pb-4 border-t border-slate-100">
-                            {/* Batch all button at top */}
-                            <button
-                              onClick={() => handleGenerateFromTickets(group.company.id, group.tickets.map(t => t.id), group.groupKey)}
-                              disabled={actionLoading === group.groupKey}
-                              className="mt-3 mb-3 w-full flex items-center justify-center gap-1.5 px-3 py-2 bg-blue-800 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
-                            >
-                              {actionLoading === group.groupKey ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-                              Invoice All {group.tickets.length} Tickets Together
-                            </button>
+                            {/* Batch buttons at top */}
+                            <div className="mt-3 mb-3 flex items-stretch gap-2">
+                              <button
+                                onClick={() => handleGenerateFromTickets(group.company.id, group.tickets.map(t => t.id), group.groupKey)}
+                                disabled={actionLoading === group.groupKey}
+                                className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 bg-blue-800 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
+                              >
+                                {actionLoading === group.groupKey ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                                Invoice All {group.tickets.length} Tickets Together
+                              </button>
+                              {group.tickets.length > 1 && (
+                                <button
+                                  onClick={() => openKickBack(`return-group-${group.groupKey}`, `${group.tickets.length} tickets for ${group.company.name}`, group.tickets)}
+                                  disabled={actionLoading === `return-group-${group.groupKey}`}
+                                  className="shrink-0 flex items-center justify-center gap-1.5 px-3 py-2 text-orange-700 bg-orange-50 border border-orange-200 rounded-lg text-sm font-medium hover:bg-orange-100 disabled:opacity-50"
+                                  title="Send every ticket in this group back to the Approvals dashboard with a note"
+                                >
+                                  {actionLoading === `return-group-${group.groupKey}` ? <Loader2 className="w-4 h-4 animate-spin" /> : <CornerUpLeft className="w-4 h-4" />}
+                                  Kick Back All
+                                </button>
+                              )}
+                            </div>
 
                             {/* Individual tickets */}
                             <div className="space-y-1.5">
@@ -1530,13 +1715,13 @@ export function BillingPage() {
                                     </p>
                                   </div>
                                   <button
-                                    onClick={() => { setReturnModal({ id: t.id, ticketNumber: t.ticketNumber }); setReturnNote('') }}
+                                    onClick={() => openKickBack(`return-${t.id}`, t.ticketNumber, [{ id: t.id, ticketNumber: t.ticketNumber }])}
                                     disabled={actionLoading === `return-${t.id}`}
                                     className="shrink-0 flex items-center gap-1 px-2 py-1 text-xs font-medium text-orange-700 bg-orange-50 rounded-md hover:bg-orange-100 disabled:opacity-50"
-                                    title="Send back to the Approvals queue with a note"
+                                    title="Send back to the Approvals dashboard with a note"
                                   >
                                     {actionLoading === `return-${t.id}` ? <Loader2 className="w-3 h-3 animate-spin" /> : <CornerUpLeft className="w-3 h-3" />}
-                                    Return
+                                    Kick Back
                                   </button>
                                   <button
                                     onClick={() => handleGenerateFromTickets(group.company.id, [t.id], `single-${t.id}`)}
@@ -2209,8 +2394,9 @@ export function BillingPage() {
                           entry.status === 'submitted' && 'bg-yellow-200 text-yellow-800',
                           entry.status === 'pending' && 'bg-blue-200 text-blue-800',
                           entry.status === 'retrying' && 'bg-orange-200 text-orange-800',
+                          entry.status === 'superseded' && 'bg-slate-200 text-slate-600',
                         )}>
-                          {entry.status}
+                          {entry.status === 'superseded' ? 'Recovered' : entry.status}
                         </span>
                       </div>
                       <span className="text-xs text-slate-400">
@@ -2226,12 +2412,18 @@ export function BillingPage() {
                       {entry.respondedAt && <p>Responded: {new Date(entry.respondedAt).toLocaleString()}</p>}
                     </div>
 
-                    {entry.errorMessage && (
+                    {entry.status === 'superseded' && <p className="mt-2 text-xs text-slate-600">A later submission succeeded. This attempt is retained as history.</p>}
+                    {entry.status === 'superseded' && entry.errorMessage && <details className="mt-2 text-xs text-slate-500">
+                      <summary className="cursor-pointer">Original failure</summary>
+                      <pre className="mt-1 whitespace-pre-wrap break-all">{entry.errorMessage}</pre>
+                    </details>}
+                    {entry.errorMessage && entry.status !== 'superseded' && (
                       <div className="mt-2 p-2 bg-red-100 border border-red-200 rounded text-xs text-red-700 font-mono break-all">
                         {entry.errorMessage}
                       </div>
                     )}
 
+                    <EnverusWarnings sources={[entry.responsePayload]} />
                     {/* Actions */}
                     <div className="flex items-center gap-2 mt-3">
                       {['error', 'rejected'].includes(entry.status) && (
@@ -2316,6 +2508,7 @@ export function BillingPage() {
                           {total && <span className="text-sm text-slate-500">{total}</span>}
                         </div>
                         <p className="text-sm text-slate-600 mt-0.5">{company}</p>
+                        {sig.locationName && <p className="text-sm text-slate-600">{sig.locationName}</p>}
                       </div>
                       <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700">
                         Email — Pending
@@ -2365,8 +2558,14 @@ export function BillingPage() {
       )}
 
       {/* INVOICE TABS — existing invoices */}
-      {tab !== 'ready' && tab !== 'enverus' && tab !== 'signatures' && (
-        loading ? (
+      {tab === 'rebilling' && <RebillingReport search={search} />}
+      {tab !== 'ready' && tab !== 'enverus' && tab !== 'signatures' && tab !== 'rebilling' && (
+        invoiceListError ? (
+          <div className="text-center py-8 text-red-600">
+            <p>Invoices could not be loaded.</p>
+            <button className="mt-2 underline" onClick={() => loadInvoicePage()}>Retry invoices</button>
+          </div>
+        ) : loading || (invoiceListLoading && !filtered.length) ? (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="w-6 h-6 text-slate-400 animate-spin" />
           </div>
@@ -2376,7 +2575,7 @@ export function BillingPage() {
             <p className="font-medium">
               {tab === 'drafts' ? 'No draft invoices' :
                tab === 'approved' ? 'Nothing awaiting QB push' :
-               tab === 'in_qb' ? 'No Sales Orders pending in QB' :
+               tab === 'in_qb' ? 'No invoices queued or Sales Orders pending in QB' :
                tab === 'invoiced' ? 'No invoiced items' :
                'No invoices yet'}
             </p>
@@ -2384,7 +2583,7 @@ export function BillingPage() {
         ) : (
           <div className="space-y-2">
             {filtered.map(inv => {
-              const badge = STATUS_BADGE[inv.status] || { label: inv.status, color: 'bg-slate-100 text-slate-600', icon: FileText }
+              const badge = inv.qbExportError ? { label: 'Error', color: 'bg-red-100 text-red-700', icon: AlertTriangle } : STATUS_BADGE[inv.status] || { label: inv.status, color: 'bg-slate-100 text-slate-600', icon: FileText }
               const BadgeIcon = badge.icon
               const isLoading = actionLoading === inv.id
 
@@ -2414,6 +2613,9 @@ export function BillingPage() {
                     </span>
                   </div>
 
+                  {inv.qbExportError && (
+                    <p className="mt-1 text-sm text-red-700 break-words">{inv.qbExportError}</p>
+                  )}
                   {/* Customer + source */}
                   <p className="text-sm text-slate-600">
                     {inv.companyName}
@@ -2422,6 +2624,8 @@ export function BillingPage() {
                     </span>
                   </p>
 
+                  {inv.locationName && <p className="text-sm text-slate-600">{inv.locationName}</p>}
+                  <InvoiceCustomerAttribution customer={inv.companyName} billedTo={inv.qbCustomerOverride} />
                   {/* Details row */}
                   <div className="flex items-center gap-3 text-xs text-slate-400 mt-1.5">
                     <span>{formatCalendarDateNumeric(inv.invoiceDate)}</span>
@@ -2445,6 +2649,19 @@ export function BillingPage() {
                               {st.number}
                             </button>
                             <TicketReceiptStatus ticketId={st.id} ticketNumber={st.number} />
+                            {/* One bad ticket shouldn't send the whole stack back.
+                                With a single ticket, Reject to Approvals is the same thing. */}
+                            {inv.status === 'draft' && inv.sourceTickets!.length > 1 && (
+                              <button
+                                onClick={() => openKickBack(`return-${st.id}`, `${st.number} off ${inv.invoiceNumber}`, [{ id: st.id, ticketNumber: st.number! }], { id: inv.id, invoiceNumber: inv.invoiceNumber })}
+                                disabled={actionLoading === `return-${st.id}`}
+                                className="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-orange-700 bg-orange-50 rounded hover:bg-orange-100 disabled:opacity-50"
+                                title={`Take ${st.number} off this draft and send it back to the Approvals dashboard with a note`}
+                              >
+                                {actionLoading === `return-${st.id}` ? <Loader2 className="w-3 h-3 animate-spin" /> : <CornerUpLeft className="w-3 h-3" />}
+                                Kick Back
+                              </button>
+                            )}
                           </span>
                         ) : null
                       ))}
@@ -2516,9 +2733,11 @@ export function BillingPage() {
                         <button
                           onClick={() => handleReject(inv)}
                           disabled={isLoading}
-                          className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-300 rounded-lg text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                          className="flex items-center gap-1.5 px-3 py-1.5 text-orange-700 bg-orange-50 border border-orange-200 rounded-lg text-xs font-medium hover:bg-orange-100 disabled:opacity-50"
+                          title="Void this draft and send its tickets back to the Approvals dashboard with a note"
                         >
-                          Reject
+                          <CornerUpLeft className="w-3.5 h-3.5" />
+                          Reject to Approvals
                         </button>
                       </>
                     )}
@@ -2536,8 +2755,9 @@ export function BillingPage() {
                           onClick={() => handleReject(inv)}
                           disabled={isLoading}
                           className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-300 rounded-lg text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                          title="Un-approve: back to draft for editing. Its tickets stay on the draft."
                         >
-                          Reject
+                          Back to Draft
                         </button>
                       </>
                     )}
@@ -2586,23 +2806,36 @@ export function BillingPage() {
                 </div>
               )
             })}
+            <p className="text-center text-xs text-slate-500">Showing {filtered.length} of {invoiceTotal} invoices</p>
+            {invoiceOffset < invoiceTotal && (
+              <button className="w-full rounded border border-slate-200 p-3 text-sm" disabled={invoiceListLoading} onClick={() => loadInvoicePage(true)}>
+                {invoiceListLoading ? 'Loading invoices…' : 'Load more invoices'}
+              </button>
+            )}
           </div>
         )
       )}
 
-      {/* Return-for-review modal */}
+      {/* Kick-back modal */}
       {returnModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-md">
             <div className="p-5 border-b border-slate-200">
               <h3 className="text-lg font-semibold text-slate-900 flex items-center gap-2">
                 <CornerUpLeft className="w-5 h-5 text-orange-600" />
-                Return {returnModal.ticketNumber} for review
+                Kick back {returnModal.label}
               </h3>
               <p className="text-sm text-slate-500 mt-1">
-                This ticket goes back to the Approvals queue (supervisor review). Your
-                note shows there so the reviewer knows what to fix.
+                {returnModal.tickets.length === 1 ? 'This ticket goes' : 'These tickets go'} back
+                to the Approvals dashboard (supervisor review). Your note shows there so the
+                reviewer knows what to fix.
+                {returnModal.invoice && ` Its lines come off draft ${returnModal.invoice.invoiceNumber}; the other tickets stay on it.`}
               </p>
+              {returnModal.tickets.length > 1 && (
+                <p className="text-xs text-slate-500 mt-2 font-mono">
+                  {returnModal.tickets.map(t => t.ticketNumber).join(', ')}
+                </p>
+              )}
             </div>
             <div className="p-5">
               <label className="block text-sm font-medium text-slate-700 mb-1">
@@ -2628,12 +2861,12 @@ export function BillingPage() {
                 disabled={!returnNote.trim() || actionLoading !== null}
                 className="px-4 py-2 rounded-lg text-sm font-medium bg-orange-600 text-white hover:bg-orange-500 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
               >
-                {actionLoading === `return-${returnModal.id}` ? (
+                {actionLoading === returnModal.key ? (
                   <Loader2 className="w-4 h-4 animate-spin" />
                 ) : (
                   <CornerUpLeft className="w-4 h-4" />
                 )}
-                Return for review
+                Kick back to Approvals
               </button>
             </div>
           </div>

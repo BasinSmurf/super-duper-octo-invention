@@ -1,3 +1,4 @@
+import { HelpTip } from '@/components/HelpTip'
 import { useState, useEffect } from 'react'
 import { MapPin } from 'lucide-react'
 import { api } from '@/lib/api'
@@ -82,6 +83,7 @@ export function SiteSwitcher() {
           </option>
         ))}
       </select>
+      <HelpTip text="Choose your working site. This selection is saved for this session; your account home site supplies the default." />
     </div>
   )
 }

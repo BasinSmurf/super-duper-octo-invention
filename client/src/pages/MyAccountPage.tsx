@@ -1,5 +1,8 @@
+import { useAuth } from '@/contexts/AuthContext'
+import { CircleHelp } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { api, ApiError } from '@/lib/api'
+import { ReportSubscriptions } from '@/components/ReportSubscriptions'
 import { User as UserIcon, KeyRound, Lock, Bell, Check, AlertTriangle } from 'lucide-react'
 
 interface MeResponse {
@@ -18,6 +21,7 @@ const ROLE_LABELS: Record<string, string> = {
   boss: 'Boss',
   field_super: 'Field Supervisor',
   billing_ar: 'Billing / AR',
+  ar_supervisor: 'AR Supervisor',
   dispatch: 'Dispatch',
   field_tech: 'Field Tech',
   customer: 'Customer',
@@ -25,9 +29,7 @@ const ROLE_LABELS: Record<string, string> = {
 
 const CADENCE_OPTIONS: { value: string; label: string; hint: string }[] = [
   { value: 'immediate', label: 'Immediately', hint: 'Send each notification as it happens' },
-  { value: 'daily', label: 'Daily digest', hint: 'One roundup email per day' },
-  { value: 'weekly', label: 'Weekly digest', hint: 'One roundup email per week' },
-  { value: 'off', label: 'Off', hint: "Don't email me" },
+  { value: 'off', label: 'Off', hint: 'No immediate alerts; report subscriptions below are independent' },
 ]
 
 function SectionCard({ icon: Icon, title, description, children }: {
@@ -64,6 +66,19 @@ function Banner({ kind, children }: { kind: 'success' | 'error'; children: React
 }
 
 export function MyAccountPage() {
+  const { user, setHelpTips } = useAuth()
+  const [helpSaving, setHelpSaving] = useState(false)
+  const [helpMessage, setHelpMessage] = useState<{ kind: 'success' | 'error'; text: string } | null>(null)
+  async function saveHelp(value: string) {
+    setHelpSaving(true)
+    setHelpMessage(null)
+    try {
+      await setHelpTips(value === 'auto' ? null : value === 'show')
+      setHelpMessage({ kind: 'success', text: 'Help preference saved' })
+    } catch (e) {
+      setHelpMessage({ kind: 'error', text: e instanceof Error ? e.message : 'Could not save help preference' })
+    } finally { setHelpSaving(false) }
+  }
   const [me, setMe] = useState<MeResponse | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -120,13 +135,13 @@ export function MyAccountPage() {
   }
 
   // ── Notification cadence ──
-  const [cadence, setCadence] = useState('daily')
+  const [cadence, setCadence] = useState('immediate')
   const [cadenceSaving, setCadenceSaving] = useState(false)
   const [cadenceMessage, setCadenceMessage] = useState<{ kind: 'success' | 'error'; text: string } | null>(null)
 
   useEffect(() => {
     if (me?.notificationPrefs?.default?.cadence) {
-      setCadence(me.notificationPrefs.default.cadence)
+      setCadence(me.notificationPrefs.default.cadence === 'immediate' ? 'immediate' : 'off')
     }
   }, [me?.notificationPrefs])
 
@@ -256,7 +271,7 @@ export function MyAccountPage() {
       <SectionCard
         icon={Bell}
         title="Email Notifications"
-        description="How often should we email you?"
+        description="Immediate alerts. Scheduled reports are managed separately below."
       >
         <div className="space-y-2 ml-12">
           {cadenceMessage && <div className="mb-2"><Banner kind={cadenceMessage.kind}>{cadenceMessage.text}</Banner></div>}
@@ -283,6 +298,22 @@ export function MyAccountPage() {
           ))}
         </div>
       </SectionCard>
+      <SectionCard icon={CircleHelp} title="Help tips" description="Circled question marks explain controls. Hover, tap, or focus an icon to read its tip.">
+        <div className="space-y-3 ml-12">
+          <label htmlFor="help-tips" className="block text-sm font-medium text-slate-700">Show help icons</label>
+          <select id="help-tips" disabled={helpSaving}
+            value={user?.helpTipsEnabled == null ? 'auto' : user.helpTipsEnabled ? 'show' : 'hide'}
+            onChange={e => saveHelp(e.target.value)}
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+            <option value="auto">Automatic - hide after 90 days</option>
+            <option value="show">Always show</option>
+            <option value="hide">Hide now</option>
+          </select>
+          <p className="text-xs text-slate-500">The 90 days start when you first use this feature. You can hide help early or turn it back on anytime.</p>
+          {helpMessage && <Banner kind={helpMessage.kind}>{helpMessage.text}</Banner>}
+        </div>
+      </SectionCard>
+      <ReportSubscriptions />
     </div>
   )
 }
