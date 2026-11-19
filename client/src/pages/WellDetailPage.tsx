@@ -7,6 +7,7 @@ import { hasPermission } from '@/lib/permissions'
 import { formatCalendarDate } from '@/lib/dates'
 import { EditWellModal } from '@/components/EditWellModal'
 import { LocationWorkPointEditor } from '@/components/LocationWorkPointEditor'
+import { InlineCodeField } from '@/components/InlineCodeField'
 import {
   ArrowLeft,
   Droplets,
@@ -49,6 +50,7 @@ interface WellDetail {
   wellStatus: string | null
   county: string | null
   facilityCode: string | null
+  costCenter: string | null
   quarterQuarter: string | null
   section: number | null
   township: number | null
@@ -519,6 +521,17 @@ export function WellDetailPage() {
               </>
             )}
           </div>
+          {/* Cost code (Enverus Cost Object) — stamped onto new invoices for work here */}
+          <InlineCodeField
+            label="Cost Code"
+            value={well.costCenter}
+            placeholder="Cost code (e.g. US00098792)"
+            canEdit={canManage}
+            onSave={async value => {
+              await api.put(`/locations/wells/${well.id}`, { costCenter: value })
+              setWell({ ...well, costCenter: value })
+            }}
+          />
         </div>
       </div>
 

@@ -92,7 +92,7 @@ export function SyncStatusBar() {
           )}
         />
         <span className="text-xs text-slate-400 flex-1 truncate">
-          {!isOnline ? 'Offline' : status === 'error' ? error || 'Sync error' : lastSyncLabel}
+          {status === 'error' ? 'Sync failed — retry needed' : isSyncing ? 'Syncing to server…' : !isOnline ? 'Offline — saves stay on this device' : pendingMutations > 0 ? 'Saved on device — awaiting sync' : lastSyncLabel}
         </span>
 
         {/* Sync now button */}
@@ -109,6 +109,8 @@ export function SyncStatusBar() {
           <RefreshCw className={cn('w-3.5 h-3.5', isSyncing && 'animate-spin')} />
         </button>
       </div>
+
+      {status === 'error' && error && <p role="alert" className="text-xs text-red-300 break-words">{error}</p>}
 
       {/* Nuke & Resync — clear offline cache and pull fresh */}
       <button
@@ -226,6 +228,13 @@ export function SyncStatusBar() {
               <div className="text-slate-600 font-mono break-all text-[10px]">
                 entityId: {m.entityId}
               </div>
+              {m.table === 'ticketLineItems' && (
+                <div className="text-slate-400 break-all text-[10px]">
+                  {String(m.payload.description || '')}
+                  {' · Part: '}{String(m.payload.partNumber || 'unspecified')}
+                  {' · Product: '}{String(m.payload.productId || 'none')}
+                </div>
+              )}
             </div>
           ))}
         </div>

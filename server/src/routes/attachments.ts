@@ -1,3 +1,4 @@
+import { jobAttachmentUnits, createJobAttachments, deleteStoredAttachment } from '../services/jobAttachments.js';
 /**
  * attachments.ts — the unified attachment API.
  *
@@ -15,7 +16,7 @@ import { Router, Request, Response } from 'express';
 import { basename } from 'node:path';
 import multer from 'multer';
 import { randomUUID } from 'node:crypto';
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { requirePermission } from '../middleware/rbac.js';
 import { createAuditLog } from '../utils/auditLog.js';
@@ -24,10 +25,10 @@ import {
   attachmentKey,
   ingestAttachmentBytes,
   readAttachmentBytes,
-  removeAttachmentBytes,
   ChecksumMismatchError,
 } from '../services/attachmentStore.js';
 import { enqueueAttachment } from '../services/blueLionEnqueue.js';
+import { getFileStore } from '../services/fileStore.js';
 
 export const attachmentsRouter = Router();
 
@@ -71,12 +72,14 @@ function readParent(src: Record<string, unknown>): {
 // GET /api/attachments?shopItemId=…
 attachmentsRouter.get('/', async (req: Request, res: Response, next) => {
   try {
-    const parent = readParent(req.query as Record<string, unknown>);
+    const workOrderId = typeof req.query.workOrderId === 'string' ? req.query.workOrderId : null;
+    const parent = workOrderId ? null : readParent(req.query as Record<string, unknown>);
     const attachments = await prisma.attachment.findMany({
       where: {
-        ...(parent.shopItemId ? { shopItemId: parent.shopItemId } : {}),
-        ...(parent.inspectionId ? { inspectionId: parent.inspectionId } : {}),
-        ...(parent.ticketId ? { ticketId: parent.ticketId } : {}),
+        ...(workOrderId ? { shopItem: { workOrderId } } : {}),
+        ...(parent?.shopItemId ? { shopItemId: parent.shopItemId } : {}),
+        ...(parent?.inspectionId ? { inspectionId: parent.inspectionId } : {}),
+        ...(parent?.ticketId ? { ticketId: parent.ticketId } : {}),
       },
       orderBy: { capturedAt: 'asc' },
       select: PUBLIC_FIELDS,
@@ -93,12 +96,22 @@ attachmentsRouter.post(
   async (req: Request, res: Response, next) => {
     try {
       if (!req.file) throw new AppError(400, 'No file provided');
-      const parent = readParent(req.body as Record<string, unknown>);
-
       const kind = (req.body.kind || 'photo') as AttachmentKind;
       if (!KINDS.includes(kind)) {
         throw new AppError(400, `kind must be one of: ${KINDS.join(', ')}`);
       }
+
+      let selectedIds: unknown = [];
+      if (req.body.linkedShopItemIds) {
+        try { selectedIds = JSON.parse(req.body.linkedShopItemIds); }
+        catch { throw new AppError(400, 'Selected units must be a JSON array'); }
+      }
+      const jobUnits = req.body.workOrderId
+        ? await jobAttachmentUnits(req.body.workOrderId, kind, selectedIds)
+        : null;
+      const parent = jobUnits
+        ? { shopItemId: jobUnits[0].id, inspectionId: null, ticketId: null }
+        : readParent(req.body as Record<string, unknown>);
 
       // basename() so a crafted "../../etc/passwd" filename cannot walk out of
       // the key namespace even before attachmentKey() sanitises it.
@@ -123,31 +136,32 @@ attachmentsRouter.post(
         throw err;
       }
 
-      const attachment = await prisma.attachment.create({
-        data: {
-          id,
-          ...parent,
-          serialNumber: kind === 'vendor_invoice' || kind === 'packing_slip' ? null : req.body.serialNumber || null,
-          serializedEquipmentId: kind === 'vendor_invoice' || kind === 'packing_slip' ? null : req.body.serializedEquipmentId || null,
-          kind,
-          fileName,
-          mimeType: req.file.mimetype || null,
-          offlineBlobId: req.body.offlineBlobId || null,
-          uploadedById: req.user!.userId,
-          sha256: stored.sha256,
-          fileSizeBytes: stored.fileSizeBytes,
-          storageState: stored.storageState,
-          bufferKey: stored.bufferKey,
-          remoteKey: stored.remoteKey,
-          uploadedAt: stored.uploadedAt,
-        },
-        select: PUBLIC_FIELDS,
-      });
+      const attachmentData = {
+        id,
+        ...parent,
+        serialNumber: kind === 'vendor_invoice' || kind === 'packing_slip' ? null : req.body.serialNumber || null,
+        serializedEquipmentId: kind === 'vendor_invoice' || kind === 'packing_slip' ? null : req.body.serializedEquipmentId || null,
+        kind,
+        fileName,
+        mimeType: req.file.mimetype || null,
+        offlineBlobId: req.body.offlineBlobId || null,
+        uploadedById: req.user!.userId,
+        sha256: stored.sha256,
+        fileSizeBytes: stored.fileSizeBytes,
+        storageState: stored.storageState,
+        bufferKey: stored.bufferKey,
+        remoteKey: stored.remoteKey,
+        uploadedAt: stored.uploadedAt,
+      };
+      const created = jobUnits
+        ? await createJobAttachments(attachmentData, jobUnits)
+        : await prisma.attachment.create({ data: attachmentData });
+      const attachment = await prisma.attachment.findUniqueOrThrow({ where: { id: created.id }, select: PUBLIC_FIELDS });
 
       // VaultPRO push is a background errand, never awaited: the capture is
       // already durable on the SP server, and a BlueLion outage must not turn
       // into a failed upload for the tech holding the iPad.
-      void enqueueAttachment(attachment.id).catch((e) =>
+      if (!jobUnits) void enqueueAttachment(attachment.id).catch((e) =>
         console.warn('[attachments] VaultPRO enqueue failed (non-fatal):', e),
       );
 
@@ -172,11 +186,30 @@ attachmentsRouter.get('/:id/content', async (req: Request, res: Response, next) 
         bufferKey: true, remoteKey: true,
       },
     });
-    if (!attachment) throw new AppError(404, 'Attachment not found');
-
-    const bytes = await readAttachmentBytes(attachment);
-    res.setHeader('Content-Type', attachment.mimeType || 'application/octet-stream');
-    res.setHeader('Content-Disposition', `inline; filename="${attachment.fileName}"`);
+    // TicketAttachment predates the unified custody table and still backs
+    // ticket photos/documents. Its filePath is a FileStore key (B2 in prod).
+    const legacy = attachment ? null : await prisma.ticketAttachment.findUnique({
+      where: { id: req.params.id as string },
+      select: { filePath: true, fileName: true, mimeType: true },
+    });
+    if (!attachment && !legacy) throw new AppError(404, 'Attachment not found');
+    let bytes: Buffer;
+    if (attachment) bytes = await readAttachmentBytes(attachment);
+    else {
+      if (!legacy!.filePath || legacy!.filePath.includes('..')) throw new AppError(404, 'Attachment file unavailable');
+      const inline = /^data:(image\/(?:jpeg|png|gif|webp));base64,([A-Za-z0-9+/=\s]+)$/.exec(legacy!.filePath);
+      if (inline) bytes = Buffer.from(inline[2], 'base64');
+      else {
+        const store = getFileStore();
+        if (!(await store.exists(legacy!.filePath))) throw new AppError(404, 'Attachment file missing from storage');
+        bytes = await store.read(legacy!.filePath);
+      }
+    }
+    const file = attachment ?? legacy!;
+    res.setHeader('Content-Type', file.mimeType || 'application/octet-stream');
+    const safeName = file.fileName.replace(/[^\x20-\x7e]|["\\]/g, '_');
+    const encodedName = encodeURIComponent(file.fileName).replace(/['()*]/g, char => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+    res.setHeader('Content-Disposition', `inline; filename="${safeName}"; filename*=UTF-8''${encodedName}`);
     // Same hardening as /api/files: never let a stored SVG or HTML upload run
     // scripts against a viewer's session on our origin.
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -192,14 +225,8 @@ attachmentsRouter.delete(
   async (req: Request, res: Response, next) => {
     try {
       const id = req.params.id as string;
-      const attachment = await prisma.attachment.findUnique({
-        where: { id },
-        select: { id: true, fileName: true, bufferKey: true, remoteKey: true, shopItemId: true, inspectionId: true },
-      });
+      const attachment = await deleteStoredAttachment(id, req.query.wholeJob === 'true');
       if (!attachment) throw new AppError(404, 'Attachment not found');
-
-      await prisma.attachment.delete({ where: { id } });
-      await removeAttachmentBytes(attachment);
 
       await createAuditLog({
         userId: req.user!.userId,

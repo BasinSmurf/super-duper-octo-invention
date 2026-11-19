@@ -7,13 +7,15 @@
 // touched until then.
 
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { cn } from '@/lib/cn'
 import { ArrowLeft, ArrowRight, Check } from 'lucide-react'
 import { DIVISIONS, type Division, type WorkEntry } from './divisions'
 
 export function WizardShell() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const dispatchMode = searchParams.get('dispatch') === '1'
   const [division, setDivision] = useState<Division | null>(null)
   const [selectedEntry, setSelectedEntry] = useState<WorkEntry | null>(null)
 
@@ -36,6 +38,8 @@ export function WizardShell() {
     if (!division || !selectedEntry || selectedEntry.comingSoon) return
     if (selectedEntry.redirectTo) { navigate(selectedEntry.redirectTo); return }
     const params = new URLSearchParams()
+    if (dispatchMode) params.set('dispatch', '1')
+    if (searchParams.get('rentalId')) params.set('rentalId', searchParams.get('rentalId')!)
     if (selectedEntry.workType) params.set('type', selectedEntry.workType)
     if (selectedEntry.serviceType) params.set('service', selectedEntry.serviceType)
     if (selectedEntry.subtype) params.set('subtype', selectedEntry.subtype)
@@ -50,9 +54,9 @@ export function WizardShell() {
   return (
     <div className="mx-auto max-w-3xl p-4">
       <header className="mb-4">
-        <h1 className="text-xl font-semibold text-slate-900">New Ticket</h1>
+        <h1 className="text-xl font-semibold text-slate-900">{dispatchMode ? 'New Callout' : 'New Ticket'}</h1>
         <p className="text-sm text-slate-500">
-          {division ? 'Pick what you did.' : 'Pick the division — the kind of work you’re logging.'}
+          {dispatchMode ? 'Choose the division and work to dispatch.' : division ? 'Pick what you did.' : 'Pick the division — the kind of work you’re logging.'}
         </p>
       </header>
 
@@ -94,7 +98,7 @@ export function WizardShell() {
             <span className="text-sm text-slate-500">{division.subhead}</span>
           </div>
           <div className="grid grid-cols-1 gap-2">
-            {division.entries.map((entry) => {
+            {division.entries.filter(entry => !dispatchMode || (!entry.redirectTo && entry.workType !== 'rental')).map((entry) => {
               const Icon = entry.icon
               const selected = selectedEntry?.label === entry.label
               return (

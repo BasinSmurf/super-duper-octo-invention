@@ -70,6 +70,8 @@ function oneParent(parent: AttachmentParent): AttachmentParent {
 }
 
 export interface CaptureOptions {
+  workOrderId?: string
+  linkedShopItemIds?: string[]
   id: string
   parent: AttachmentParent
   kind: AttachmentKind
@@ -93,6 +95,8 @@ export async function captureAttachment(opts: CaptureOptions): Promise<OfflineAt
 
   const record: OfflineAttachment = {
     id: opts.id,
+    workOrderId: opts.workOrderId,
+    linkedShopItemIds: opts.linkedShopItemIds,
     ...parent,
     serialNumber: opts.kind === 'vendor_invoice' || opts.kind === 'packing_slip'
       ? null : opts.serialNumber ?? null,
@@ -117,6 +121,8 @@ export async function captureAttachment(opts: CaptureOptions): Promise<OfflineAt
     entityId: opts.id,
     payload: {
       id: opts.id,
+      workOrderId: opts.workOrderId,
+      linkedShopItemIds: opts.linkedShopItemIds,
       ...parent,
       serialNumber: record.serialNumber,
       kind: opts.kind,
@@ -151,16 +157,17 @@ export async function markAttachmentSynced(id: string): Promise<void> {
   })
 }
 
-export async function deleteAttachment(id: string): Promise<void> {
+export async function deleteAttachment(id: string, wholeJob = false): Promise<void> {
   const existing = await db.attachments.get(id)
+  await db.mutationQueue.where('entityId').equals(id).filter(m => m.table === 'attachments' && m.action === 'create' && m.status !== 'done').delete()
   await db.attachments.delete(id).catch(() => {})
-  // Only tell the server to delete something it might actually have.
-  if (existing?._offlineStatus === 'synced') {
+  // Queue removal after any in-flight upload, even if its acknowledgement has not arrived.
+  if (existing) {
     await db.mutationQueue.add({
       table: 'attachments',
       action: 'delete',
       entityId: id,
-      payload: { id },
+      payload: { id, wholeJob },
       createdAt: new Date().toISOString(),
       status: 'pending',
       retryCount: 0,
@@ -171,7 +178,7 @@ export async function deleteAttachment(id: string): Promise<void> {
 export async function attachmentsFor(parent: AttachmentParent): Promise<OfflineAttachment[]> {
   const p = oneParent(parent)
   const rows = p.shopItemId
-    ? await db.attachments.where('shopItemId').equals(p.shopItemId).toArray()
+    ? await db.attachments.filter(a => a.shopItemId === p.shopItemId || !!a.linkedShopItemIds?.includes(p.shopItemId!)).toArray()
     : p.inspectionId
       ? await db.attachments.where('inspectionId').equals(p.inspectionId).toArray()
       : await db.attachments.where('ticketId').equals(p.ticketId!).toArray()

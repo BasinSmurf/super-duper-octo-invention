@@ -13,6 +13,7 @@
  */
 
 import PDFDocument from 'pdfkit';
+import { drawCompanyHeader, loadPdfBranding, type PdfBranding } from './pdfBranding.js';
 import QRCode from 'qrcode';
 
 /** Strip ZPL control chars so interpolated data can't break the label format. */
@@ -124,9 +125,11 @@ export async function equipmentLabelZpl(serial: string, productName: string): Pr
 export async function generateEquipmentBadgePdf(
   serial: string,
   productName: string,
+  providedBranding?: PdfBranding,
 ): Promise<PDFKit.PDFDocument> {
+  const branding = providedBranding ?? await loadPdfBranding();
   const SIZE = 288; // 4 inches @ 72pt/in
-  const doc = new PDFDocument({ size: [SIZE, SIZE], margin: 0 });
+  const doc = new PDFDocument({ size: [SIZE, SIZE], margin: 0, info: { Author: branding.companyName } });
 
   // QR as a PNG buffer — high error correction so a scuffed trailer sticker
   // still scans.
@@ -151,10 +154,7 @@ export async function generateEquipmentBadgePdf(
     .fillColor('#444')
     .text(productName, 12, 246, { width: SIZE - 24, align: 'center' });
 
-  doc
-    .fontSize(9)
-    .fillColor('#888')
-    .text('Basin Safety', 0, SIZE - 22, { width: SIZE, align: 'center' });
+  drawCompanyHeader(doc, branding, 12, SIZE - 28, SIZE - 24, '#888888', { maxFontSize: 9, align: 'center' });
 
   return doc;
 }

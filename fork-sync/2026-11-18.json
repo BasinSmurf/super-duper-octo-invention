@@ -1,0 +1,2695 @@
+{
+  "sourceCommit": "7868434c432b8b955499f8c53dca54d55f7494aa",
+  "sourceWorkingChanges": [
+    "client/src/components/AppShell.tsx",
+    "client/src/components/CompanyBrand.tsx",
+    "server/src/routes/invoiceApproval.test.ts",
+    "server/src/routes/invoices.ts"
+  ],
+  "changes": [
+    {
+      "path": ".gitattributes",
+      "action": "add",
+      "sha256": "DD036D30011E20EA696F7747BA42D92C91514E8AF7D1359EC677ED6F61FDFC7C"
+    },
+    {
+      "path": ".node-version",
+      "action": "add",
+      "sha256": "5BDC4059B44F3C5B3F9ED0E999DFC6F776381D3B477CD5300BD6BA01CC848311"
+    },
+    {
+      "path": ".nvmrc",
+      "action": "add",
+      "sha256": "5BDC4059B44F3C5B3F9ED0E999DFC6F776381D3B477CD5300BD6BA01CC848311"
+    },
+    {
+      "path": "client/Dockerfile",
+      "action": "update",
+      "sha256": "094F8550B8FB85E9557CB0C372DC8346AA673AB22DA56B765213CF2FE12ADE2D"
+    },
+    {
+      "path": "client/README.md",
+      "action": "update",
+      "sha256": "B13A79CA0448B5E2824258B2D3AC9802A12F3CB4862F6F04BC1D44EE23ADE618"
+    },
+    {
+      "path": "client/attachmentDownload.test.mjs",
+      "action": "add",
+      "sha256": "67147EC3A86D7F15D8461B0BE2B8A7F4DCAFC3ACC7E4F73B53DD4FABDEC7BD9F"
+    },
+    {
+      "path": "client/attachmentIdentity.test.mjs",
+      "action": "add",
+      "sha256": "5A71CACF3B40DCD23350F802DA0C07C834047EF30F628F06452989F7EB7AF44A"
+    },
+    {
+      "path": "client/combinedVisitEdit.test.mjs",
+      "action": "add",
+      "sha256": "99D38AE990ECC302D99BDAF13543590C954CA3AD55B427B2C0B9B6978B1975FA"
+    },
+    {
+      "path": "client/dashboardRequests.test.mjs",
+      "action": "add",
+      "sha256": "48797F4FDA5BFB670146F38B3A8CFCC4C73A0615225B27EE56284E4985924832"
+    },
+    {
+      "path": "client/defaultLineItems.test.mjs",
+      "action": "add",
+      "sha256": "10D500BA04084FF403B25FD26322E49B04D11317B469409DB4850B45C673B528"
+    },
+    {
+      "path": "client/deploymentDate.test.mjs",
+      "action": "add",
+      "sha256": "920BA41C88EFF98A7993762473D166E7EA681D35F067819AFFAFF62DD6894765"
+    },
+    {
+      "path": "client/dispatchBoard.test.mjs",
+      "action": "add",
+      "sha256": "93F2D6919278C20B47F38D9578E1AB0F63A1F9D47815354BC3C47F3882591070"
+    },
+    {
+      "path": "client/dispatchRental.test.mjs",
+      "action": "add",
+      "sha256": "6D17C20563D2D10608FAAEDF4346BDB3D46D0F86A6FFD4D880C7391D244D9FFE"
+    },
+    {
+      "path": "client/dispatchWizard.test.mjs",
+      "action": "add",
+      "sha256": "99A7572C0EE09143139B6CCE4B11D8B3EA8B1ADF028501D1CB08D23099561E9D"
+    },
+    {
+      "path": "client/draftPersistence.test.mjs",
+      "action": "add",
+      "sha256": "1471AA36EB33ED9C6BC05395EF50DED8FE8ED4CE6D29432A043963364F3BBB98"
+    },
+    {
+      "path": "client/enverusWarnings.test.mjs",
+      "action": "add",
+      "sha256": "D2931A054087DF174B970AEDBB69FF7257560F04CC9122F0AE3ACF252B17D43B"
+    },
+    {
+      "path": "client/fieldInspectionBilling.test.mjs",
+      "action": "add",
+      "sha256": "EBDD1745605F573B5B5F5523EA0EF6F1F49448D9F25CA578DCC0D85C70471FCF"
+    },
+    {
+      "path": "client/fieldInspectionHandoff.test.mjs",
+      "action": "add",
+      "sha256": "846D79179ECBD35DBD87503A0948918EE99F2F0D1D6FFA6EA4D273C480931926"
+    },
+    {
+      "path": "client/fieldInspectionResume.test.mjs",
+      "action": "add",
+      "sha256": "AC239C4C3814C61F0A0BBE3F7D3732C055067771F0557DBF123F6529EE5606E2"
+    },
+    {
+      "path": "client/fieldInspectionSetup.test.mjs",
+      "action": "add",
+      "sha256": "887C8B0C63E1D891FAA231BD5217AA5098FD9C2688A8D9358DEC6CC39C4206A6"
+    },
+    {
+      "path": "client/gasDetectionEdit.test.mjs",
+      "action": "add",
+      "sha256": "1DAB5D4CBBCCF95584A241F7BF177FFED9093DC4640A1DD71328784F77C80BD7"
+    },
+    {
+      "path": "client/helpTips.test.mjs",
+      "action": "add",
+      "sha256": "A34B955805307CB86B29130D512632C69899F568F6690C1FF0F13B6ECAE596EC"
+    },
+    {
+      "path": "client/inspectionApproval.test.mjs",
+      "action": "add",
+      "sha256": "976A6749E218017A56A57747361904E78F807BD8DA694EF73195A0143BF3EC1D"
+    },
+    {
+      "path": "client/invoiceDownload.test.mjs",
+      "action": "add",
+      "sha256": "2CF9D45917C822BADADABD58CDB46770B7A207D227A172D6FB6B5C3853283D74"
+    },
+    {
+      "path": "client/invoiceReplacement.test.mjs",
+      "action": "add",
+      "sha256": "36735B45EE7EB9D1DD5BDA31A706BCEE5A75873269E3F00BA398ECB51D244AD2"
+    },
+    {
+      "path": "client/jobTypePills.test.mjs",
+      "action": "add",
+      "sha256": "6E51307EB2767FAF3A1E66204B50D2ECCC340C1A4759072E4EF16FE5085280B2"
+    },
+    {
+      "path": "client/lineageDownload.test.mjs",
+      "action": "add",
+      "sha256": "3B8A45862557809823EBD1C0DB687F08C4BA56F18FC2BC40CE49FA319F87EDE3"
+    },
+    {
+      "path": "client/manualRentalVisit.test.mjs",
+      "action": "add",
+      "sha256": "A276D6325BF8FAC637BA76215A9ACBB52B31E61AB9EDF6819455B5967E40AF61"
+    },
+    {
+      "path": "client/package-lock.json",
+      "action": "update",
+      "sha256": "AC4476882731C021B7020263E7E8B239D1C53FB0755E2CACEDFC32B3122DFBE2"
+    },
+    {
+      "path": "client/package.json",
+      "action": "update",
+      "sha256": "69AFB027D0C2D3A7CDDF0310D2D61432C5D6AF0E51E4EFF7289788F5F5FFEB30"
+    },
+    {
+      "path": "client/pdfExport.test.mjs",
+      "action": "add",
+      "sha256": "CECE562FA378ED3521EFB330C24535180F02F7BFFFF485D92B3FA06ECDD31C7E"
+    },
+    {
+      "path": "client/photoGps.test.mjs",
+      "action": "add",
+      "sha256": "2FAC437456ED0D3ED0534CA981EE068E8716FAFD4995B1B155CEE3A67948CC22"
+    },
+    {
+      "path": "client/pipelineWidgets.test.mjs",
+      "action": "add",
+      "sha256": "3B4527739C128821403CA0B3AE2DC1774A73C4476B57574BB01FC02ECB3F0A7E"
+    },
+    {
+      "path": "client/rentalBillingPeriod.test.mjs",
+      "action": "add",
+      "sha256": "4DF23DF5DF668CE422BB2AD3CBE11035914166D06C8CF7DEFDDC91B9C637031C"
+    },
+    {
+      "path": "client/rentalCatalog.test.mjs",
+      "action": "add",
+      "sha256": "75A14D35BA201663E08BA4A91C482ED8C72FDF35AE7314FEA7B202FE9231296C"
+    },
+    {
+      "path": "client/rentalDeployPackageDiff.test.mjs",
+      "action": "add",
+      "sha256": "416201E83FAC6484F5C41EBDB6D5A4CD94B9FDAEB149037CBACD472F9B572453"
+    },
+    {
+      "path": "client/rentalDeploymentItems.test.mjs",
+      "action": "add",
+      "sha256": "656FB6F765ADF7F7281C47782DDF95DE717A6A1F063F9FDD73F81F5A0EF0C840"
+    },
+    {
+      "path": "client/rentalDetailReturn.test.mjs",
+      "action": "add",
+      "sha256": "ACEE94A8BCED567EBC1CE391F330CC15EF0289D7B6B2113E1C819578C05A0D50"
+    },
+    {
+      "path": "client/rentalEventTicket.test.mjs",
+      "action": "add",
+      "sha256": "ABB35B5C24E201B9D9D46D25DA85B1C25812CA68F5D353C60C8A35E81B06423D"
+    },
+    {
+      "path": "client/rentalOptionalDispatch.test.mjs",
+      "action": "add",
+      "sha256": "562D81521679B964FC08DE6A41D420CD8772A38023E36E7C061B558FC6C39CC2"
+    },
+    {
+      "path": "client/rentalPackageVariants.test.mjs",
+      "action": "add",
+      "sha256": "A14EEFCC941DCAB1AE930935E04DA9487C024D1C742FDDB5B40EDB9816842364"
+    },
+    {
+      "path": "client/rentalReturnDate.test.mjs",
+      "action": "add",
+      "sha256": "570F621F4A7132C647ACB36A38460FF5DE5828E78FDE18D698245D00C94D43DD"
+    },
+    {
+      "path": "client/rentalSwapBilling.test.mjs",
+      "action": "add",
+      "sha256": "8C0705E2ED2B6B953554ACEFFDC934A69C081CEBE94398EFB65BCBEA63C3A9E9"
+    },
+    {
+      "path": "client/shopBinConfirmation.test.mjs",
+      "action": "add",
+      "sha256": "1CAF979AB220397D39534F45CAE2CE9F21B7951DD68725CC9B06363DB108731D"
+    },
+    {
+      "path": "client/shopCondemnCompleted.test.mjs",
+      "action": "add",
+      "sha256": "1FC4D5E73AAAB673C63B3419CDF4974029D85B8A3B0606165B8185B3345B1A2F"
+    },
+    {
+      "path": "client/shopIntakeRecovery.test.mjs",
+      "action": "add",
+      "sha256": "715BE3AA80DDCBEB1B041D006F3629D8378A11F40D718AF34E7567BA06AC989E"
+    },
+    {
+      "path": "client/shopIntakeSave.test.mjs",
+      "action": "add",
+      "sha256": "8430238F2ED004F4B1D059006086E395BF5DA772F1A95670C306DA1B40E5DD57"
+    },
+    {
+      "path": "client/shopItemPayload.test.mjs",
+      "action": "add",
+      "sha256": "2961CA13FA8B09BB2E8D32DF6B068A8316D612E6A5E0D2C3763B4F167019EC4C"
+    },
+    {
+      "path": "client/siteLogLoader.test.mjs",
+      "action": "add",
+      "sha256": "18324794B47578934217CB557C66CF6E81CC3C0CF7B4CACCA3BFA776B6CD6E8B"
+    },
+    {
+      "path": "client/src/App.tsx",
+      "action": "update",
+      "sha256": "806B86083E8F3C87B21B76BFDEAE4F3BCC94FBD4EF3143CAD5B1E11F6949A4E8"
+    },
+    {
+      "path": "client/src/components/AddPadModal.tsx",
+      "action": "update",
+      "sha256": "93FD45A0E7CD16F12C69C90FC84044F49D0797AF175560ADCF6317FE89730689"
+    },
+    {
+      "path": "client/src/components/AddWellModal.tsx",
+      "action": "update",
+      "sha256": "CA0B81F9AB7F9FC3EDF5FA0AD843C76E5049A58FA1912D2ACF1CB9B89CE7B648"
+    },
+    {
+      "path": "client/src/components/AirSystemInspectionEditor.tsx",
+      "action": "update",
+      "sha256": "6C1A5EB4B931FAC3885DFA13A2D987AA12380D93A749FB865E54C982CFEB3D4E"
+    },
+    {
+      "path": "client/src/components/AppShell.tsx",
+      "action": "update",
+      "sha256": "6444549601D20CF0F356E02A4F24309077CB41C1DB486493A2E30FF83922296E"
+    },
+    {
+      "path": "client/src/components/ApprovalsTab.tsx",
+      "action": "update",
+      "sha256": "6ED106FCE59DCEE5D4DCA51792CBC7C0832EE906D5AEF78141D285C84E057340"
+    },
+    {
+      "path": "client/src/components/BillingApprovalSplitDialog.tsx",
+      "action": "add",
+      "sha256": "FA294B4A620B897A2F04A72B957CC420FDF845B9F316CA63A702BFCA33B03D8D"
+    },
+    {
+      "path": "client/src/components/BillingLineagePanel.tsx",
+      "action": "update",
+      "sha256": "BB145EC447BF3FF5175DFC18D5A6218462EA2C6797AD4CFCD43C49147EDA84D6"
+    },
+    {
+      "path": "client/src/components/BillingRefsField.tsx",
+      "action": "update",
+      "sha256": "2D3F03FD466170494B9836203AF6C4BF1FBDEBDF2E70A043F8D35295084CD859"
+    },
+    {
+      "path": "client/src/components/BomExtrasEditor.tsx",
+      "action": "add",
+      "sha256": "9108135DFDF4F6F3EB28960F2D0DD7ACFE8040E1F734316A18FAE0E999E54237"
+    },
+    {
+      "path": "client/src/components/BrandingSettings.tsx",
+      "action": "add",
+      "sha256": "F525ACB07541A1D94EEB317CA72B10459DFA7C0640C57D3ABD2E83042C592AF9"
+    },
+    {
+      "path": "client/src/components/BulkApprovalExceptions.tsx",
+      "action": "add",
+      "sha256": "FC9AA7F344E73920E6A2559F31B4BADC9AC455DBEA313CC28A74A5FE5365298B"
+    },
+    {
+      "path": "client/src/components/CompanyBrand.tsx",
+      "action": "add",
+      "sha256": "11A3D0A0BF6665E93072F7BE2083BD649C75F58938AAEF4C7C15B17059876766"
+    },
+    {
+      "path": "client/src/components/CustomerDescriptions.tsx",
+      "action": "add",
+      "sha256": "825AFB8CA961D3CD5758C8BB04970D78DB39FBDE3C9B3ABAF1FC6B63C7BD81B4"
+    },
+    {
+      "path": "client/src/components/CustomerSearch.tsx",
+      "action": "update",
+      "sha256": "B224D655841BA7582BF3F84D0624E3F1A9A8542DA2BA36543A64B1B2ABB4E1BC"
+    },
+    {
+      "path": "client/src/components/DeploymentsTab.tsx",
+      "action": "update",
+      "sha256": "CEC2EC9139F33754EAEED884D2FFFD323769929800424D4E18B341866437DEE7"
+    },
+    {
+      "path": "client/src/components/DispatchRentalDialog.tsx",
+      "action": "update",
+      "sha256": "6CD5F99ABB94EF492BE2036EEEA7F79E0B58699285862F31400051F22377CAB2"
+    },
+    {
+      "path": "client/src/components/DivisionSelector.tsx",
+      "action": "update",
+      "sha256": "C017A5A3AC8BACFD0334E52C6B451D1AEE37BADF2CF3BAB81715F8CE749506DB"
+    },
+    {
+      "path": "client/src/components/DmrAmbiguityChoices.tsx",
+      "action": "add",
+      "sha256": "C7848900605F616816A35E7BFF5608E9D20ABC72CEB826D1D6C60E44EB294140"
+    },
+    {
+      "path": "client/src/components/DmrOperatorActivatePanel.tsx",
+      "action": "update",
+      "sha256": "5FF38981614983673248DF67FEFA0E3FFD70EF499966CB87C35233D77DA02A30"
+    },
+    {
+      "path": "client/src/components/EditWellModal.tsx",
+      "action": "update",
+      "sha256": "99F90870FEF98A88FCBFB5AFD56BD728D6004DC5A4139E3AFA5D1A28B4ADD928"
+    },
+    {
+      "path": "client/src/components/EnverusWarnings.tsx",
+      "action": "add",
+      "sha256": "B6813CC3A8CB6598B6449809F48CF13F7DE0E80B42F9AE4479FF9D64C1CC2D25"
+    },
+    {
+      "path": "client/src/components/EquipmentInspectionEditor.tsx",
+      "action": "update",
+      "sha256": "ECC0A64ED5986FC03BABD4E42264B71938E48B73C6A9F34187DE439836FBAF8E"
+    },
+    {
+      "path": "client/src/components/EquipmentProductPicker.tsx",
+      "action": "add",
+      "sha256": "AA5A90F0F37B0D4AB25A550833E14141E4ACD82215110A6BF7C488A5B53BCAAD"
+    },
+    {
+      "path": "client/src/components/FieldInspectionCapture.tsx",
+      "action": "update",
+      "sha256": "109DE2AB922688380C1CBD0FE84D49B88282DFA0915B47DED4930D31527D701E"
+    },
+    {
+      "path": "client/src/components/FitTestEditor.tsx",
+      "action": "update",
+      "sha256": "54CC566D22E378384AD96517FCD9813827C0A81CF57E68731D0C55266DB7A8D2"
+    },
+    {
+      "path": "client/src/components/GenerateTicketsModal.tsx",
+      "action": "update",
+      "sha256": "02A19DBB988053974D39295F48ECD0BE30AE7F3E8328D656A5662AB92F674164"
+    },
+    {
+      "path": "client/src/components/HelpTip.tsx",
+      "action": "add",
+      "sha256": "510F914FDA25B9181D743E37DB371163B8808EC22D487E3A9E6636DEA932CA87"
+    },
+    {
+      "path": "client/src/components/InlineCodeField.tsx",
+      "action": "add",
+      "sha256": "F18396EFA585D564CB7BF936B3EBEB8B6E56156F1018F09DDD72BDA1C3FCD864"
+    },
+    {
+      "path": "client/src/components/InvoiceCustomerAttribution.tsx",
+      "action": "add",
+      "sha256": "729C8C0E6012D5EEA6AF11154E866F234C148B63E75799D96E8327441F9DE298"
+    },
+    {
+      "path": "client/src/components/InvoiceLineEditor.tsx",
+      "action": "update",
+      "sha256": "B70CF83FF5AC1AF8C8A379FD119D759FECBACF34D748A054F73A590A69DCD37C"
+    },
+    {
+      "path": "client/src/components/JobTypePills.tsx",
+      "action": "update",
+      "sha256": "BA9DC54432AC68BBB25313C0FA2D388CD747007CD4110727897B0F22053691D9"
+    },
+    {
+      "path": "client/src/components/LineItemEditor.tsx",
+      "action": "update",
+      "sha256": "EED8167688324BE29595A40FCF133D76DA1B519F0DCD9FF86BFAB13732ED68D8"
+    },
+    {
+      "path": "client/src/components/LineageDownloadButton.tsx",
+      "action": "add",
+      "sha256": "083C5EDE65B52C5FE8D922FD6DC8EE475D89A806FC84622CBF52D8299339674A"
+    },
+    {
+      "path": "client/src/components/LiveClock.tsx",
+      "action": "update",
+      "sha256": "3B5417F778C0C6E7CD5CE3CAA57C2D0C48C19A6B6448FC63E625465DDBF549E4"
+    },
+    {
+      "path": "client/src/components/LocationPicker.tsx",
+      "action": "update",
+      "sha256": "AD6706EF20F2357D10BB80885602258E54D27B9BC9E6D561B5AD90D96A968B16"
+    },
+    {
+      "path": "client/src/components/LocationWorkPointEditor.tsx",
+      "action": "update",
+      "sha256": "F8E034ACAF8FD61BDB949BCED60A907945AD0AF24FC45C7B138C7D5AB1C8F105"
+    },
+    {
+      "path": "client/src/components/NovaraOpsCard.tsx",
+      "action": "add",
+      "sha256": "80694F7CC4682C28FCF5A541053B7CBF86BCD8FF1982C42904302228C940BC29"
+    },
+    {
+      "path": "client/src/components/PayAtDropPanel.tsx",
+      "action": "update",
+      "sha256": "81CEAC94974409360C6477D28171647CA1798F9F0A09596B74F48B7E81F65424"
+    },
+    {
+      "path": "client/src/components/PdfExportButton.tsx",
+      "action": "add",
+      "sha256": "2C03334102BE779CBB08B1E09845FDA08C872C815B68F649EF9A07E30B250C3F"
+    },
+    {
+      "path": "client/src/components/PendingShopIntake.tsx",
+      "action": "add",
+      "sha256": "3B7BAA15D5D56C0D04BC88E0D3794E53562DA92F94861C043CBBEAF1DCCC484B"
+    },
+    {
+      "path": "client/src/components/PhotoCapture.tsx",
+      "action": "update",
+      "sha256": "7B75CFAC12003AFE90837F56BD2B52EF666802255473F8FD8ED24FBC72DA2E7D"
+    },
+    {
+      "path": "client/src/components/ProductSearch.tsx",
+      "action": "update",
+      "sha256": "B554CB55741D3993EC5204C74A5AD4D6BFFAD74BC3CCB13AD6744BC491864885"
+    },
+    {
+      "path": "client/src/components/RebillingReport.tsx",
+      "action": "add",
+      "sha256": "49E6A20C9A6EEE53ECA02DC41BC34ADFEE90E355DADBF8354F601793D47CBA1B"
+    },
+    {
+      "path": "client/src/components/RentalBillingSettings.tsx",
+      "action": "add",
+      "sha256": "394CA35B7B7848A2F33D7CD1BFC0BA27E72773DBB27F9A4059B1AB808D2141F8"
+    },
+    {
+      "path": "client/src/components/RentalInspectionEditor.tsx",
+      "action": "update",
+      "sha256": "0C117C8D4494923E888D08EC5EBE4E763B739E4AAAC2D9E182A1B5E879CB31A7"
+    },
+    {
+      "path": "client/src/components/RentalReleaseTab.tsx",
+      "action": "add",
+      "sha256": "A497A29EF35AA81FC6366C8F148225605315984376C877513E51BBDB5EE42889"
+    },
+    {
+      "path": "client/src/components/RentalUnbilledBanner.tsx",
+      "action": "add",
+      "sha256": "D7410E66E01F345BD578961A72A7364EC30C38ABC4176D887876CA4B8FDED73E"
+    },
+    {
+      "path": "client/src/components/ReportSubscriptions.tsx",
+      "action": "add",
+      "sha256": "8BCE69BBC06898D93E6851550307A7DC041B06DBA4CC31876471DF6E8FAA1997"
+    },
+    {
+      "path": "client/src/components/RequireSyncingRole.tsx",
+      "action": "update",
+      "sha256": "9E23E420FA1D51B89F077AD870DC411093CC74896272434A7E8CA0B3BF4E4BD6"
+    },
+    {
+      "path": "client/src/components/ScbaAssemblyEditor.tsx",
+      "action": "add",
+      "sha256": "DE146AB52EB43320242B1B93E8D44A1529216B7643DC537A1DCAD9BBEB34168C"
+    },
+    {
+      "path": "client/src/components/ScbaAssemblyFields.tsx",
+      "action": "add",
+      "sha256": "FE966EC30D6F4AE1B93841084B7FF61021D1859F89ED309F04F9C85BAF9B855B"
+    },
+    {
+      "path": "client/src/components/SerialInput.tsx",
+      "action": "update",
+      "sha256": "119ADA39EBDFA1AD44226C644DBC51F4288A83042EE63FC07537E281B5927A10"
+    },
+    {
+      "path": "client/src/components/SharedBinConfirmation.tsx",
+      "action": "add",
+      "sha256": "940EE5534FD648070FA2D5D9B202D65790313A729DF85A248C28CA584791A140"
+    },
+    {
+      "path": "client/src/components/ShopUnitEntry.tsx",
+      "action": "update",
+      "sha256": "F0273C96784F7BF7BE6702F21D51F9A5D619C433E3278D106EA1E61566EDB7F9"
+    },
+    {
+      "path": "client/src/components/SiteSwitcher.tsx",
+      "action": "update",
+      "sha256": "8FD8D536F1494EC9BE419876CAF5A80A7E2C1ECDCF21A3987CE9B20A44EFCAA0"
+    },
+    {
+      "path": "client/src/components/SyncStatusBar.tsx",
+      "action": "update",
+      "sha256": "6B2C557504748EC890CEDDF4EC78633F276718AF95CE8F55849CC4F2AC58010E"
+    },
+    {
+      "path": "client/src/components/TicketAttachment.tsx",
+      "action": "add",
+      "sha256": "43387E1D6F84DD3032C7B5419FD4C73669CF26355836DB57B9D26201F4B61E42"
+    },
+    {
+      "path": "client/src/components/TicketWorkPointVerification.tsx",
+      "action": "add",
+      "sha256": "6E0440DBE4AE9FDDAE2680603A7B66AB70E3F0B84CF39D4910496473A206E43E"
+    },
+    {
+      "path": "client/src/components/UnitAttachments.tsx",
+      "action": "update",
+      "sha256": "E070DEDE8E3C84ACE5FD2F4EC6368B42EA38DF0B4B32CF8015750362049CA5AB"
+    },
+    {
+      "path": "client/src/components/WebhookNotificationsSettings.tsx",
+      "action": "add",
+      "sha256": "A15808BE041E4B9481BC57D4D1B33FEA85CDC29E6963376618646876BDDCBADD"
+    },
+    {
+      "path": "client/src/components/WorkPointVerification.tsx",
+      "action": "add",
+      "sha256": "0F400B3520B107B5480050E645C764C61A2B14710D7C44C4C92BC561067A387E"
+    },
+    {
+      "path": "client/src/components/WorkPointVerificationSettings.tsx",
+      "action": "add",
+      "sha256": "9A68CF374A3BF469A8BF3C290A3F15FAC4177060884A7B325478B0A5AEE9D359"
+    },
+    {
+      "path": "client/src/components/widgets/PipelineWidgets.tsx",
+      "action": "add",
+      "sha256": "DB0C0E73BFE71E800E858DECD9D4FE46AC9D88DB31DEA839FA785B9EC8A7A4A1"
+    },
+    {
+      "path": "client/src/components/widgets/registry.tsx",
+      "action": "update",
+      "sha256": "41A7033231B1B18CDB11A51AA4B630DA656DCAE70CEFF5BC256F5ED93D2CF937"
+    },
+    {
+      "path": "client/src/contexts/AuthContext.tsx",
+      "action": "update",
+      "sha256": "053478E5E5DDF508E8EE3B291C7A6BBE8AAF7FEE609C28560630D3017A657D7B"
+    },
+    {
+      "path": "client/src/contexts/BrandingContext.tsx",
+      "action": "add",
+      "sha256": "C0B5477847301C2FB34A01DF7C99240176D6C71917F0759ABD800A23D3A9B5FD"
+    },
+    {
+      "path": "client/src/contexts/PermissionsContext.tsx",
+      "action": "update",
+      "sha256": "1CDF31943CA403D5E311FD4C6082A5549B689472F87DED5754BC62AEBC893B7A"
+    },
+    {
+      "path": "client/src/hooks/useApiResource.ts",
+      "action": "add",
+      "sha256": "A3281DF8B1F37DF3C6071321E84EC9B9D59E4E9BC399FCAABC1DD4FF0E1D34B7"
+    },
+    {
+      "path": "client/src/hooks/useDraftPersistence.ts",
+      "action": "update",
+      "sha256": "EF8A4706B9F6C1D07003312C6EE94F18183A65B586F765989090BAB7303C727A"
+    },
+    {
+      "path": "client/src/lib/api.ts",
+      "action": "update",
+      "sha256": "10B235ACAFAF737243B0CE814A7A6BFF4F81C6A5AFE54D6B96E6953E9DEF3BE7"
+    },
+    {
+      "path": "client/src/lib/attachmentDownload.ts",
+      "action": "add",
+      "sha256": "4D337C904A03F4619128FDD8A6E30E185FF29910525D417035970246D74DFBCB"
+    },
+    {
+      "path": "client/src/lib/attachments.ts",
+      "action": "update",
+      "sha256": "E2BBFFBCED8DFB6891027B5A0B3AED05AB252A46C7486350EBA74C76372B855C"
+    },
+    {
+      "path": "client/src/lib/branding.ts",
+      "action": "add",
+      "sha256": "07C816C58243FC0FEFC2E2C64950DCF9E0EAE1BB775B06BB199F30E4CECA2431"
+    },
+    {
+      "path": "client/src/lib/db-types.ts",
+      "action": "update",
+      "sha256": "D5A35B80165C19D353B19A7809B63A451356E4A22C5E63B46508643D5CD1B1FE"
+    },
+    {
+      "path": "client/src/lib/defaultLineItems.ts",
+      "action": "update",
+      "sha256": "8B1CBC5932598B05F02272126A40B4F42E587A13CB86EAFC6FA1697AEC543102"
+    },
+    {
+      "path": "client/src/lib/deployChecklist.ts",
+      "action": "update",
+      "sha256": "8664C6E72AC5AD7F6F748D5DE20E03D981574CB5145E187E7ADE0CD5D5EEF857"
+    },
+    {
+      "path": "client/src/lib/dispatchWizard.ts",
+      "action": "add",
+      "sha256": "23DE4F8B64556224B906C96748DC5D62B5BC00C6BD88108A13528A249F58CC18"
+    },
+    {
+      "path": "client/src/lib/divisions.ts",
+      "action": "update",
+      "sha256": "51926E73DB84FA8ECC167B872CD7A27F34DE8D66A7513C629739DF9765F9F2BD"
+    },
+    {
+      "path": "client/src/lib/enverusWarnings.ts",
+      "action": "add",
+      "sha256": "06AB6F31D2291BEAAA1DBDA13BCE79F99FE170FA8F5FD073FF2D1178101C2DBF"
+    },
+    {
+      "path": "client/src/lib/fieldInspectionBilling.ts",
+      "action": "add",
+      "sha256": "C9D6BA3CDEE5531BF9E9AF94C753D1845D564155C35BE92D4D73DCEC0DCB5268"
+    },
+    {
+      "path": "client/src/lib/helpTips.ts",
+      "action": "add",
+      "sha256": "74697680442DAC479772D03EF51C9E3EAC6F92A95E5CF2DC927B4E48C45DB514"
+    },
+    {
+      "path": "client/src/lib/inspectionApproval.ts",
+      "action": "add",
+      "sha256": "31AE9F654B2A94669BF2B7E3AFF3F6EF61E10ED4DF1DDE90D968F12981A7FE59"
+    },
+    {
+      "path": "client/src/lib/invoiceList.ts",
+      "action": "add",
+      "sha256": "B049F415E829885234A2DF8EDFC5BFB22861F69236691DD4DCBC49D13E0992D2"
+    },
+    {
+      "path": "client/src/lib/manualRentalVisit.ts",
+      "action": "add",
+      "sha256": "CACF812269D90D1297CDC6483338E7267574395DF382D476F265BC05C6CE754E"
+    },
+    {
+      "path": "client/src/lib/permissions.ts",
+      "action": "update",
+      "sha256": "4B9B72B40F3D40CA64B00E91D7572FECD571DE17E821BF27A70A89C6D9E85442"
+    },
+    {
+      "path": "client/src/lib/photoGps.ts",
+      "action": "add",
+      "sha256": "33BD531E36C1E49806007F31472B474CB425103560449E28092F060ACDE06FAD"
+    },
+    {
+      "path": "client/src/lib/priceLevels.ts",
+      "action": "update",
+      "sha256": "03DC18649BD09BD07DB0E43223D71802F850806C75F10B3D33035E80CB721356"
+    },
+    {
+      "path": "client/src/lib/rentalBillingPeriod.ts",
+      "action": "add",
+      "sha256": "F0244E4C2FEFD1138C55D66247D29A0A6445025F43D0A13DD7DBDD2A127301C0"
+    },
+    {
+      "path": "client/src/lib/rentalBom.ts",
+      "action": "update",
+      "sha256": "3A0DB82D51E80D24177746119023B8B5CF6A2963537EF6F5C255579FCC41CC8E"
+    },
+    {
+      "path": "client/src/lib/rentalCatalog.ts",
+      "action": "add",
+      "sha256": "FF849DC70B22ADBB6D9E23FD5696C58A64FDB64F95B01E4DA6680610B9B563C7"
+    },
+    {
+      "path": "client/src/lib/rentalDeploymentItems.ts",
+      "action": "add",
+      "sha256": "61EDACD680FEFDFB8F38AF81C8052644407868E6CC1DFF8F877A95A4A32FE796"
+    },
+    {
+      "path": "client/src/lib/rentalEventTicket.ts",
+      "action": "add",
+      "sha256": "F4B611F04D4EBB909CFA8D46A80EB0A60D9F67454654213A800C1F5A253EB9D9"
+    },
+    {
+      "path": "client/src/lib/rentalSwapBilling.ts",
+      "action": "add",
+      "sha256": "BD5D1CCD039D95E818E4B8227992D94C9ECAF67147BE6D847E323BDDAFE954A2"
+    },
+    {
+      "path": "client/src/lib/rentalSweepLines.ts",
+      "action": "add",
+      "sha256": "F46704E7C801FC551697C0C9729FF54FD89ABAF0818742D415260B04FEBE17D8"
+    },
+    {
+      "path": "client/src/lib/shopIntakeRecovery.ts",
+      "action": "add",
+      "sha256": "DE941006F9446F76FBCAF584D114F3C441C66D91339A6BD17D5CD6471831AF11"
+    },
+    {
+      "path": "client/src/lib/siteLogLoader.ts",
+      "action": "add",
+      "sha256": "90F66C5EF21C22FEDF9A044EC55FBE1E2AD9C7779E7DC2EFDA70D5D315F5DF70"
+    },
+    {
+      "path": "client/src/lib/syncEngine.ts",
+      "action": "update",
+      "sha256": "FA7CCCA756E1940BD1AD9A6F44D3C05140461A36E78BDB62587624834ECBCD29"
+    },
+    {
+      "path": "client/src/lib/syncIdentity.ts",
+      "action": "add",
+      "sha256": "A29C5DAD831E2715615FFE26C3F4931C1840BA12F4B9C25D8714126F7F930F55"
+    },
+    {
+      "path": "client/src/lib/ticketStateMachine.ts",
+      "action": "update",
+      "sha256": "2DA0C825E666814AAAD46FD020F5325C0F271E3748341BD0505E335A0E1DCB47"
+    },
+    {
+      "path": "client/src/lib/trainingSubmission.ts",
+      "action": "add",
+      "sha256": "5D3C69082F4E0AFA6091E5CD199AB344EC38E690F009A7C49244C855306ED678"
+    },
+    {
+      "path": "client/src/main.tsx",
+      "action": "update",
+      "sha256": "F6C08CC3B957CEA427D671A83F562A6B6E629D76FAA2E3735367E07B950E9344"
+    },
+    {
+      "path": "client/src/pages/AdminOpsPage.tsx",
+      "action": "update",
+      "sha256": "5EE1F8C38E2EB0DDBFDA08EC9EC212FC390844C7AF9D91232B390D17F839F5BA"
+    },
+    {
+      "path": "client/src/pages/BillingLineageSearchPage.tsx",
+      "action": "update",
+      "sha256": "EBFE1542CB325FB6F1A5A2965754A3E1C1A9B6BDBDAD20335E16190FFA48D1F0"
+    },
+    {
+      "path": "client/src/pages/BillingPage.tsx",
+      "action": "update",
+      "sha256": "2423AD72F3CDD6511A86986D1FC4E3E174345E1C53CFFB9624CB156280AD27A2"
+    },
+    {
+      "path": "client/src/pages/CompaniesPage.tsx",
+      "action": "update",
+      "sha256": "B0C7688E3C09D0A2AF776A903046BFE730305685C9372C47AEF8A0822BEDE799"
+    },
+    {
+      "path": "client/src/pages/CompanyDetailPage.tsx",
+      "action": "update",
+      "sha256": "969DBD713E13660E07239DC3E2DB5CFDE75E778F222AE39130BA24B067B77945"
+    },
+    {
+      "path": "client/src/pages/CoveragePage.tsx",
+      "action": "update",
+      "sha256": "3C8F5A3EA8B3CDAFBF282B5A341AD9CB5A01174E453A5CDAF64D8D1B21AC22FC"
+    },
+    {
+      "path": "client/src/pages/DashboardPage.tsx",
+      "action": "update",
+      "sha256": "4CB398089195A6630511437D3EC9FC92861FCC722EA5F6D6471F153C2E40355A"
+    },
+    {
+      "path": "client/src/pages/DirectSalePage.tsx",
+      "action": "update",
+      "sha256": "DADB177A3F3C1E16D5FAB108DEC09B53FB515834A84F65BFCFB834CF09C7FE2A"
+    },
+    {
+      "path": "client/src/pages/DispatchPage.tsx",
+      "action": "update",
+      "sha256": "588004A881AAFA88EADAB59A2A2C81AE52A9997C4395C7725541EFE307E4ABE3"
+    },
+    {
+      "path": "client/src/pages/DmrBrowserPage.tsx",
+      "action": "update",
+      "sha256": "D9BEEFCFFC61FD3ACD980EB2FAA30CEA30B21AB9486EE1AE99CB33D878860A8E"
+    },
+    {
+      "path": "client/src/pages/EquipmentDetailPage.tsx",
+      "action": "update",
+      "sha256": "68113595E9DEEC7ED4CF7AA491A3B0AB28D3CCC5CE874B09F55008A566EAB189"
+    },
+    {
+      "path": "client/src/pages/EquipmentPage.tsx",
+      "action": "update",
+      "sha256": "6462747B3FBEA73C775339B8559204E24E101DDDB184B0C4D713BC026EF15417"
+    },
+    {
+      "path": "client/src/pages/InvoiceDetailPage.tsx",
+      "action": "update",
+      "sha256": "BF15CE850AFC215B5635D104519D909E2D15C84CAEFCB84A9C3B8AC14BCFF6C2"
+    },
+    {
+      "path": "client/src/pages/LoginPage.tsx",
+      "action": "update",
+      "sha256": "7D48AE224EA99B1DF54987D56308A443B03109EC3865C80895CE8B17D1921FD6"
+    },
+    {
+      "path": "client/src/pages/MyAccountPage.tsx",
+      "action": "update",
+      "sha256": "72280F13D60E7EED7F06CAE4CF797F56DAB58CBB525B1570027385B3BBAFBEC7"
+    },
+    {
+      "path": "client/src/pages/MyJobsPage.tsx",
+      "action": "update",
+      "sha256": "2AF29430ABC50861B7FD8BF7A8F42E495A63E20E5FF45F28F054CC7904D901FE"
+    },
+    {
+      "path": "client/src/pages/OperationsReportPage.tsx",
+      "action": "add",
+      "sha256": "8EC307E99995E906D9FE90AEC8BF8ABFFFB176D6447AF74F2D72D75B16B5FFDB"
+    },
+    {
+      "path": "client/src/pages/PadDetailPage.tsx",
+      "action": "update",
+      "sha256": "F90CDF1C2E585BBA0EEBA69A414CCA0F1F5FE3FC949499CDD5FA7731120218EE"
+    },
+    {
+      "path": "client/src/pages/RentalDetailPage.tsx",
+      "action": "update",
+      "sha256": "E6B5E6B0F62ED63D88F3142987ABC5F38E409380E515ECDAFEC68131180D80C9"
+    },
+    {
+      "path": "client/src/pages/RentalReturnPage.tsx",
+      "action": "update",
+      "sha256": "79CD7997A81CC30CE96E33309637CFB2EB6C2635B42C64B62C5772C24417EB7F"
+    },
+    {
+      "path": "client/src/pages/RentalSwapPage.tsx",
+      "action": "add",
+      "sha256": "4FCB0E0A0DDEE7B637C70EF053D2DD48A8F94161F730D62C77E66F91D4A2F81D"
+    },
+    {
+      "path": "client/src/pages/RoutesPage.tsx",
+      "action": "update",
+      "sha256": "DD40124DB02CA75FA6D20E4574183CF82A0990C3B2E3B6788F9618AF7BB69BE3"
+    },
+    {
+      "path": "client/src/pages/SettingsPage.tsx",
+      "action": "update",
+      "sha256": "2657DAEE211D72891445AF3C9DF38E4A93416A85E82F97C8003F987A065F86F4"
+    },
+    {
+      "path": "client/src/pages/ShopIntakePage.tsx",
+      "action": "update",
+      "sha256": "FA59F03A25A5E88365049A955FEE09188B7D0B3E5C20800513BD5C9CEBC33278"
+    },
+    {
+      "path": "client/src/pages/ShopOrderDetailPage.tsx",
+      "action": "update",
+      "sha256": "4DEEBAFE700F784BC2383FE30189EDD4821F40AC81AC52E3429D60FB67774719"
+    },
+    {
+      "path": "client/src/pages/SiteLogPage.tsx",
+      "action": "update",
+      "sha256": "8967E732A6A7CB825E2BF3D0D2EA83B57F8EE19780E40E3DD65DEC32A8EE0362"
+    },
+    {
+      "path": "client/src/pages/TicketDetailPage.tsx",
+      "action": "update",
+      "sha256": "D2C9ED1C6EE85B36F18A666C303C7BED2A5DCF2DD9DA383C8DA4AD23F50AA81C"
+    },
+    {
+      "path": "client/src/pages/TicketEditPage.tsx",
+      "action": "add",
+      "sha256": "9E431A9A6ECAC407703F8F1331D2E8EC45C82FD02808243CB314348A171CC3F4"
+    },
+    {
+      "path": "client/src/pages/TicketWizard.tsx",
+      "action": "update",
+      "sha256": "4AFD63FEC1005C65A87D18CF6A3A7B22286822B59384AD725EDB687118435AB1"
+    },
+    {
+      "path": "client/src/pages/TicketsPage.tsx",
+      "action": "update",
+      "sha256": "2F339ED9891C5EAEC44567874C6653DEE451C26E6317A4E1A3665379BB8A85E5"
+    },
+    {
+      "path": "client/src/pages/TrainSignInPage.tsx",
+      "action": "update",
+      "sha256": "94D75BA9AC1F750C67E8DB6E9285DC85176091CE6F1F7BEB445FF148E537F9BB"
+    },
+    {
+      "path": "client/src/pages/V2SurfaceMockupPage.tsx",
+      "action": "delete",
+      "sha256": null
+    },
+    {
+      "path": "client/src/pages/WebhooksPage.tsx",
+      "action": "add",
+      "sha256": "2BE988C753FA86B6A661C9F993F120920C011A3B323FD690F2D190A2F427B641"
+    },
+    {
+      "path": "client/src/pages/WellDetailPage.tsx",
+      "action": "update",
+      "sha256": "F6B23A3D68F14A43EA17966EC9777845C2280352D706BF5E78308751FE9ABAB5"
+    },
+    {
+      "path": "client/src/pages/portal/PortalLayout.tsx",
+      "action": "update",
+      "sha256": "5CB68FCA42E14BEBEECD358977F479679A66EFDD5A6E7F392F457064F4B5892C"
+    },
+    {
+      "path": "client/src/pages/wizard/WizardShell.tsx",
+      "action": "update",
+      "sha256": "37B7B85637DDCA192022CA2E3A92D1E090EDDB9C3D675C426F444E12231769D4"
+    },
+    {
+      "path": "client/src/pages/wizard/divisions.tsx",
+      "action": "update",
+      "sha256": "4D6BA52EC9D609BCF56B6B43D5D9B7C6E4E38EB2B5A1C0F8A9882F9A1D58D78B"
+    },
+    {
+      "path": "client/syncProductRecovery.test.mjs",
+      "action": "add",
+      "sha256": "0C7E80DB0E6446F618EE62EF79D98DFBA031D06F0B85E6DD76DC241EA21489FA"
+    },
+    {
+      "path": "client/ticketDetailSync.test.mjs",
+      "action": "add",
+      "sha256": "F36A039F6F105984C657AE4956AC5996B32D8B7E8C9BA2673467B3926FB9A801"
+    },
+    {
+      "path": "client/ticketDraftSave.test.mjs",
+      "action": "add",
+      "sha256": "05F621552321D99737B17F65845D4FDB2DA18B2F209BDA86D3166B2A945F3BE9"
+    },
+    {
+      "path": "client/ticketEditing.test.mjs",
+      "action": "add",
+      "sha256": "9404297BE8703AFFEED1D54E7CB2E93AB3BD948C2771B186A20EDD9ED6D5CD50"
+    },
+    {
+      "path": "client/ticketOptionalNotes.test.mjs",
+      "action": "add",
+      "sha256": "D4A3F58432CECEAD3A59C7B8CB7A65DAA8299F66B8BED25380FC9CEE2ECDAA8F"
+    },
+    {
+      "path": "client/ticketRejection.test.mjs",
+      "action": "add",
+      "sha256": "81C33F064EC5671501ABB6B77E14CA025B27E16F79058D74955BD802909538C9"
+    },
+    {
+      "path": "client/trainingRosterResume.test.mjs",
+      "action": "add",
+      "sha256": "676819728FD8D839BBE0D4F8F57F4C9C96660983DABF826E2ECFAC7CCB9A6FE5"
+    },
+    {
+      "path": "client/trainingSubmission.test.mjs",
+      "action": "add",
+      "sha256": "73A7D5B780C4C37B1BEE0EF6CF0D5D94545C669CA2CE4A66C22CF27DD41985A1"
+    },
+    {
+      "path": "server/Dockerfile",
+      "action": "update",
+      "sha256": "8E37652B9D3C0B39A4928229C2B815631B2C972B9BBD5DAF804A6DBA5A2A755B"
+    },
+    {
+      "path": "server/openapi/servicepro-v1.yaml",
+      "action": "update",
+      "sha256": "51D965A75A6500C959C991B03145FC0F35C1BCE555D3880D981BC9378C917D13"
+    },
+    {
+      "path": "server/package-lock.json",
+      "action": "update",
+      "sha256": "CAFE8C027C043396D8D7898F55294660E6E601F139A3B9FD40F56F9DD2F20102"
+    },
+    {
+      "path": "server/package.json",
+      "action": "update",
+      "sha256": "27E5388D0B2BEA2C56C27BCFD9C3528A47C73307721437CB786B90B8BB9DBA85"
+    },
+    {
+      "path": "server/prisma/migrations/20260921120000_rental_billing_pauses/migration.sql",
+      "action": "add",
+      "sha256": "AC18DD925AC3EAC7787845A76A6F517E16F35CA981BE92F6476B5C16A1396B92"
+    },
+    {
+      "path": "server/prisma/migrations/20260924120000_customer_descriptions/migration.sql",
+      "action": "add",
+      "sha256": "AD84DA4BAEF2B50C31A676D2EA9FA5F3548067A3A62AC4220D29A62F4F624253"
+    },
+    {
+      "path": "server/prisma/migrations/20260924150000_document_number_counters/migration.sql",
+      "action": "add",
+      "sha256": "C62337C59DC371929EA45F8F618184756C67A0AB74DE1231A7EB93C5F248BA63"
+    },
+    {
+      "path": "server/prisma/migrations/20260924160000_ticket_offline_identity/migration.sql",
+      "action": "add",
+      "sha256": "5E019D15E37144E01DABAAEA3794EC7FBF5B75CAD80DB5415BE069D71C27F521"
+    },
+    {
+      "path": "server/prisma/migrations/20260924180000_inspection_line_type/migration.sql",
+      "action": "add",
+      "sha256": "C962AA8DBDCED7F9584B24AAFA1FA56CD7B75D2D7D40A4909E12FDBB95A23B9C"
+    },
+    {
+      "path": "server/prisma/migrations/20260924220000_rental_item_replacement/migration.sql",
+      "action": "add",
+      "sha256": "7CE1CB1FCE709D2B1B0CD001ED6B508CAE5C5F99F46F547B4A09C907B60E9D19"
+    },
+    {
+      "path": "server/prisma/migrations/20260928140000_webhook_notifications/migration.sql",
+      "action": "add",
+      "sha256": "B16D7DD08EDF740510576AE1A8F10AFAA0192CF1A9379DF3C25098EBAFA95125"
+    },
+    {
+      "path": "server/prisma/migrations/20261002120000_work_point_verification/migration.sql",
+      "action": "add",
+      "sha256": "AD08BA23F1D1653F6D415B0CCF0ADD0CC2C09FEFB1C27B0D347D5AEE20CCE02B"
+    },
+    {
+      "path": "server/prisma/migrations/20261005120000_shop_mass_intake_serial_guard/migration.sql",
+      "action": "add",
+      "sha256": "ED4EA3770A4DAF3C36DC691FB755764E6CF2CCA4A59DA53B4C1060E0E803E75A"
+    },
+    {
+      "path": "server/prisma/migrations/20261014140000_job_runs_recent_index/migration.sql",
+      "action": "add",
+      "sha256": "2882A63C3217B04CE026BEF1E1AA39B2530800F23192DF99F4E91BD6F7DA6F3B"
+    },
+    {
+      "path": "server/prisma/migrations/20261021193000_invoice_billing_profile/migration.sql",
+      "action": "add",
+      "sha256": "61D78BC102874A39D937C0D469A4EC4ABB8E099B2756BBC2E7FEAC35D0AEED01"
+    },
+    {
+      "path": "server/prisma/migrations/20261021210000_enverus_superseded_attempts/migration.sql",
+      "action": "add",
+      "sha256": "CB37105321C0F233125B6EEE08D38F552C8EB306D1EB31FE15B706F81D0EE9D9"
+    },
+    {
+      "path": "server/prisma/migrations/20261022120000_user_help_tips/migration.sql",
+      "action": "add",
+      "sha256": "80849BAA4ED8D472A81567FB1F7CB34FDFD1EAD6003AAE9F4284A15B51428C8C"
+    },
+    {
+      "path": "server/prisma/migrations/20261027180000_shop_rework_retract_close/migration.sql",
+      "action": "add",
+      "sha256": "B05F56DCF003F949DA120AB159266FFEAE95F6A5633ECC9F64DF17DFCD2E37FB"
+    },
+    {
+      "path": "server/prisma/migrations/20261027181000_repair_active_shop_close_stamps/migration.sql",
+      "action": "add",
+      "sha256": "2A56C28B81861CA2024B5CA0AFAAC7BF132A47ED3EC3A631A16EA35C4502DDC2"
+    },
+    {
+      "path": "server/prisma/migrations/20261028120000_location_cost_center/migration.sql",
+      "action": "add",
+      "sha256": "3CAEF0BDCAB71232476D90F5D9AD117C6306268AC321CDA0FA47A1C989D25CFE"
+    },
+    {
+      "path": "server/prisma/migrations/20261102120000_buyer_site_department/migration.sql",
+      "action": "add",
+      "sha256": "83F9B6DD4960896C6306897A1904C11122C7E5862588096C193399A13C9E3FC2"
+    },
+    {
+      "path": "server/prisma/migrations/20261104120000_rental_package_variants/migration.sql",
+      "action": "add",
+      "sha256": "0C4CB9179D3D0560EBA2B454BF08F3D758D6A642B1B338DD64F78A7DE9343213"
+    },
+    {
+      "path": "server/prisma/migrations/20261111120000_ticket_present_rig_number/migration.sql",
+      "action": "add",
+      "sha256": "B61AE6F62D2934D7BED5D35360AF2DCDF65D35EE4329022F2EF4D3EE357FFFF4"
+    },
+    {
+      "path": "server/prisma/migrations/20261112120000_add_ar_supervisor_role/migration.sql",
+      "action": "add",
+      "sha256": "9CCB341DB947DABF83A1C54E0A8C4AD2B9E50981915ADF83C43DCE438F76FB40"
+    },
+    {
+      "path": "server/prisma/migrations/20261113120000_rental_billing_release/migration.sql",
+      "action": "add",
+      "sha256": "4CB43844F5783E7A699383A4B198D588F9A1BB7EDE24C599EBEE3B4FEF757C35"
+    },
+    {
+      "path": "server/prisma/migrations/20261116120000_company_branding/migration.sql",
+      "action": "add",
+      "sha256": "935AB9366A260D493180108A7F9B5E914A6B06366F936552F43AB23BE8EB912A"
+    },
+    {
+      "path": "server/prisma/migrations/20261116130000_qb_customer_list_pull/migration.sql",
+      "action": "add",
+      "sha256": "B23CCC8808547220552E5B9230B420A7E827AB10B4177091B9189A52D2240730"
+    },
+    {
+      "path": "server/prisma/schema.prisma",
+      "action": "update",
+      "sha256": "8A4ABB675613C918154FFEDD488D12E22959D8EEE73393A53B95557093AA1A30"
+    },
+    {
+      "path": "server/scripts/copy-runtime-assets.cjs",
+      "action": "add",
+      "sha256": "1F83016F70A9A2014D7B3C58DAA23B2D032AE96FE59531345F6A2AE75FB7E29F"
+    },
+    {
+      "path": "server/src/index.ts",
+      "action": "update",
+      "sha256": "D3C570C28B738803F4FAC36F61C455C49312DE5F4BB52EEA986463C3AB375A98"
+    },
+    {
+      "path": "server/src/middleware/auth.ts",
+      "action": "update",
+      "sha256": "85F8FF56FD45669BE8DD94F093A150D59499858ECEDF415F34D571441EFFE1AB"
+    },
+    {
+      "path": "server/src/middleware/errorHandler.ts",
+      "action": "update",
+      "sha256": "42A21265E766BF282D5F705A85038EBAD4C8895E9897EF6DEF7BE8CDB7B435A6"
+    },
+    {
+      "path": "server/src/middleware/kioskAuth.ts",
+      "action": "update",
+      "sha256": "5863D7D6EFA4C3CF98B6F45EB4F49DC99F8D0F4A639923A8B8B353F142D6445A"
+    },
+    {
+      "path": "server/src/middleware/rbac.test.ts",
+      "action": "add",
+      "sha256": "420304C0B733435B2F14E922A6A567FBC96A8A8B104E180C81B59339B799EFA3"
+    },
+    {
+      "path": "server/src/middleware/rbac.ts",
+      "action": "update",
+      "sha256": "BD994CED1E7657695C0B637C724921D882CFDAA30CB95AF9CB3CC40334D55916"
+    },
+    {
+      "path": "server/src/middleware/uploadCompatibility.test.ts",
+      "action": "add",
+      "sha256": "1C0F936F5B923225CB45BCF986BE922AE7B71639A83D259633483600344ACF06"
+    },
+    {
+      "path": "server/src/routes/admin.ts",
+      "action": "update",
+      "sha256": "AA30B06CD51DC48C5D099C94A63A409974078ECDF779247DFA3D43E2D734E038"
+    },
+    {
+      "path": "server/src/routes/attachmentContent.test.ts",
+      "action": "add",
+      "sha256": "E5B6DE5927BD6A33BD30D7771A3E0A43DDD62A523FD76055DE6CFB468CBC7F6B"
+    },
+    {
+      "path": "server/src/routes/attachments.ts",
+      "action": "update",
+      "sha256": "D383876D4A9336AD047ACF2E519E6AB6554EAAE857DDB8468B4549704B61CBCF"
+    },
+    {
+      "path": "server/src/routes/auth.ts",
+      "action": "update",
+      "sha256": "161408ACDF273DF5BEAA59AC7CC154908A6665BE44BC18CE9F3520345D48E1AA"
+    },
+    {
+      "path": "server/src/routes/billing.test.ts",
+      "action": "add",
+      "sha256": "058B3B33599F4CFAD695AB9059A8BCED78462A0606757C915D88AF299B81220D"
+    },
+    {
+      "path": "server/src/routes/billing.ts",
+      "action": "update",
+      "sha256": "A59EB42BCACE0024045F8C7848ABB5E626CF11CB6EB35E212DC2941F3076A822"
+    },
+    {
+      "path": "server/src/routes/blueLion.ts",
+      "action": "update",
+      "sha256": "1841BAA7BB43F85B2D43AE9399E2F4F9F7DD83305650D166756EF200ACB48248"
+    },
+    {
+      "path": "server/src/routes/boards.ts",
+      "action": "update",
+      "sha256": "66D2B22012757BE87F7B34AB3516F11E5821396A1B1CB100187CC6A6B0F06F26"
+    },
+    {
+      "path": "server/src/routes/branding.test.ts",
+      "action": "add",
+      "sha256": "A74F4581B39F745359217FE162D34A7CA7E04CBD57CC93E699BEF4A4BC0CBC7C"
+    },
+    {
+      "path": "server/src/routes/branding.ts",
+      "action": "add",
+      "sha256": "E7E8C14E0F9ECCAB303AB43DEDD3DB66B5071EF7548FFDBA8308FE71F712A027"
+    },
+    {
+      "path": "server/src/routes/bugReport.ts",
+      "action": "update",
+      "sha256": "7A15097DCD279426C9D7C22834346136E6BE63ACF1A395CBD031BC5004291914"
+    },
+    {
+      "path": "server/src/routes/claim.ts",
+      "action": "update",
+      "sha256": "04211CC95836429163AAD152DAECD5C2D52D1CA3DB8E8380BC40E0BA6447E77E"
+    },
+    {
+      "path": "server/src/routes/classpro.ts",
+      "action": "update",
+      "sha256": "7D041ADDE074212E7769F973D56CB4E879C2ABCA63F4F1B473FE9500384D0A93"
+    },
+    {
+      "path": "server/src/routes/companies.ts",
+      "action": "update",
+      "sha256": "262D37897E04149EBD01EB2BB705C2D056EA8D1111A4CFDFDF3465E55B1C0C0A"
+    },
+    {
+      "path": "server/src/routes/coverage.ts",
+      "action": "update",
+      "sha256": "9136D2AF48401F9EE675CC3733D112069EFE7176010FE77490CB13336E28792F"
+    },
+    {
+      "path": "server/src/routes/customerDescriptions.test.ts",
+      "action": "add",
+      "sha256": "86816926D2CB3B8A471BD1922C6C651CB07DC32AD7A4A5FDE1FD58D5C6D7DE1B"
+    },
+    {
+      "path": "server/src/routes/dashboard.ts",
+      "action": "update",
+      "sha256": "BAA74BAA89FE4E5096C66015ABB84811A0D3ECFCFF799129F6869FE999D0D0AA"
+    },
+    {
+      "path": "server/src/routes/dashboardVolume.test.ts",
+      "action": "add",
+      "sha256": "9D4A840046B5F6F1A25E636D080B2C0B0EEC0B8459ED65DA57CF0B7DBC8CDC2C"
+    },
+    {
+      "path": "server/src/routes/dmr-import.ts",
+      "action": "update",
+      "sha256": "798719D3F975CBC677427DB2C160150D718157EE2896CA2CF01F57678FB5389C"
+    },
+    {
+      "path": "server/src/routes/enverus.ts",
+      "action": "update",
+      "sha256": "8DD6EC0E63B1C479DF41AB46AB24722B9C7991657CA8A469092D68AE4AC2A5EB"
+    },
+    {
+      "path": "server/src/routes/enverusFieldTicket.test.ts",
+      "action": "add",
+      "sha256": "B8B4372B515F8AEEAFBB3DC8AD1DCD179D96457606290DE87F4E1EB86CA7938D"
+    },
+    {
+      "path": "server/src/routes/equipment.test.ts",
+      "action": "add",
+      "sha256": "5BCFEE393FF9889BEDE454B59A6DBE97D7CCAC424A090199366D764CA5790EFB"
+    },
+    {
+      "path": "server/src/routes/equipment.ts",
+      "action": "update",
+      "sha256": "CAE250966D18A9C70F9EC0F2C43EACCEFB2ABA3CA2661A356A4F0BF99F79B8B2"
+    },
+    {
+      "path": "server/src/routes/equipmentInspections.ts",
+      "action": "update",
+      "sha256": "D82FA3048C6D9F448397CF31ED83F963C9C12F297FE3030137A009A6A5C31EB6"
+    },
+    {
+      "path": "server/src/routes/helpTips.test.ts",
+      "action": "add",
+      "sha256": "70D640BD2E7446B3E7573DF806B8F0F2C038CAFBAFD7F50883DFC909DF1B86F1"
+    },
+    {
+      "path": "server/src/routes/invoiceApproval.test.ts",
+      "action": "add",
+      "sha256": "C1171C710DB96B910C92AE3E44DB91EC1C7E864B310F4AC25EC30785666847B7"
+    },
+    {
+      "path": "server/src/routes/invoiceCatalog.test.ts",
+      "action": "add",
+      "sha256": "0DB2D51F88777D204F789A2C47ADDC061F6CB9103B3505EFF4C5EF80C9D18FC3"
+    },
+    {
+      "path": "server/src/routes/invoiceList.test.ts",
+      "action": "add",
+      "sha256": "702B5CE9303F95BB78812FE947B962E5B18D3B899DC8DFC8DC12D53E787954EB"
+    },
+    {
+      "path": "server/src/routes/invoiceRejectKickBack.test.ts",
+      "action": "add",
+      "sha256": "43B0F1A98B89104ED5776E99665938054386B26F2739BA6EEA01745F0F2771F1"
+    },
+    {
+      "path": "server/src/routes/invoiceVoid.test.ts",
+      "action": "add",
+      "sha256": "27E822F19984BA4249476489D774B410438E1A5DAD2A7A302E8C985CADB0BBAC"
+    },
+    {
+      "path": "server/src/routes/invoices.ts",
+      "action": "update",
+      "sha256": "FB2569426D055CCE12FC0104271EC898B7B10781E70D7C6F55DCE873B21A4D18"
+    },
+    {
+      "path": "server/src/routes/kiosks.ts",
+      "action": "update",
+      "sha256": "464B6FC1C1CD8FB15534DFD1889CD4EF6C5883410F1F6DC896E8211F64493309"
+    },
+    {
+      "path": "server/src/routes/locations.ts",
+      "action": "update",
+      "sha256": "CA88FFED11B43E25774AABA451A194A901A0999B0379D9A1AB03742FEBF7C7B6"
+    },
+    {
+      "path": "server/src/routes/mobileAssets.ts",
+      "action": "update",
+      "sha256": "BB1FDFA4617378D71EAE113F44CEA1ECFB76A3C6905E5A3BA2D2C3AFD1C20373"
+    },
+    {
+      "path": "server/src/routes/novara.ts",
+      "action": "update",
+      "sha256": "BF1C7D4FC6E4527D2489F2970FA7ADDF2389461C26AD0E43F34A1107B49CEAFC"
+    },
+    {
+      "path": "server/src/routes/payments.ts",
+      "action": "update",
+      "sha256": "8E54528B6D687C7AAA727061EC3C0479707262920FA63E83AEB8FAB09DB9C6D0"
+    },
+    {
+      "path": "server/src/routes/permissions.ts",
+      "action": "update",
+      "sha256": "A1C8A78979C675C976A0A82F1F17639B8FD0FE537254676BB03BF8CAD6147ECE"
+    },
+    {
+      "path": "server/src/routes/portal.ts",
+      "action": "update",
+      "sha256": "B2708AE3FE689F57DC98897F6491F345B7ABBF18888750F3088B93008957F56D"
+    },
+    {
+      "path": "server/src/routes/printJobs.ts",
+      "action": "update",
+      "sha256": "A3ABC1769A22E10E92DC7705DE47DA43C9730EE1D60679896989DF12071C6F53"
+    },
+    {
+      "path": "server/src/routes/printers.ts",
+      "action": "update",
+      "sha256": "E385140D26116B1693B0E9C31A23726A6433B97B48D81D3645C775851C884BEC"
+    },
+    {
+      "path": "server/src/routes/products.ts",
+      "action": "update",
+      "sha256": "03419C9E20502305FC970CC81D4C431EC3634AACF49605635EF2E07E73C6EB70"
+    },
+    {
+      "path": "server/src/routes/qbwc.ts",
+      "action": "update",
+      "sha256": "02EFCDD3718AEF82DF0627A74BC38C756482E7098D2CC43BFCF86F420497FD04"
+    },
+    {
+      "path": "server/src/routes/qbwcPaging.test.ts",
+      "action": "add",
+      "sha256": "399AAF58584777A77ACBCC9F079EB74B1B64EA6D3F4098E91B38FF80600AAD0B"
+    },
+    {
+      "path": "server/src/routes/qbwcRentalNotes.test.ts",
+      "action": "add",
+      "sha256": "AAF2C4BC35FD588028AD6325D0C334A8A2C380B3FB5BADCE319851E5C31919BF"
+    },
+    {
+      "path": "server/src/routes/rentalBillingSettings.test.ts",
+      "action": "add",
+      "sha256": "D3BE4C18D6B54D3D4A7FB548C4583C8D7E3096567E772E096F85B2CABF692E7D"
+    },
+    {
+      "path": "server/src/routes/rentalBomExtras.test.ts",
+      "action": "add",
+      "sha256": "9DB569007464E16488BD7E660F9AA1C30AC8FFA5F7D1320E01CCC46E3252FE23"
+    },
+    {
+      "path": "server/src/routes/rentalDispatch.test.ts",
+      "action": "add",
+      "sha256": "A3446E29911CA853DE3EE7BF510041214D86D1D791ED85828B13AB6AE3EDBEDF"
+    },
+    {
+      "path": "server/src/routes/rentalInvoice.test.ts",
+      "action": "add",
+      "sha256": "2DD4676433AEC7475D738C83569C73DF3BF53E781B0C39D7693410AA85ABF422"
+    },
+    {
+      "path": "server/src/routes/rentalPackagePermissions.test.ts",
+      "action": "add",
+      "sha256": "F4AF743FC873B9D1E062A195A89DAD98A5DFD1679AA14F5D284BAF07DA45CD93"
+    },
+    {
+      "path": "server/src/routes/rentalSwap.test.ts",
+      "action": "add",
+      "sha256": "8CA09884EB5EC759E3772052A5C9A16169F43082AE1B9FEE5E408C88F45A6BBC"
+    },
+    {
+      "path": "server/src/routes/rentals.ts",
+      "action": "update",
+      "sha256": "90D6C027B8F05ED98D06FFD335AB1CE027C0D2F2E00778ADD75DF05FE3C051BF"
+    },
+    {
+      "path": "server/src/routes/rentalsBoardPublic.ts",
+      "action": "update",
+      "sha256": "8FC133303894F76C156C931E21550A0D09A2A54B1386949A07DA7628C4A281B3"
+    },
+    {
+      "path": "server/src/routes/roleMappings.ts",
+      "action": "update",
+      "sha256": "36A372CCF03D79FF66F1463E5397D3C686CCE41DC9BEC2D67B221A94ABE9C8A7"
+    },
+    {
+      "path": "server/src/routes/routes.ts",
+      "action": "update",
+      "sha256": "63878B9FF7A451D8DB52894DB02893BCD6CCCFB3188830B23FF199B7F6D76C98"
+    },
+    {
+      "path": "server/src/routes/salesTaxRates.ts",
+      "action": "update",
+      "sha256": "06514DB3C3886C6023224D5536C765AD3AEB202BD7CBB1644900CC6EAE560205"
+    },
+    {
+      "path": "server/src/routes/shopAddUnits.test.ts",
+      "action": "add",
+      "sha256": "0DCBAA55F455E06814B93FE8572154313535A7A795D23FB207AC7DA779D51E86"
+    },
+    {
+      "path": "server/src/routes/shopBoardPublic.ts",
+      "action": "update",
+      "sha256": "AB70818B12387DA6F6C2B028D6BE2827334B5D7F94BA5E3FB5A5BE820C9F9514"
+    },
+    {
+      "path": "server/src/routes/shopCondemnCompleted.test.ts",
+      "action": "add",
+      "sha256": "2D0538681FC82252C2D4CDBE7AC52069C3CF8745947FE85B4BB3B2C2C97AE5D2"
+    },
+    {
+      "path": "server/src/routes/shopOrders.completion.test.ts",
+      "action": "add",
+      "sha256": "6BBBA29A0B0F538C16CDB54B2188020865B51B873F8ACC926B63C6D4CA4D821F"
+    },
+    {
+      "path": "server/src/routes/shopOrders.ts",
+      "action": "update",
+      "sha256": "FBC54490CF213088C9C7036C7BBFBB2C4C29DF048E423F4D395A3E44DCCE8E59"
+    },
+    {
+      "path": "server/src/routes/shopPaymentQuote.test.ts",
+      "action": "add",
+      "sha256": "0A850DABEEE73CE546BE80212307E2F4A13C34709A9C562DFA5F2AE86544A4EC"
+    },
+    {
+      "path": "server/src/routes/shopReleaseQa.test.ts",
+      "action": "add",
+      "sha256": "1D0A1B5A4CEAB2D9C03146F5C8CD86EDA3455E1FEB089211A244EF6E0D7B5F9E"
+    },
+    {
+      "path": "server/src/routes/shopTransfers.ts",
+      "action": "update",
+      "sha256": "F4BB31362CC2BB5BEC0D8C65E862CCB8B59C9073262F2D6A5A5AD0011B5C8AC3"
+    },
+    {
+      "path": "server/src/routes/signatureRequests.ts",
+      "action": "update",
+      "sha256": "179E84493DCA51D0092E348295A8DDDE6669DC61C973B52FA2826791267F32DC"
+    },
+    {
+      "path": "server/src/routes/sites.ts",
+      "action": "update",
+      "sha256": "92B278162CB47030F66F10F0EAD56E3EBF58BB74A96C7DB7FC903BAC6C6A5333"
+    },
+    {
+      "path": "server/src/routes/stressHardening.test.ts",
+      "action": "add",
+      "sha256": "42DFCF9661E15344CD9AB4E91208AE40C8E9BC1052105DFA07A2FF6FA1ED2F05"
+    },
+    {
+      "path": "server/src/routes/sync.ts",
+      "action": "update",
+      "sha256": "268010A21EEA36508CA76030A3A67E932B37406E0CBDB6B221483501D9233820"
+    },
+    {
+      "path": "server/src/routes/syncReliability.test.ts",
+      "action": "add",
+      "sha256": "774EBFA621977CBEE78D276E39E18C3592BB8A4F20C7A65DDC4D803017B654E0"
+    },
+    {
+      "path": "server/src/routes/ticketPermissionErrors.test.ts",
+      "action": "add",
+      "sha256": "F24718EBCD9C9EDA8AD835A2CE71A3ECB270B7B2609AD9F9EF7AF555292EEE68"
+    },
+    {
+      "path": "server/src/routes/ticketStandaloneD4.test.ts",
+      "action": "add",
+      "sha256": "E918D5E7D73F1FDC755191EC0E780A2B0838D280F0517320AA191295A65F3A35"
+    },
+    {
+      "path": "server/src/routes/tickets.ts",
+      "action": "update",
+      "sha256": "A9F4A81EA9C03577ED522B550AB9FC76C8A518D4D6BC4FDD1B1F3A542A183891"
+    },
+    {
+      "path": "server/src/routes/trainingEmployers.ts",
+      "action": "update",
+      "sha256": "E358CCD134655718E9EB4317A08CE65A285E78A7D87D5C3173A960F10B39C446"
+    },
+    {
+      "path": "server/src/routes/trainingInvoice.test.ts",
+      "action": "add",
+      "sha256": "4571B80E9D0A5C4E12D486CFE2843A92B79F61EA202DD1DAC1D05EC34B463C7A"
+    },
+    {
+      "path": "server/src/routes/trainingKiosk.ts",
+      "action": "update",
+      "sha256": "E476AF71BEAD2FEA9A6FA034044185ABFE6031F4A671B8F143636EA4F41780E3"
+    },
+    {
+      "path": "server/src/routes/trainingSignin.test.ts",
+      "action": "add",
+      "sha256": "0D6123878F73719D71AF0C109C13400652B657A0F95B3EE52CC3025DE946F853"
+    },
+    {
+      "path": "server/src/routes/trainingSignin.ts",
+      "action": "update",
+      "sha256": "5386C94725466355B5E6BD5009CBDB99F0035AAC3EB4B7A24DE9ECA99E015001"
+    },
+    {
+      "path": "server/src/routes/users.ts",
+      "action": "update",
+      "sha256": "C41B78C13E9FFE48B64D21FE7A46A5953234FBB01B44C096DE7B44AB97987BE8"
+    },
+    {
+      "path": "server/src/routes/webhookNotifications.test.ts",
+      "action": "add",
+      "sha256": "2B74493576F2588710EF17CA77444005A2D140EAA070CB89CD8097072489A168"
+    },
+    {
+      "path": "server/src/routes/webhookNotifications.ts",
+      "action": "add",
+      "sha256": "FB3A07D47A14375A8F9A96F51C69F277F33C73237217309E23E5154967FCA490"
+    },
+    {
+      "path": "server/src/routes/workPointVerification.test.ts",
+      "action": "add",
+      "sha256": "4D50476927183D9CB50EE7F46ED47CD8C44E09872A173E3A058A802CF205AD38"
+    },
+    {
+      "path": "server/src/services/__tests__/__snapshots__/qbxmlBuilder.golden.test.ts.snap",
+      "action": "update",
+      "sha256": "6CE61D7F301D469BBA8A5BFE3D33FA47B1E6C4E3A05208C88BBB2F8CBEE15935"
+    },
+    {
+      "path": "server/src/services/__tests__/fixtures/pdfBranding.ts",
+      "action": "add",
+      "sha256": "15C150C699349504F4891F6F335E9D835C030708611F0B89064D99E746D5C046"
+    },
+    {
+      "path": "server/src/services/__tests__/qbFobLimit.test.ts",
+      "action": "add",
+      "sha256": "1A0F41EDFCF0B24470461C02410EB477AC1928E2A5E579AECD0CF83A64E87980"
+    },
+    {
+      "path": "server/src/services/__tests__/qbInvoiceDiff.test.ts",
+      "action": "add",
+      "sha256": "A924AB029A806FE2C23D89B98E8B9330DE6351858B4121DED0B63ED82735A385"
+    },
+    {
+      "path": "server/src/services/__tests__/qbItemPaging.test.ts",
+      "action": "add",
+      "sha256": "100DDC7EB362BC7023256BC45D316A33D4872A3BB300A065A2119F1F18ABCC00"
+    },
+    {
+      "path": "server/src/services/__tests__/qbPoLimit.test.ts",
+      "action": "add",
+      "sha256": "E715808430747BE6F44BE7BE2BD59B927A7906CB2D4C19037246D1D8939E45F5"
+    },
+    {
+      "path": "server/src/services/__tests__/qbRentalNotes.test.ts",
+      "action": "add",
+      "sha256": "3C2A0AAB16931629D2FAC84A7D2A7E5F2083AAF9F5355D0DE9047FA6C02D8BC4"
+    },
+    {
+      "path": "server/src/services/__tests__/qbxmlBuilder.golden.test.ts",
+      "action": "update",
+      "sha256": "6E3DE4E06A7D7A41C25C2C1FE3C3BC44D97D253017793A8D93DB946FDE6319F1"
+    },
+    {
+      "path": "server/src/services/appendPdfAttachments.test.ts",
+      "action": "add",
+      "sha256": "CB01FA8876008A6E0412F91CBE23E6E7F53BE2CA04E79770B94D0530CAB340E1"
+    },
+    {
+      "path": "server/src/services/appendPdfAttachments.ts",
+      "action": "add",
+      "sha256": "553FEDEE30CF36C8A4B71E29A88A33709EA001F1C646FCCCE6010A2F0A4530BA"
+    },
+    {
+      "path": "server/src/services/approvalAutoProcessor.ts",
+      "action": "update",
+      "sha256": "ADACA3A4096A1FA4331285D7DC23C957B10681CC964CAE88AC91AF575B012C59"
+    },
+    {
+      "path": "server/src/services/arSupervisorRole.test.ts",
+      "action": "add",
+      "sha256": "0CC7512BF85D32F33C72972D8B3B525CB5B7CBB0AC486CFDAA6843F83FD282CE"
+    },
+    {
+      "path": "server/src/services/attachmentUploader.ts",
+      "action": "update",
+      "sha256": "B4B715E96828117BC4F13AAA2B45F5C860875BC7C733F1D83AE7B35384946067"
+    },
+    {
+      "path": "server/src/services/billingApprovalGroups.test.ts",
+      "action": "add",
+      "sha256": "44A56E8997F64D274AA04131176A968ED7D8E37E3EA92D3EEB4E86A9F1C14A75"
+    },
+    {
+      "path": "server/src/services/billingApprovalGroups.ts",
+      "action": "add",
+      "sha256": "F887F0C523C43C8529DDE0560C3EC875558F096C413142C00D66550CE209BD7B"
+    },
+    {
+      "path": "server/src/services/billingApprovalSplit.test.ts",
+      "action": "add",
+      "sha256": "0C6DB8D4B43FE47D781124F1C5E6653AA4A63E13C8D2267817ABF7507B4CE18E"
+    },
+    {
+      "path": "server/src/services/billingApprovalSplit.ts",
+      "action": "add",
+      "sha256": "B20EF24CFD0D06FE068A18C29F92A5BEE23AD19FF3F6C4E7326B518FC6E196FE"
+    },
+    {
+      "path": "server/src/services/billingCardLocation.test.ts",
+      "action": "add",
+      "sha256": "37B8D1C0186683CBFE1F80F06674842F13108182F47234B40A75BD26B4A31D68"
+    },
+    {
+      "path": "server/src/services/billingCardLocation.ts",
+      "action": "add",
+      "sha256": "B5C431E44B27C5B7E0CF74FDD1BE23D7AA95196918037677272A34C3179C9B6A"
+    },
+    {
+      "path": "server/src/services/billingProfileSelector.ts",
+      "action": "update",
+      "sha256": "01BD1B3F9F78C49A6A3392332A41195A6A4EB2740A1C42D9C458970AA7869068"
+    },
+    {
+      "path": "server/src/services/billingRules.test.ts",
+      "action": "update",
+      "sha256": "59295B431A9B8602444CB22B11AC360BC66FCDAFD2CB54216BEFFEB43126D543"
+    },
+    {
+      "path": "server/src/services/billingRules.ts",
+      "action": "update",
+      "sha256": "F1691BE45D61013B62A5F8D076A9CDA846BD036DA824C6599847380698C51F64"
+    },
+    {
+      "path": "server/src/services/blueLionChecklist.test.ts",
+      "action": "update",
+      "sha256": "96C74FC550F7B61EF5C87316B46B32A6871DBBC12ED2574740D857113657A9DF"
+    },
+    {
+      "path": "server/src/services/blueLionQueueProcessor.ts",
+      "action": "update",
+      "sha256": "B0FDCA04B087A005A4E88B1A11CFE5AFA445C737A493315BD7D58B470F2E122A"
+    },
+    {
+      "path": "server/src/services/branding.ts",
+      "action": "add",
+      "sha256": "7F292DC09EE80EE83172A463A5C168AA8250A6CF8FD7887A7084F2DC7E30F06A"
+    },
+    {
+      "path": "server/src/services/claimService.ts",
+      "action": "update",
+      "sha256": "BE8F1287B2116FBE8850BFD1FCE50C9C51AB20D51A7792F3071245BC48B24D93"
+    },
+    {
+      "path": "server/src/services/classproTicketPush.test.ts",
+      "action": "add",
+      "sha256": "9E587EE11E96103382A164F720ED1E9B36B615766D9DC3A452A4D1E3D4540A69"
+    },
+    {
+      "path": "server/src/services/classproTicketPush.ts",
+      "action": "update",
+      "sha256": "F2182A28B423EE4E5EEED3838B983435F69C66D0A049D47DF245D738560382F9"
+    },
+    {
+      "path": "server/src/services/combinedTicketPdf.test.ts",
+      "action": "add",
+      "sha256": "5E2A5F2013F111EFB4C3A8F4C0E0E2549669E1BFF2A220AA09BF9064FA56268B"
+    },
+    {
+      "path": "server/src/services/combinedTicketPdf.ts",
+      "action": "add",
+      "sha256": "C6CC914316BDEC0F8741E55B71B2B29C911456877BD9D6499AA32DB1B8D71ACD"
+    },
+    {
+      "path": "server/src/services/courseCatalog.ts",
+      "action": "update",
+      "sha256": "1C09EC9FE7B61CF455E3F39FBF3C0E966DA7B368B9A2D713012FD647C1938E97"
+    },
+    {
+      "path": "server/src/services/customerDescriptions.test.ts",
+      "action": "add",
+      "sha256": "851CB9224640DA046AC8243D9BFF5423C3EC56795CF40F8D076BBB1B09C38DEF"
+    },
+    {
+      "path": "server/src/services/customerDescriptions.ts",
+      "action": "add",
+      "sha256": "4C2693ADA3F631856E67B5B7C6A8EBE75302D0ECA2832AE8C3D978A69BAD4205"
+    },
+    {
+      "path": "server/src/services/deploymentGate.ts",
+      "action": "update",
+      "sha256": "36668B89F8A2BE35C4ED7F59BB4C3DA1A69CEC7DA8E329E0C9B81A51C214E797"
+    },
+    {
+      "path": "server/src/services/dispatchCallout.test.ts",
+      "action": "add",
+      "sha256": "3F053C852F2BB40D9A72503616CE76306AE6EFAC6F3EBD80AFAE50A9629C8E45"
+    },
+    {
+      "path": "server/src/services/dispatchCallout.ts",
+      "action": "add",
+      "sha256": "CDEA311B43723108831AEFE99705BAF1EC68F6E583053661E1EB09161BB07804"
+    },
+    {
+      "path": "server/src/services/employerMatch.ts",
+      "action": "update",
+      "sha256": "90807576C873C4BFA6C2EDAC937F7E4DA7E595B88102272749A97FCC5BF6E7A5"
+    },
+    {
+      "path": "server/src/services/enverusClient.ts",
+      "action": "update",
+      "sha256": "8B6355882AF3494A6B18E5DF38B285979004621E78DDFA22BE91894675BA0523"
+    },
+    {
+      "path": "server/src/services/enverusInvoiceSubmission.test.ts",
+      "action": "add",
+      "sha256": "35AB65022BCFE210F0E29D45F7C52F6CDCDC0CBF7EC02B9997349A61E421FC68"
+    },
+    {
+      "path": "server/src/services/enverusInvoiceSubmission.ts",
+      "action": "add",
+      "sha256": "7569EB1996E4E74A073BDCD676F6CD06FE7C4E16457CFD33CC4C1523B6587656"
+    },
+    {
+      "path": "server/src/services/enverusPayloadBuilder.test.ts",
+      "action": "add",
+      "sha256": "C535A10FD2EE91742BA7E820A807ABB8A229787585353683FB29664E16ED22FD"
+    },
+    {
+      "path": "server/src/services/enverusPayloadBuilder.ts",
+      "action": "update",
+      "sha256": "0D7BFFA4038226F6AFB4D5A62001FCF1CC38304946050BA513DC67D0E444F8F4"
+    },
+    {
+      "path": "server/src/services/enverusQueueProcessor.test.ts",
+      "action": "add",
+      "sha256": "265C3B94E6B8193E2513625463C7839F01CC460D5A074BB6438AA00A6B14FD41"
+    },
+    {
+      "path": "server/src/services/enverusQueueProcessor.ts",
+      "action": "update",
+      "sha256": "2911E34AE375BF49B7643F5C816525E964B135F352879D3075B76E99DE1032FF"
+    },
+    {
+      "path": "server/src/services/enverusQueueReconciliation.test.ts",
+      "action": "add",
+      "sha256": "45114E9F176635F5C017A32374ED119AEFA1ACED61A74B5BE23CECD1672A4525"
+    },
+    {
+      "path": "server/src/services/enverusQueueReconciliation.ts",
+      "action": "add",
+      "sha256": "DE4A0679C5545E3084ED96E4B7D5309827DA05B351BC2EA336E996C89D876E26"
+    },
+    {
+      "path": "server/src/services/equipmentInspectionPdfGenerator.ts",
+      "action": "update",
+      "sha256": "527155AC5D7B0470D276626454610AF6745CC3AE13824FBDA8679BA2E3BF55D9"
+    },
+    {
+      "path": "server/src/services/equipmentLabel.ts",
+      "action": "update",
+      "sha256": "06F5E8E6F2ACE41FF2C26C8AABD381CF44D0A768CE7A1468F062E3F25D2E3E83"
+    },
+    {
+      "path": "server/src/services/eventBus.ts",
+      "action": "update",
+      "sha256": "9A3B734A2D49729202B4C993012CD9DC3C19C319BAB894B89248A822146B5412"
+    },
+    {
+      "path": "server/src/services/gcalSync.ts",
+      "action": "update",
+      "sha256": "9E519A08DD12C8AAF062901FB584E6363CDD94E3DB33BB014CA333328F25AEB4"
+    },
+    {
+      "path": "server/src/services/googleGroups.ts",
+      "action": "update",
+      "sha256": "62D3335F32A07255C8F5F5454839D18DDB755B552B227D96559865DF7D570F00"
+    },
+    {
+      "path": "server/src/services/h2sAnalytics.test.ts",
+      "action": "update",
+      "sha256": "8BF66A08BFEB83250E544C0E5E5D44432C8E4869C65EB5AAEFA5DE38A3B33770"
+    },
+    {
+      "path": "server/src/services/h2sAnalytics.ts",
+      "action": "update",
+      "sha256": "7CAF6239D03D8601C99B1A924E7232BD36022665E4C353E90DDB28EE4DE1A912"
+    },
+    {
+      "path": "server/src/services/inspectionBillingGuard.ts",
+      "action": "add",
+      "sha256": "CFE38DC097943F9D039A941C2F3AB91E23216B3E83B6E59B5155D310B9B784A4"
+    },
+    {
+      "path": "server/src/services/inspectionLineSync.test.ts",
+      "action": "add",
+      "sha256": "88941DBB3E60FAB63D016B0F44DD0465B74F311770D18803D791B9D35871910F"
+    },
+    {
+      "path": "server/src/services/inspectionLock.ts",
+      "action": "update",
+      "sha256": "FDED5742EC3D29C54E5A5AC74A82034BB0055BBD51837C08EE4C1570D449A08C"
+    },
+    {
+      "path": "server/src/services/inspectionRouting.test.ts",
+      "action": "update",
+      "sha256": "97571D042291C52468311918A6DB2509B1239DC500901213412CCFCE39996C26"
+    },
+    {
+      "path": "server/src/services/inspectionRouting.ts",
+      "action": "update",
+      "sha256": "F4DE567E684A7E744C2F738668EE199716DA3BEEE072DE149B84267CF378547A"
+    },
+    {
+      "path": "server/src/services/internalShopValue.test.ts",
+      "action": "update",
+      "sha256": "070A5142541AAB91E6F8608695974727D9AFFC00ACB63DE478AB9FA96F72D765"
+    },
+    {
+      "path": "server/src/services/internalShopValue.ts",
+      "action": "update",
+      "sha256": "27985782F0989B0863B008811894EE5FB790F2E3C53F8385837D1C3211DC8505"
+    },
+    {
+      "path": "server/src/services/invoiceBillingProfile.test.ts",
+      "action": "add",
+      "sha256": "817D3C0016CD14D9CC9471BA6A3186D6B1422023CA3CBD7911F4F06B8976B4BD"
+    },
+    {
+      "path": "server/src/services/invoiceBillingProfile.ts",
+      "action": "add",
+      "sha256": "BE16A25579B21B24DABBAB943DE25330DA99C9A1DD47ED6985ED186F5534F84F"
+    },
+    {
+      "path": "server/src/services/invoicePdfGenerator.ts",
+      "action": "update",
+      "sha256": "3F63DAC53E2388CC8264B98BED25530B064109C5DDE794AF3B029957B09BB823"
+    },
+    {
+      "path": "server/src/services/invoiceProductTax.test.ts",
+      "action": "add",
+      "sha256": "78671EE1FC2A0D7716CC10F848460E77DF2CD9D32589F2AFEFA18C1C2A343533"
+    },
+    {
+      "path": "server/src/services/invoiceProductTax.ts",
+      "action": "add",
+      "sha256": "90889C604266CE14F5A3A9F4329AD340EA9702641C875E5F2AFD70AB5D75461D"
+    },
+    {
+      "path": "server/src/services/invoiceQbStatus.test.ts",
+      "action": "add",
+      "sha256": "2CC93CF2CF1EF2590CDB1AACC526E975DE6045637244262EED09C7799FB0BDE2"
+    },
+    {
+      "path": "server/src/services/invoiceQbStatus.ts",
+      "action": "add",
+      "sha256": "E0117FAD4A9C1D04B9AE22AD6E50155BD989CC4D7449A9BE0239C70162C70994"
+    },
+    {
+      "path": "server/src/services/invoiceServiceDate.test.ts",
+      "action": "add",
+      "sha256": "D54DCF52CB3484F4FBEC037915F305A570E1EF250A918127BB433406891BBC4A"
+    },
+    {
+      "path": "server/src/services/invoiceServiceDate.ts",
+      "action": "add",
+      "sha256": "2C509D15B9892C7765B1A78F19A14B31350461C1DD2EA918BB6F4914E20F205F"
+    },
+    {
+      "path": "server/src/services/jobAttachments.test.ts",
+      "action": "add",
+      "sha256": "8E828E7C4D22849708351759E9B64A4507279EC201240D49B4261D0A37916FBB"
+    },
+    {
+      "path": "server/src/services/jobAttachments.ts",
+      "action": "add",
+      "sha256": "F4BF87E7FC43DB2A7ED4BB2DF8CEA6F6BEC3DCC3C137D30324CA1217A735D6E0"
+    },
+    {
+      "path": "server/src/services/locationBillingCodes.test.ts",
+      "action": "add",
+      "sha256": "AD46DB2E8D0D2268D0360D2334BE9D7CC9E630F0ADFAD55D34269D0D525FC08F"
+    },
+    {
+      "path": "server/src/services/locationBillingCodes.ts",
+      "action": "add",
+      "sha256": "6DD654711BF4A9740A520E3D7514963DD9C8351EA1EBF140826B7784E5DA34A5"
+    },
+    {
+      "path": "server/src/services/mailer.test.ts",
+      "action": "add",
+      "sha256": "78E4E4110DD349222C17779DB130EC0579BD8984AF96C749C9314BC7DE742233"
+    },
+    {
+      "path": "server/src/services/manualRentalEquipment.test.ts",
+      "action": "add",
+      "sha256": "E7DDF67E7D8F7343D2755DC0E0D6620BB3E0E7A79D2EF2C1B00741417DF2D020"
+    },
+    {
+      "path": "server/src/services/manualRentalEquipment.ts",
+      "action": "add",
+      "sha256": "6FF7CB82EC395FAF674827BA0E163BD47D93060A9172B4BF7E143DD0F28B1B63"
+    },
+    {
+      "path": "server/src/services/manualRentalVisit.test.ts",
+      "action": "add",
+      "sha256": "634FC487D62BD6CB54CCECCCCC15686D3BDEE2D7385EA32E0BD5ED2D1281B021"
+    },
+    {
+      "path": "server/src/services/manualRentalVisit.ts",
+      "action": "add",
+      "sha256": "EF98FDC9BE281CAC878D7E46075535B14597F4557D6A7BC405676EB307E3D3C9"
+    },
+    {
+      "path": "server/src/services/occHealthPdfGenerator.ts",
+      "action": "update",
+      "sha256": "9341F72B44AB1C89B8D529A7CDA4A1811519ACF4D988AD29EE7F72ADC28964A9"
+    },
+    {
+      "path": "server/src/services/ogdShapefile.ts",
+      "action": "add",
+      "sha256": "6648ED17F964EE083A78C264FB5F630F0310C630553F3392D805C25516635B28"
+    },
+    {
+      "path": "server/src/services/operationsDigest.test.ts",
+      "action": "add",
+      "sha256": "0B6935114A5CD306E04B8A995BA6EC4FFD3FAFDDC2F6B93E8F6B8EBC581ED747"
+    },
+    {
+      "path": "server/src/services/operationsDigest.ts",
+      "action": "add",
+      "sha256": "A43B1A00BFFE6132C4CB11EBF434DE2746A46E47B89E3928507DC91C11FAC3F5"
+    },
+    {
+      "path": "server/src/services/operationsDigestWatcher.ts",
+      "action": "add",
+      "sha256": "FD85C0147B520F9F10A2F84E713B1A93E4BD91D1C9458A46BE71817450CF1238"
+    },
+    {
+      "path": "server/src/services/operationsReport.test.ts",
+      "action": "add",
+      "sha256": "07E08AD672121CA4849FF4459DE6D295413550E7180908317E2515C0E0A8AACD"
+    },
+    {
+      "path": "server/src/services/operationsReport.ts",
+      "action": "add",
+      "sha256": "C8CAA242F7BE2F7BC0328CA8A67351759B5EA40A10693E98F0C63FA0222CC62C"
+    },
+    {
+      "path": "server/src/services/opsStats.ts",
+      "action": "update",
+      "sha256": "D7DBC5A9188E07325F6888890BFAA2E3E8DA87FF4D23E2BBAD3AA515FAD0A6DC"
+    },
+    {
+      "path": "server/src/services/paymentReceiptNote.ts",
+      "action": "update",
+      "sha256": "8B7C4381DECBD9A42E4190C7B213738F8CD87EF44C8D8711C358496F682DE7FD"
+    },
+    {
+      "path": "server/src/services/pdfBranding.test.ts",
+      "action": "add",
+      "sha256": "BDDD6D306DE6B392BF214FFC83FC6200342422C6341788F95B40CECEE21535AD"
+    },
+    {
+      "path": "server/src/services/pdfBranding.ts",
+      "action": "add",
+      "sha256": "4337C97D9E8FC1C42E468D9CA2E71287FC0FBB27B094E36742A4F738E45FA1DD"
+    },
+    {
+      "path": "server/src/services/pdfExportAttachments.test.ts",
+      "action": "add",
+      "sha256": "071CFDDEA20B9D08411A1C33BE4E75678ADE86E51CEA59FD1124E0B114FF66F0"
+    },
+    {
+      "path": "server/src/services/pdfExportAttachments.ts",
+      "action": "add",
+      "sha256": "3C791A33CF8A79246800BBE2908E4376CFA83EC68E9584356EE2B7A81EF8DFC5"
+    },
+    {
+      "path": "server/src/services/permissionMessages.test.ts",
+      "action": "add",
+      "sha256": "E2ECFD6FABB0EC2899AD82E70E4A72B9986071818FD4EAA35D20731EB0BC640E"
+    },
+    {
+      "path": "server/src/services/permissionMessages.ts",
+      "action": "add",
+      "sha256": "E502D6E2D2744E1CD49FAA1F600FDE432A59C7B1DF44AA8CC92548259AF98B0C"
+    },
+    {
+      "path": "server/src/services/permissions.ts",
+      "action": "update",
+      "sha256": "61B95B67C008D2FC25DB132ACC89BDA61C284133270D9990AE0C98322637EB4C"
+    },
+    {
+      "path": "server/src/services/printService.ts",
+      "action": "update",
+      "sha256": "D6A19B0D6958AE49EAAC10B049816272DEA8E6471232D4FC6EB25090BD8C24F6"
+    },
+    {
+      "path": "server/src/services/qbCustomerListSync.test.ts",
+      "action": "add",
+      "sha256": "476499D498C23BB9B1211B222E52D8DBA6CBA8CF07985378FE5E7A502DBF2F32"
+    },
+    {
+      "path": "server/src/services/qbCustomerListSync.ts",
+      "action": "add",
+      "sha256": "DFF0B210B883EBCAD9A0672A9A6FF35273F64C6FC2E682C343D26807F629B1BC"
+    },
+    {
+      "path": "server/src/services/qbCustomerSync.test.ts",
+      "action": "add",
+      "sha256": "5410B7FA7FFF4AA8D3BF010F6279C953AD67B127513DFE3A079490B0B5969838"
+    },
+    {
+      "path": "server/src/services/qbCustomerSync.ts",
+      "action": "add",
+      "sha256": "1AB0D0B023E66085278C547E9FD40474D0A04AA31C0D14936D07519FC09E1D14"
+    },
+    {
+      "path": "server/src/services/qbItemMapping.ts",
+      "action": "update",
+      "sha256": "E38F55916236C8D1A78E857E99D760B07260B9E95C2439C03E05694F74BEAEE7"
+    },
+    {
+      "path": "server/src/services/qbItemPaging.ts",
+      "action": "add",
+      "sha256": "94958949D326C6E1EAB589CA68127A00CA4760DA32293135A2D5853F2960CBCA"
+    },
+    {
+      "path": "server/src/services/qbRentalNotes.ts",
+      "action": "add",
+      "sha256": "634888E44B46B876420EB23C1720253E38E81B40CBBA5C4D4E691E2BFB77B11E"
+    },
+    {
+      "path": "server/src/services/qbSandboxScope.test.ts",
+      "action": "add",
+      "sha256": "15C7B1AC7AE9AF562D3C606C6540678EF53962ABE7818639BD2FECB562A2BAB7"
+    },
+    {
+      "path": "server/src/services/qbSandboxScope.ts",
+      "action": "add",
+      "sha256": "56639F80BE39FA980E865BCEB788BC2BDFA9EAE630F66B5A60B8F6C5DD4DBAAA"
+    },
+    {
+      "path": "server/src/services/qbSessionSummary.test.ts",
+      "action": "add",
+      "sha256": "4D05B2D1315B4477052562B7EC88BE88DA42B1DEBD9B50C85C945BC350F1594A"
+    },
+    {
+      "path": "server/src/services/qbSessionSummary.ts",
+      "action": "add",
+      "sha256": "814C7BC2CFBD3B88865926FC749AE577EEE3D60203AC158AE7FDB11C472BE804"
+    },
+    {
+      "path": "server/src/services/qbxmlBuilder.ts",
+      "action": "update",
+      "sha256": "114CD7094DD701CBB84842273C6BBF834114A811BE56C3DE9C0B496CEA3510C6"
+    },
+    {
+      "path": "server/src/services/rebillingReport.test.ts",
+      "action": "add",
+      "sha256": "F6141ECF565C6DDF85C99F2C846750EC64C3CAB297D1D474032B11D870BD5E7A"
+    },
+    {
+      "path": "server/src/services/rebillingReport.ts",
+      "action": "add",
+      "sha256": "E9D317F57A75BAF2FD41E82D55073BEFB141AD4ADA5E664D4BCE3D233BD088CB"
+    },
+    {
+      "path": "server/src/services/rentalAgreementPdfGenerator.ts",
+      "action": "update",
+      "sha256": "94C8AFBD6058BBF93D3AC4EB48132963534B0663536BFDE6960926941B482D01"
+    },
+    {
+      "path": "server/src/services/rentalBillReadyWatcher.test.ts",
+      "action": "add",
+      "sha256": "481F0E3428213EAAF109B8196E2A014B6B9E7AF6474F1A4DD8B071F06B21BE2C"
+    },
+    {
+      "path": "server/src/services/rentalBillReadyWatcher.ts",
+      "action": "update",
+      "sha256": "9E9AD7F2CD39F2F5F3D5170EE649C2150548E5A4CCEB62C0EB7CE48407AF9984"
+    },
+    {
+      "path": "server/src/services/rentalBilling.test.ts",
+      "action": "update",
+      "sha256": "00DDD12C61F30892F1D144FC5A884F85859A93F11F2B5BC2D29D1917B8DE5785"
+    },
+    {
+      "path": "server/src/services/rentalBilling.ts",
+      "action": "update",
+      "sha256": "C08C8639DE66CD480B86A0562A3302DF16BC7FB2A82C5A04BD1EEE8C51AA0F55"
+    },
+    {
+      "path": "server/src/services/rentalBillingPolicy.test.ts",
+      "action": "add",
+      "sha256": "DA05687251AF236B451E25083D8E84D4E2FC7F3F8830ECC6CEC9FCFFE2C0C4E2"
+    },
+    {
+      "path": "server/src/services/rentalBillingPolicy.ts",
+      "action": "add",
+      "sha256": "326E76288C6A1F3A3FA7B1BD4D883344DDB17967BA97AB3731DD224F8D1DA9B6"
+    },
+    {
+      "path": "server/src/services/rentalBillingRelease.test.ts",
+      "action": "add",
+      "sha256": "21EAD2618E2BC119C226C5BCAA4A8267BBEAFB641D372D815DBB896F8D68A52E"
+    },
+    {
+      "path": "server/src/services/rentalBillingRelease.ts",
+      "action": "add",
+      "sha256": "16A5DD0D1F909F07079A1160CD3DCFBFF4E81C319C6D471614722FF5CE22F751"
+    },
+    {
+      "path": "server/src/services/rentalComposition.test.ts",
+      "action": "add",
+      "sha256": "9058299A9D20CACA0E2F148184647B52C6137FB6F3C9D8C9C3A9BDCF32298DD6"
+    },
+    {
+      "path": "server/src/services/rentalComposition.ts",
+      "action": "update",
+      "sha256": "1EDF05814BCEA5258F9C9D4CB200B35A3CC2921DD9ADCFEE8E8C520551890684"
+    },
+    {
+      "path": "server/src/services/rentalEventLog.test.ts",
+      "action": "add",
+      "sha256": "FF38AF008E0429CD2439B09E439CEA5DF4640E1BB6D0343C6FC598EF8844615B"
+    },
+    {
+      "path": "server/src/services/rentalEventLog.ts",
+      "action": "add",
+      "sha256": "38F9C18E73359798F559CF974A3D29591ABCF541EB95E96FCD5D0A874189F5CF"
+    },
+    {
+      "path": "server/src/services/rentalLifecycle.test.ts",
+      "action": "add",
+      "sha256": "092D1ABB83620D16BB6F72B9686B78ACF34A4D3DC8BEB7D0799597DFE7ECBC46"
+    },
+    {
+      "path": "server/src/services/rentalLifecycle.ts",
+      "action": "add",
+      "sha256": "23E63DBC4F0DE9B39B490928EE652F8FD66A1C2ED7A28FEEA5B597572852CA14"
+    },
+    {
+      "path": "server/src/services/rentalSweepLines.test.ts",
+      "action": "add",
+      "sha256": "FB2659C3D01D6D9729ACFC0B48D47E2ECAFF21380AFC4F6F0C9F9B8A02CED12B"
+    },
+    {
+      "path": "server/src/services/rentalSweepLines.ts",
+      "action": "add",
+      "sha256": "F46704E7C801FC551697C0C9729FF54FD89ABAF0818742D415260B04FEBE17D8"
+    },
+    {
+      "path": "server/src/services/rentalTicketRecord.ts",
+      "action": "update",
+      "sha256": "F486AB27FDFE97ED049E34399CBACEF4D56DCCE4B9143109FDF6B9A673C54A26"
+    },
+    {
+      "path": "server/src/services/rentalVisitEquipment.ts",
+      "action": "add",
+      "sha256": "48EDA1100CDFC06D339E49745C4AD2C69BC292411CA7E24CEC12293B466CEB7C"
+    },
+    {
+      "path": "server/src/services/rentalsBoard.ts",
+      "action": "update",
+      "sha256": "F19CB68951A17A892C3E7723276CAEFEE1993B8BCD2C91992FB0E5572572527F"
+    },
+    {
+      "path": "server/src/services/reportSubscriptions.test.ts",
+      "action": "add",
+      "sha256": "21B53C85B7D6581CBF1FA41300640F6AAAD8D7D5E93072A76E86E0A0E0C0CDAE"
+    },
+    {
+      "path": "server/src/services/reportSubscriptions.ts",
+      "action": "add",
+      "sha256": "55EC472F8A117363715E09A9C3D6A3D47F166519F832F03CA08B63525F73F0D3"
+    },
+    {
+      "path": "server/src/services/ringcentralListener.test.ts",
+      "action": "add",
+      "sha256": "F25CB5C4D97A8EFFB8520D140D6696A6A5FAFDF2F95D3A34AF20AE690E762445"
+    },
+    {
+      "path": "server/src/services/ringcentralListener.ts",
+      "action": "update",
+      "sha256": "501F5F11B13043EE286C6BCFA88142BF9597D1ABAF29A646204AAF09EDB5EF41"
+    },
+    {
+      "path": "server/src/services/ringcentralNotify.ts",
+      "action": "update",
+      "sha256": "A65D15276606AD3150C782F5ED604867D2CD3011073227AB82C176C9F43E5E6D"
+    },
+    {
+      "path": "server/src/services/salesTax.test.ts",
+      "action": "add",
+      "sha256": "500E20C98C82D183AA2947732090C0694D139A46C716C9DB2520A6593D9F2304"
+    },
+    {
+      "path": "server/src/services/salesTax.ts",
+      "action": "update",
+      "sha256": "510984BD95290B66A7E31BB2BD077D956EB465AB299AD6A0B8762A9F60AC247C"
+    },
+    {
+      "path": "server/src/services/scbaAssembly.test.ts",
+      "action": "add",
+      "sha256": "FD5D0408BADC06B7DBF11CB665C1AB43AAD1F55E53E813FA564C351874DB5A6D"
+    },
+    {
+      "path": "server/src/services/scbaAssembly.ts",
+      "action": "add",
+      "sha256": "32B8D8D04B9FCBBC1A5DECE3EFD9F887603B6F1AA98890998C2366FE0E81BBB1"
+    },
+    {
+      "path": "server/src/services/sendForSigning.test.ts",
+      "action": "add",
+      "sha256": "2018194624883872BFD1940CE6DEC216502B7F5A9766BF0B00BDE2FA7F8E89A9"
+    },
+    {
+      "path": "server/src/services/sendForSigning.ts",
+      "action": "update",
+      "sha256": "F2F7030B47FFA2B46A7F988AD2C61D32E96BA685D21C7E2BB831CE3C360C7711"
+    },
+    {
+      "path": "server/src/services/shopAging.ts",
+      "action": "update",
+      "sha256": "FEFD52BECF83153BCAEEFA831D8210152E2AD97406689CF678B79E64DFF5E793"
+    },
+    {
+      "path": "server/src/services/shopBillingLines.ts",
+      "action": "update",
+      "sha256": "BD12D379697DDE21707B46325948BBF94CEEB816AC41C52BE91C9D5046DBA54B"
+    },
+    {
+      "path": "server/src/services/shopBillingQueue.ts",
+      "action": "update",
+      "sha256": "23D37A6E60A84C8B3F654828F7FAE71B8E9272D7425AE061D174DB27B4CF8CF5"
+    },
+    {
+      "path": "server/src/services/shopBillingWaiver.test.ts",
+      "action": "update",
+      "sha256": "82FAEE21A01499F548CC6D34077AB54EA70502313B813FBF833F20441962D8C3"
+    },
+    {
+      "path": "server/src/services/shopBillingWaiver.ts",
+      "action": "update",
+      "sha256": "16DA16249CEBB9F4ACF0DFB7AABE8A6A572944281833D02F22F5C4AF8D530312"
+    },
+    {
+      "path": "server/src/services/shopBins.test.ts",
+      "action": "add",
+      "sha256": "EBEAE212A07722195A63AEE9E166B11A9649C07DE43330BF87731274CD4DEAEC"
+    },
+    {
+      "path": "server/src/services/shopBins.ts",
+      "action": "add",
+      "sha256": "C2B526F5B3E6278DD7F80BBD977E9E4B3EB968D6FF2D9D545EC68E71D62A0D1B"
+    },
+    {
+      "path": "server/src/services/shopBoard.ts",
+      "action": "update",
+      "sha256": "8205D225FF985AA74A4B5D7859255DABE7C5D37C5485B1DCE45B6BC802573CE3"
+    },
+    {
+      "path": "server/src/services/shopChargePreview.test.ts",
+      "action": "update",
+      "sha256": "4B335952264A280AEAB5F07353DEACC6C3CE9E1B85C67865D42BFE0FE50EB132"
+    },
+    {
+      "path": "server/src/services/shopChargePreview.ts",
+      "action": "update",
+      "sha256": "C63674014EED5F47769219DF2A7960540C27DDB3EA25520B39B056D059FCBDA9"
+    },
+    {
+      "path": "server/src/services/shopHardCloseSweep.ts",
+      "action": "update",
+      "sha256": "569187B015683007B8AE4B5284AF02F86DB1E0667FCEC2BAF5E0AD955A0617BE"
+    },
+    {
+      "path": "server/src/services/shopQaGate.test.ts",
+      "action": "update",
+      "sha256": "9A257B962EA7D73321B3008311D133BB479133801B93F3E8BE6AE5467733D7AB"
+    },
+    {
+      "path": "server/src/services/shopQaGate.ts",
+      "action": "update",
+      "sha256": "93A0A5321CB52A59090921E08EB638B275245A417DD4F426126E6EC734CFAF08"
+    },
+    {
+      "path": "server/src/services/shopQaMaterialize.ts",
+      "action": "update",
+      "sha256": "193DD14B80A646A227660F2E194A7E8E979B386BF08F882D4504F217BA7F7166"
+    },
+    {
+      "path": "server/src/services/shopSerials.test.ts",
+      "action": "add",
+      "sha256": "D05279ED6A0CAACA14F73A030F781A34170AA3E73A43962BB4EC85F59204D9D7"
+    },
+    {
+      "path": "server/src/services/shopSerials.ts",
+      "action": "add",
+      "sha256": "7D39AFFDFE21E272BED543551815F42EC5E01AAC51590F99DCAEC141E4DE9835"
+    },
+    {
+      "path": "server/src/services/shopServiceCharges.test.ts",
+      "action": "update",
+      "sha256": "9EE1061152173B7E56840F149C94B5C7E786D5FD81BB28964624280400E23EFF"
+    },
+    {
+      "path": "server/src/services/shopServiceCharges.ts",
+      "action": "update",
+      "sha256": "BCC14EB92A9332C2F8C29F3E35091D55F21E03EC7CB4E7175E109797833829D1"
+    },
+    {
+      "path": "server/src/services/shopSoftClose.test.ts",
+      "action": "update",
+      "sha256": "3B3E1E0B4AA492CB71E7313F503C69BC4D37F364EBA88F69FFA9419B784F75F1"
+    },
+    {
+      "path": "server/src/services/shopSoftClose.ts",
+      "action": "update",
+      "sha256": "A36874781DD82D78C411ACDC8A1F8B626D3B5D8395D38727D6DB4115AAEFC79B"
+    },
+    {
+      "path": "server/src/services/shopStateMachine.test.ts",
+      "action": "add",
+      "sha256": "18DA8E39A22678889FC9C01EA1E1BD05C0E2498AE790BE86300E2928E424F36B"
+    },
+    {
+      "path": "server/src/services/shopStateMachine.ts",
+      "action": "update",
+      "sha256": "361F985CD79809CA24CB0F2EF5E8D389A75EE0FD155FAD09ADC8E3F3AF9399CF"
+    },
+    {
+      "path": "server/src/services/shopUnitIdentity.test.ts",
+      "action": "add",
+      "sha256": "A2DE498E0DEF932A15AF9C4E63CC47F0C868CF683C6B6D6E837C01C1DD1CA175"
+    },
+    {
+      "path": "server/src/services/shopUnitIdentity.ts",
+      "action": "add",
+      "sha256": "45029DEBBA7DCEA9051797AC1EEB67916FA4EFE5FE6D9C7D1DD0F919429B80E2"
+    },
+    {
+      "path": "server/src/services/shopVendorReceiveBilling.test.ts",
+      "action": "update",
+      "sha256": "8A2F4574049D8C9EF9DC6EE16DFB79C5E9271CB3C011C2AFA4FDDD98F7268D49"
+    },
+    {
+      "path": "server/src/services/shopWoCreate.test.ts",
+      "action": "add",
+      "sha256": "6EBF1C60E5E2B9B442E4177FDF2C188FB51971F6AB97EA19190B15306EAC93BA"
+    },
+    {
+      "path": "server/src/services/shopWoCreate.ts",
+      "action": "update",
+      "sha256": "A3C7C128F08837C72718C4FEEBE3E48B7B1909E96561B87C0323D0A83CA143F6"
+    },
+    {
+      "path": "server/src/services/shopWoTransit.test.ts",
+      "action": "update",
+      "sha256": "5F8D5D0BE0CC2E1F65AB33BD44771BE1129D2D0B3EC769DF8289EB1FA0478632"
+    },
+    {
+      "path": "server/src/services/shopWorkOrderPdfGenerator.ts",
+      "action": "update",
+      "sha256": "B5610EFE6626DB9C980A61E74E5A0A608DB24E96C4D4738C74A1F7309BD3E86F"
+    },
+    {
+      "path": "server/src/services/stripeWebhook.ts",
+      "action": "update",
+      "sha256": "720040F6E284CE37E6BAE9B695C161CD61C5C8188D27C0F3F9658D35DDB5121E"
+    },
+    {
+      "path": "server/src/services/syncApproval.test.ts",
+      "action": "add",
+      "sha256": "4DF17656248B67D25D36CBBEDA1E39ADB13BB40E70392751076177D10D7B0FC1"
+    },
+    {
+      "path": "server/src/services/syncApproval.ts",
+      "action": "add",
+      "sha256": "00B76B553A1491907B899E7600FF622DC84E9B24C75E158F162A69845B436F80"
+    },
+    {
+      "path": "server/src/services/syncTicketIdentity.ts",
+      "action": "add",
+      "sha256": "E7E597C2A7E9B183480A2BF2BC99049CA7ABD3EA0C4A997AEECE8C26CF7B12F2"
+    },
+    {
+      "path": "server/src/services/ticketApprovalAllocation.test.ts",
+      "action": "add",
+      "sha256": "968AC909ED8418C0013D339F2635E01CFA54451BC7B3DC4CA5566143ACBABFEC"
+    },
+    {
+      "path": "server/src/services/ticketApprovalAllocation.ts",
+      "action": "add",
+      "sha256": "0F26DB281BEA4F20F60678B5122118A649F9BE4DD4ED9DDDD8B3AF9621A106EE"
+    },
+    {
+      "path": "server/src/services/ticketCustomerChange.test.ts",
+      "action": "add",
+      "sha256": "745C122163A2B92ECB2EFB6702098445DBD81F67E4E157AF99D8878A529FFADF"
+    },
+    {
+      "path": "server/src/services/ticketCustomerChange.ts",
+      "action": "add",
+      "sha256": "D9060D9BCD7491D192D5B81FA9E3F8AB081B02B1F965DE4F5B85E8FE58BA445D"
+    },
+    {
+      "path": "server/src/services/ticketPdfGenerator.ts",
+      "action": "update",
+      "sha256": "6EDED77B08DF2CE72BC4C3822740333F464D218E3ACA145BCEE308F958A9D206"
+    },
+    {
+      "path": "server/src/services/ticketReviewRules.ts",
+      "action": "update",
+      "sha256": "E11969A0DD5BBD3DCC9C02CDB2B79BE61700C8D4748013C86D9530C554FA1182"
+    },
+    {
+      "path": "server/src/services/ticketStateMachine.ts",
+      "action": "update",
+      "sha256": "C21400B2C475797AA415C43EAE8EDC997A35138CFCA7C513DD53942669118627"
+    },
+    {
+      "path": "server/src/services/ticketVolume.test.ts",
+      "action": "add",
+      "sha256": "A6027654D140E7AE24854C1094F297FDB8DDAC2E519065D3F622503B40ED6811"
+    },
+    {
+      "path": "server/src/services/ticketVolume.ts",
+      "action": "add",
+      "sha256": "91B982C33C55A657F63BCD5A475D38F8EF83BA5F80A5824AA449F4948EBABD90"
+    },
+    {
+      "path": "server/src/services/ticketWritePolicy.test.ts",
+      "action": "add",
+      "sha256": "B58FABFEBED72B8A63CC7C2772AD5E6B6F5F485F49F73A95846E350AA5DAA1A6"
+    },
+    {
+      "path": "server/src/services/ticketWritePolicy.ts",
+      "action": "add",
+      "sha256": "53522306947E9540F4A3CBB32CB4E9F23DE7CDEFEAA38A9E34C055753AD9526E"
+    },
+    {
+      "path": "server/src/services/webhookSettings.test.ts",
+      "action": "add",
+      "sha256": "A33E8E79FAABBB34AF013AF6FF1F9AA066B77A2D463EED7AAD4299528C20D308"
+    },
+    {
+      "path": "server/src/services/webhookSettings.ts",
+      "action": "add",
+      "sha256": "0B1B89903D1274472ACBF64DF4532DE46194248D2859788E3381A5BF1B842423"
+    },
+    {
+      "path": "server/src/services/widgetCatalog.ts",
+      "action": "update",
+      "sha256": "7302B7CA48EA1CC31CC61F8D025A9DCBD20F89476EDECA54A20F3D2A2536E54E"
+    },
+    {
+      "path": "server/src/services/workPointVerification.test.ts",
+      "action": "add",
+      "sha256": "1F62D58AFEC7C7F65BEE2A4DD2D7335811C151883936D8849ED644BD5D0B58FE"
+    },
+    {
+      "path": "server/src/services/workPointVerification.ts",
+      "action": "add",
+      "sha256": "15CA018FF8A22DB3282355AD085930C9061697350FE579626C65C580406C1ABC"
+    },
+    {
+      "path": "server/src/services/writeValidation.ts",
+      "action": "add",
+      "sha256": "C657DD1492CAD69FEEB76DB50E96F150D750A80FD85B8F0C709ADB21B31EAD9B"
+    },
+    {
+      "path": "server/src/utils/auditLog.ts",
+      "action": "update",
+      "sha256": "923C97432D00333ED4B868FDE1532586B1829C649D7A5F9CA509A0C4D3661AC0"
+    },
+    {
+      "path": "server/src/utils/companyGuards.ts",
+      "action": "update",
+      "sha256": "879EF9333D5BABDB53DD2C878E9363BF70304BA4AD0240488AAFA7D85F6B4D51"
+    },
+    {
+      "path": "server/src/utils/courseProductMap.test.ts",
+      "action": "add",
+      "sha256": "FB03E05C10DE4EB89004DEB83D1F40B0B54E3F8D259E4532091937AB906C3CED"
+    },
+    {
+      "path": "server/src/utils/courseProductMap.ts",
+      "action": "update",
+      "sha256": "D5FFDE98AD65DA9826418FB9688D1ECB91F07465BB77D8ED1965A5806D5DBE5C"
+    },
+    {
+      "path": "server/src/utils/locationDisplay.ts",
+      "action": "update",
+      "sha256": "AA48E4BFDB8CFE341A05B10FB43E0724D9291B179E7ADD54DC2D3D18B2006CEA"
+    },
+    {
+      "path": "server/src/utils/servicePartMap.ts",
+      "action": "update",
+      "sha256": "E55DDDEF261A42A9A654A10FE154D0687C9B0F97635384E5BE69149565FB2668"
+    },
+    {
+      "path": "server/src/utils/ticketNumber.ts",
+      "action": "update",
+      "sha256": "8547DB2BAAB7E6283CBBC3755C2ADB506C5E34CD2C15177C0B9419BDAC3B6737"
+    },
+    {
+      "path": "server/src/utils/ticketOrigin.ts",
+      "action": "add",
+      "sha256": "777B30CCF52D09FF4E0CF7CA3E0C775B6CED7A2ADFEA71F0A06555025F745F4E"
+    },
+    {
+      "path": "server/src/utils/ticketPdfBuffer.ts",
+      "action": "update",
+      "sha256": "E9BA4AF5A18E046D86D3A0AD2707C02D441CF679ED95C72ADADA8D32F3744C99"
+    },
+    {
+      "path": "server/src/utils/trainingRosterReplay.ts",
+      "action": "add",
+      "sha256": "40E2F6B1F07F4EDBF9B8DB5163590052C1CC845239AAACDC2E4C85ED78746566"
+    },
+    {
+      "path": "server/src/v1/index.ts",
+      "action": "update",
+      "sha256": "1233EDB1DA218226B4BAE5E197B98B43145865A5D3D9A0DC64C8017E03A9FA58"
+    },
+    {
+      "path": "server/src/v1/query.test.ts",
+      "action": "add",
+      "sha256": "71FA43152B0078CDC6ECCDD6D63B58B20C13018C6235B73571D5485A149128F3"
+    },
+    {
+      "path": "server/src/v1/query.ts",
+      "action": "add",
+      "sha256": "3BDD979CCA41178AA30A9CE03FBC30237886D3C21E0E5668A008A6A4E5805866"
+    },
+    {
+      "path": "server/src/v1/respond.ts",
+      "action": "update",
+      "sha256": "3AACCEF67F1ACF64015183915BE90E181B56CB0293D2C84EC6A9AFFD8D9C3A9E"
+    }
+  ],
+  "conflicts": [],
+  "deferred": [
+    ".env.example",
+    ".github/workflows/ci.yml",
+    "Caddyfile",
+    "README.md",
+    "SANDBOX.md",
+    "ci/NODE-SECURITY-UPGRADE.md",
+    "ci/NPM-SECURITY-UPGRADE.md",
+    "ci/SETUP-CI-PIPELINE.md",
+    "ci/ci-deploy.sh",
+    "ci/ci-deploy.test.sh",
+    "ci/ci-postgres.sh",
+    "ci/ci-postgres.test.sh",
+    "deploy.sh",
+    "docker-compose.prod.yml",
+    "docs/shop-billing-waivers.md",
+    "mk2/SERVICEPRO-WORKABLE-ROLLOUT-PLAN-2026-09-09.md",
+    "mk2/adr/ADR-0014-rental-anchored-d4-billing.md",
+    "mk2/adr/ADR-0015-catalog-bom-pricing.md",
+    "mk2/adr/ADR-0016-v2-clean-db-cutover.md",
+    "scripts/fbir-tier1-classify.sql",
+    "scripts/fbir/classify_fbir.py",
+    "scripts/fbir/fort_berthold_boundary_tiger2026.geojson",
+    "scripts/fbir/gen-tier1-sql.py",
+    "scripts/fbir/tier1-classify.template.sql",
+    "scripts/sandbox-sanitize.sql",
+    "server/docs/CURRENT-WORKFLOWS.md",
+    "server/docs/CUSTOMER-DESCRIPTIONS.md",
+    "server/docs/D3-SWAMP-IDS.md",
+    "server/docs/D3-SWAMP-RESULTS.md",
+    "server/docs/D4-SWAMP-RESULTS.md",
+    "server/docs/D4-SWAMP-TESTING.md",
+    "server/docs/D6-FIELD-SWAMP-RESULTS.md",
+    "server/docs/D6-SWAMP-RESULTS.md",
+    "server/docs/ENVERUS-SANDBOX-01379.md",
+    "server/docs/QB-SANDBOX-COMPLETION.md",
+    "server/docs/QB-SANDBOX-PULL-IDS.md",
+    "server/docs/RENTAL-BILLING-PAUSES.md",
+    "server/docs/RENTAL-QB-NOTES.md",
+    "server/docs/RUNBOOK.md",
+    "server/docs/SANDBOX-CAMPAIGN-FINAL.md",
+    "server/docs/STRESS-TEST-HARDENING.md",
+    "server/docs/TRAINING-NORMAL-CLOSEOUT-IDS.md",
+    "server/docs/TRAINING-SWAMP-IDS.md",
+    "server/docs/TRAINING-SWAMP-RESULTS.md",
+    "server/docs/USER_GUIDE.md",
+    "server/docs/WEBHOOK-NOTIFICATIONS.md",
+    "server/docs/operations-report.md",
+    "server/scripts/audit-unsent-rental-qb-notes.sql",
+    "server/scripts/d3-audit-tickets.cjs",
+    "server/scripts/d4-sandbox-chaos.cjs",
+    "server/scripts/d4-sandbox-host.cjs",
+    "server/scripts/d6-audit-drafts.cjs",
+    "server/scripts/d6-audit-field.cjs",
+    "server/scripts/field-inspection-catalog-audit.cjs",
+    "server/scripts/ih-sampling-sandbox-check.ts",
+    "server/scripts/import-enverus-cost-centers.cjs",
+    "server/scripts/ogd-to-csv.ts",
+    "server/scripts/operations-subscription-smoke.ts",
+    "server/scripts/operations-ui-fixture.cjs",
+    "server/scripts/prepare-rental-qb-notes-sweep.ts",
+    "server/scripts/qb-sandbox-catalog.cjs",
+    "server/scripts/qb-sandbox-d3-billing.cjs",
+    "server/scripts/qb-sandbox-host.cjs",
+    "server/scripts/qb-sandbox-payloads.cjs",
+    "server/scripts/qb-sandbox-preflight.cjs",
+    "server/scripts/qb-sandbox-prepare.cjs",
+    "server/scripts/qb-sandbox-verify.cjs",
+    "server/scripts/repair-ra-2026-0051-billing.sql",
+    "server/scripts/report-double-held-tickets.ts",
+    "server/scripts/stress-hardening-smoke.ts",
+    "server/scripts/training-audit-closeout.cjs",
+    "server/scripts/training-audit-invoices.cjs",
+    "server/scripts/training-audit-rosters.cjs",
+    "server/scripts/training-repair-origin.cjs"
+  ],
+  "syncedOn": "2026-11-18",
+  "sourcePath": "C:/turdhurdles/Claudius",
+  "originalBaselineSha256": "3e825fe683ad202e16105830b9e9416efba2a72f2ba5ef3f81dbc7e056d5da17",
+  "scope": "Tracked application working files, tests, schema/migrations, API contract, build support, and dependency locks; includes the four listed uncommitted source changes. Ignored/untracked source files excluded.",
+  "counts": {
+    "add": 292,
+    "update": 223,
+    "delete": 1
+  },
+  "validation": {
+    "clientBuild": "passed",
+    "clientTestsPassed": 244,
+    "serverBuild": "passed",
+    "serverTestFilesPassed": 132,
+    "serverTestsPassed": 1374,
+    "serverTestsSkipped": 1,
+    "prismaGenerate": "passed with dummy database URL; no connection",
+    "remainingApplicationDifferences": 0,
+    "baselineUnchanged": true,
+    "sourceUnchanged": true,
+    "gitDiffCheck": "Tracked-file check passed; staged check reports inherited extra blank lines at EOF in four newly added source files, retained for source parity. See UPSTREAM-SYNC.md.",
+    "nodeVersionUsed": "22.13.1",
+    "upstreamNodeVersionPin": "22.23.4",
+    "databaseMigrationsExecuted": false,
+    "deploymentExecuted": false,
+    "notes": "Backend HTTP tests required local loopback access outside the restricted sandbox. Docker images and live customer deployments not exercised."
+  }
+}

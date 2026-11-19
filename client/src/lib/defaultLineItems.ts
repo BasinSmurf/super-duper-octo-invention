@@ -46,6 +46,9 @@ const DEFAULTS: Record<string, DefaultSpec[]> = {
     { partNumber: '406', lineType: 'labor', quantity: 1 },
     { partNumber: '101', lineType: 'travel', quantity: 1 },
   ],
+  cascade_air_inspection: [
+    { partNumber: '0311001', lineType: 'service', quantity: 1 },
+  ],
   on_site_services: [
     { partNumber: '406', lineType: 'labor', quantity: 1 },
     { partNumber: '101', lineType: 'travel', quantity: 1 },

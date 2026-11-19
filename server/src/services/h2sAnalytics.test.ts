@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const { findMany } = vi.hoisted(() => ({ findMany: vi.fn() }));
-vi.mock('../index.js', () => ({ prisma: { serviceTicket: { findMany } } }));
+vi.mock('../db.js', async importOriginal => ({ ...await importOriginal<typeof import('../db.js')>(), ...(() => ({ prisma: { serviceTicket: { findMany } } }))() }));
 import { computeH2sAnalytics } from './h2sAnalytics.js';
 const ticket = (overrides = {}) => ({
   id: 'ticket-1', ticketNumber: 'T-1', serviceDate: new Date('2026-09-10T00:00:00Z'),

@@ -99,9 +99,42 @@ export function unpricedCompositionLines(composition: unknown): string[] {
     missing.push(c.bomPackage.label || 'Rental package');
   }
   for (const e of c.bomExtras || []) {
-    if (e.label?.trim() && !hasRate(e.rate)) missing.push(`${e.label.trim()} (over baseline)`);
+    // Deploy already names extras "<item> (over baseline)"; don't say it twice.
+    const label = e.label?.trim();
+    if (label && !hasRate(e.rate)) missing.push(/\(over baseline\)$/i.test(label) ? label : `${label} (over baseline)`);
   }
   return missing;
+}
+
+/** Stable key for an over-baseline extra; older rows may carry no id. */
+export const bomExtraKey = (e: { id?: string }, index: number) => e.id || `extra-${index}`;
+
+export interface BomExtraCorrection { key: string; rate: number | null; qty: number }
+
+/**
+ * The office's correction of what deploy resolved as over-baseline: price it,
+ * change the count, or drop it (absent from `corrections`). A correction, not a
+ * dated change — it describes what went out on day one — so callers apply it to
+ * every composition window, not only the current one.
+ *
+ * `scope` = the keys the office was actually looking at (the current
+ * window's extras). An extra outside it belongs to an earlier window — e.g.
+ * monitors that were overages before an on-job package switch folded them in —
+ * and is left alone rather than read as "dropped".
+ */
+export function correctBomExtras<T extends RentalComposition | Record<string, any>>(
+  composition: T, corrections: BomExtraCorrection[], scope?: Set<string>,
+): T {
+  const extras = ((composition as RentalComposition).bomExtras || []);
+  const byKey = new Map(corrections.map(c => [c.key, c]));
+  const kept = extras.flatMap((e, i) => {
+    const key = bomExtraKey(e, i);
+    if (scope && !scope.has(key)) return [e];
+    const c = byKey.get(key);
+    return c ? [{ ...e, rate: c.rate, qty: c.qty }] : [];
+  });
+  const { bomExtras: _drop, ...rest } = composition as RentalComposition;
+  return (kept.length ? { ...rest, bomExtras: kept } : rest) as T;
 }
 
 export interface RentalFlags {

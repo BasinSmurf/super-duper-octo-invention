@@ -34,6 +34,7 @@ import { routeShopItemFromInspection, type RoutingResult } from './inspectionRou
 import { enqueueInspectionRecord } from './blueLionEnqueue.js';
 import { checkCondemnEvidence } from './condemnEvidence.js';
 import { createAuditLog } from '../utils/auditLog.js';
+import { assertShopSerialsCollected } from './shopSerials.js';
 
 export interface LockInspectionResult {
   locked: { id: string; lockedAt: Date | null; [key: string]: unknown };
@@ -56,6 +57,13 @@ export async function lockInspectionRecord(
   const existing = await prisma.equipmentInspection.findUnique({ where: { id: inspectionId } });
   if (!existing) throw new AppError(404, 'Inspection not found');
   if (existing.lockedAt) throw new AppError(409, 'Inspection is already locked');
+  if (existing.shopItemId) {
+    const item = await prisma.shopWorkOrderItem.findUnique({ where: { id: existing.shopItemId } });
+    if (!item) throw new AppError(404, 'Shop item not found');
+    await assertShopSerialsCollected(prisma, item.workOrderId, [item.id]);
+    // Snapshot the current serial, including identity collected after intake.
+    existing.serialNumber = item.serialNumber;
+  }
 
   // QA gate: the checklist-complete requirement applies ONLY to a 'pass' outcome
   // (certifying the unit is ready for pickup). Any non-pass outcome — fail /
@@ -134,7 +142,7 @@ export async function lockInspectionRecord(
 
   const locked = await prisma.equipmentInspection.update({
     where: { id: inspectionId },
-    data: { lockedAt: new Date(), data: snapshotData as never },
+    data: { lockedAt: new Date(), serialNumber: existing.serialNumber, data: snapshotData as never },
   });
 
   await createAuditLog({

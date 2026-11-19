@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-vi.mock('../index.js', () => ({ prisma: { product: { findMany: vi.fn() }, priceLevel: { findMany: vi.fn() } } }));
+vi.mock('../db.js', async importOriginal => ({ ...await importOriginal<typeof import('../db.js')>(), ...(() => ({ prisma: { product: { findMany: vi.fn() }, priceLevel: { findMany: vi.fn() } } }))() }));
 vi.mock('../utils/servicePartMap.js', () => ({ getLaborProduct: vi.fn().mockResolvedValue({ id: 'labor', partNumber: '0600002' }), getMileageProduct: vi.fn().mockResolvedValue({ id: 'miles', partNumber: '0600001' }) }));
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { priceShopCharges } from './shopChargePreview.js';
 import { toBillingItem } from './shopBillingLines.js';
 
@@ -14,6 +14,26 @@ beforeEach(() => {
   vi.mocked(prisma.priceLevel.findMany).mockResolvedValue([]);
 });
 describe('shared shop pricing for preview and invoice', () => {
+  it.each([4, 10, 40])('bills eight whole-job hours once with %i units', async count => {
+    const units = Array.from({ length: count }, (_, i) => ({ ...unit, id: `unit-${i}`,
+      billing: { services: [{ productId: 'inspection', partNumber: 'inspection', name: 'Inspection', quantity: 1, rate: 10 }] },
+      partsUsed: null, vendorInvoiceTotal: null }));
+    const { lines } = await priceShopCharges({ ...order, billingExtras: { labor: { hours: 8, rate: 85 } } }, units);
+    const laborLines = lines.filter(line => line.chargeKind === 'labor');
+    expect(laborLines).toHaveLength(1);
+    expect(laborLines[0]).toMatchObject({ description: 'Whole-job labor', quantity: 8, rate: 85, amount: 680,
+      unitOfMeasure: 'HR', partNumber: '0600002', qbItemListId: 'qb-labor', chargeKind: 'labor',
+      sourceShopItemId: null, isTaxable: false });
+    expect(lines.reduce((total, line) => total + line.amount, 0)).toBe(680 + count * 10);
+  });
+  it('applies the customer labor contract to whole-job hours', async () => {
+    vi.mocked(prisma.priceLevel.findMany).mockResolvedValue([{ id: 'level', name: 'Contract', items: [
+      { qbItemListId: 'qb-labor', customPrice: 70, adjustPercent: null },
+    ] }] as never);
+    const { lines } = await priceShopCharges({ ...order, company: { ...order.company, qbPriceLevelId: 'level' },
+      billingExtras: { labor: { hours: 8, rate: 85 } } }, []);
+    expect(lines[0]).toMatchObject({ quantity: 8, rate: 70, amount: 560 });
+  });
   it('preserves the QB service identity and charges $100 once for $50 vendor work', async () => {
     vi.mocked(prisma.product.findMany).mockResolvedValue([{ id: 'ue', qbItemListId: 'qb-ue', qbItemFullName: '0623006' }] as never);
     const vendorUnit = { ...unit, partsUsed: null, vendorInvoiceTotal: 50, billing: {
@@ -32,11 +52,13 @@ describe('shared shop pricing for preview and invoice', () => {
     expect(lines.find(l => l.chargeKind === 'labor')).toMatchObject({ partNumber: '0600002', amount: 170, isTaxable: false, sourceShopItemId: 'item' });
     expect(lines.find(l => l.chargeKind === 'vendor')).toMatchObject({ amount: 35, isTaxable: false, qbItemListId: null });
   });
-  it('honors customer exemption and applies contract pricing before the Tier 1 fee', async () => {
+  it('honors exemption and contract pricing while routing Tier 1 without a surcharge', async () => {
     vi.mocked(prisma.priceLevel.findMany).mockResolvedValue([{ id: 'level', name: 'Contract', items: [{ qbItemListId: 'qb-labor', customPrice: 70, adjustPercent: null }] }] as never);
-    const { lines } = await priceShopCharges({ ...order, tier1: true, company: { ...order.company, taxExempt: true, qbPriceLevelId: 'level' } }, [unit]);
+    const { lines, ruleResult } = await priceShopCharges({ ...order, tier1: true, company: { ...order.company, taxExempt: true, qbPriceLevelId: 'level' } }, [unit]);
     expect(lines.some(l => l.isTaxable)).toBe(false);
     expect(lines.find(l => l.chargeKind === 'labor')?.amount).toBe(140);
-    expect(lines.at(-1)?.amount).toBe(71.48);
+    expect(lines.reduce((sum, line) => sum + line.amount, 0)).toBe(1429.5);
+    expect(ruleResult.extraLines).toEqual([]);
+    expect(ruleResult.qbCustomerOverride).toBe('Pale Horse Service Inc');
   });
 });

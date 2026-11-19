@@ -17,7 +17,6 @@ import {
   buildInvoiceAdd,
   buildSalesReceiptAdd,
   buildInvoiceQueryByRefNumber,
-  buildItemQueryRq,
   parseInvoiceAddResponse,
   parseInvoiceQueryResponse,
   parseSalesTaxQueryResponse,
@@ -86,9 +85,8 @@ describe('qbXML snapshots (regression lock)', () => {
     expect(buildSalesReceiptAdd(data)).toMatchSnapshot();
   });
 
-  it('InvoiceQueryByRefNumber + ItemQueryRq', () => {
+  it('InvoiceQueryByRefNumber', () => {
     expect(buildInvoiceQueryByRefNumber('2026-00042')).toMatchSnapshot();
-    expect(buildItemQueryRq()).toMatchSnapshot();
   });
 });
 

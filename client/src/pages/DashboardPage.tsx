@@ -2,12 +2,15 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { v4 as uuidv4 } from 'uuid'
 import { api } from '@/lib/api'
+import { useApiResource } from '@/hooks/useApiResource'
 import { useAuth } from '@/contexts/AuthContext'
 import { hasPermission } from '@/lib/permissions'
 import { cn } from '@/lib/cn'
 import { CustomerSearch } from '@/components/CustomerSearch'
 import { DateRangePicker, type DateRange } from '@/components/DateRangePicker'
 import { ApprovalsHost } from '@/components/ApprovalsHost'
+import { RentalReleaseTab } from '@/components/RentalReleaseTab'
+import { RentalUnbilledBanner, type RentalReleaseSummary } from '@/components/RentalUnbilledBanner'
 import { WidgetGrid } from '@/components/widgets/WidgetGrid'
 import { AddWidgetMenu } from '@/components/widgets/AddWidgetMenu'
 import { dashboardApi } from '@/lib/dashboardApi'
@@ -22,6 +25,7 @@ import {
   PieChart, Pie, Cell, ResponsiveContainer, Tooltip as ReTooltip,
   LineChart, Line, XAxis, YAxis, CartesianGrid, ReferenceLine,
   Legend,
+  type DotItemDotProps,
 } from 'recharts'
 import {
   GraduationCap,
@@ -245,16 +249,17 @@ const PIE_COLORS = { safe: '#22c55e', elevated: '#ef4444' }
 
 // ─── Component ───────────────────────────────────────────────
 
-type Tab = 'overview' | 'history' | 'cards' | 'h2s' | 'billing' | 'approvals'
+type Tab = 'overview' | 'history' | 'cards' | 'h2s' | 'billing' | 'approvals' | 'rental_billing'
 
 // Roles allowed to see the Approvals tab. Field techs and dispatch are excluded.
-const APPROVAL_ROLES = ['field_super', 'billing_ar', 'boss', 'platform_admin']
+const APPROVAL_ROLES = ['field_super', 'billing_ar', 'ar_supervisor', 'boss', 'platform_admin']
 
 export function DashboardPage() {
   const navigate = useNavigate()
   const { user } = useAuth()
   const canBilling = hasPermission(user?.role, 'billing:view')
   const canApprove = APPROVAL_ROLES.includes(user?.role || '')
+  const canReleaseRentals = hasPermission(user?.role, 'rentals:release_billing')
   const canPreviewPortal = user?.role === 'platform_admin'
 
   // Deep-link support: /dashboard?tab=approvals lands directly on the tab.
@@ -262,7 +267,7 @@ export function DashboardPage() {
   const initialTab = (searchParams.get('tab') as Tab) || 'overview'
   const [tab, setTabState] = useState<Tab>(
     // Only honor the query-param tab if the user has permission to see it
-    initialTab === 'approvals' && !canApprove ? 'overview' : initialTab,
+    (initialTab === 'approvals' && !canApprove) || (initialTab === 'rental_billing' && !canReleaseRentals) ? 'overview' : initialTab,
   )
 
   // Keep URL query param in sync with tab state so supervisors can bookmark.
@@ -300,12 +305,35 @@ export function DashboardPage() {
     }
   }, [canApprove, tab])
 
-  // Existing widgets
-  const [pendingCards, setPendingCards] = useState<PendingCardGroup[]>([])
-  const [totalPending, setTotalPending] = useState(0)
-  const [widgetLoading, setWidgetLoading] = useState(true)
-  const [enverusAlerts, setEnverusAlerts] = useState<EnverusAlert | null>(null)
+  // Rental send-for-billing: last month's stragglers (banner) and what the
+  // field should send today (tab badge). The server returns null for roles on
+  // neither side of it, so this is safe to ask on every dashboard load.
+  const [releaseSummary, setReleaseSummary] = useState<RentalReleaseSummary | null>(null)
+  useEffect(() => {
+    if (!canReleaseRentals && !canBilling) return
+    let cancelled = false
+    async function loadSummary() {
+      try {
+        const res = await api.get<{ data: RentalReleaseSummary | null }>('/rentals/billing-release/summary')
+        if (!cancelled) setReleaseSummary(res?.data ?? null)
+      } catch { /* offline or no access */ }
+    }
+    loadSummary()
+    // Refetch on tab change so the counts drop right after a send.
+    const interval = setInterval(loadSummary, 60_000)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [canReleaseRentals, canBilling, tab])
+
+  const requestScope = `${user?.id ?? ''}:${user?.role ?? ''}`
   const canEnverus = hasPermission(user?.role, 'billing:enverus')
+  const cards = useApiResource<{ data: PendingCardGroup[]; totalPending: number }>(user ? '/tickets/training/pending-cards' : null, requestScope)
+  const pendingCards = cards.data?.data ?? []
+  const totalPending = cards.data?.totalPending ?? 0
+  const widgetLoading = cards.loading
+  const { data: enverusAlerts } = useApiResource<EnverusAlert>(canEnverus ? '/enverus/alerts' : null, requestScope)
 
   // Overview widget grid (formerly the standalone Home page)
   const [overviewWidgets, setOverviewWidgets] = useState<WidgetInstance[]>([])
@@ -318,31 +346,38 @@ export function DashboardPage() {
   const overviewResizeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const overviewConfigTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Service History
-  const [historyData, setHistoryData] = useState<ServiceHistoryData | null>(null)
-  const [historyLoading, setHistoryLoading] = useState(false)
   const [selectedCompany, setSelectedCompany] = useState<{ id: string; name: string } | null>(null)
   const [portalPreviewCustomer, setPortalPreviewCustomer] = useState<PortalPreviewCustomer | null>(null)
   const [dateRange, setDateRange] = useState<DateRange>({ from: daysAgo(90), to: today() })
   const [ticketTypeFilter, setTicketTypeFilter] = useState<string>('')
   const [selectedPadId, setSelectedPadId] = useState<string | null>(null)
+  const historyParams = new URLSearchParams({ dateFrom: dateRange.from, dateTo: dateRange.to })
+  if (selectedCompany) historyParams.set('companyId', selectedCompany.id)
+  if (ticketTypeFilter) historyParams.set('ticketType', ticketTypeFilter)
+  const history = useApiResource<ServiceHistoryData>(tab === 'history' ? `/dashboard/service-history?${historyParams}` : null, requestScope)
+  const { data: historyData, loading: historyLoading } = history
 
-  // Billing
-  const [billingData, setBillingData] = useState<BillingSummaryData | null>(null)
-  const [billingLoading, setBillingLoading] = useState(false)
+  const billing = useApiResource<BillingSummaryData>(tab === 'billing' && canBilling ? '/dashboard/billing-summary' : null, requestScope)
+  const { data: billingData, loading: billingLoading } = billing
 
-  // H2S Analytics
-  const [h2sCompanies, setH2sCompanies] = useState<H2SCompanySummary[]>([])
   const [h2sCompany, setH2sCompany] = useState<{ id: string; name: string } | null>(null)
-  const [h2sData, setH2sData] = useState<H2SAnalyticsData | null>(null)
-  const [h2sLoading, setH2sLoading] = useState(false)
   const [h2sPieFilter, setH2sPieFilter] = useState<'all' | 'safe' | 'elevated'>('all')
-  const [h2sSelectedLocation, setH2sSelectedLocation] = useState<H2SLocation | null>(null)
+  const [h2sLocationKey, setH2sLocationKey] = useState<string | null>(null)
+  const h2sList = useApiResource<{ companies: H2SCompanySummary[] }>(tab === 'h2s' ? '/dashboard/h2s-analytics' : null, requestScope)
+  const h2sDetail = useApiResource<H2SAnalyticsData>(tab === 'h2s' && h2sCompany ? `/dashboard/h2s-analytics?companyId=${encodeURIComponent(h2sCompany.id)}` : null, requestScope)
+  const h2sCompanies = h2sList.data?.companies ?? []
+  const { data: h2sData, loading: h2sLoading } = h2sDetail
+  const h2sSelectedLocation = h2sData?.locations.find(location => location.locationKey === h2sLocationKey) ?? null
 
-  // Load existing widgets on mount
-  useEffect(() => {
-    loadWidgets()
-  }, [])
+  function selectHistoryCompany(company: { id: string; name: string } | null) {
+    setSelectedCompany(company)
+    setSelectedPadId(null)
+  }
+  function selectH2sCompany(company: { id: string; name: string } | null) {
+    setH2sCompany(company)
+    setH2sLocationKey(null)
+    setH2sPieFilter('all')
+  }
 
   // Load the user's saved widget layout for the Overview tab
   useEffect(() => {
@@ -373,8 +408,8 @@ export function DashboardPage() {
       const resp = await dashboardApi.saveWidgets(cleaned)
       setOverviewWidgets(resp.widgets)
       setOverviewIsDefault(resp.isDefault)
-    } catch (e: any) {
-      setOverviewError(e.message || 'Save failed')
+    } catch (error) {
+      setOverviewError(error instanceof Error ? error.message : 'Save failed')
     } finally {
       setOverviewSaving(false)
     }
@@ -424,87 +459,11 @@ export function DashboardPage() {
       setOverviewWidgets(resp.widgets)
       setOverviewIsDefault(resp.isDefault)
       setOverviewEditing(false)
-    } catch (e: any) {
-      setOverviewError(e.message || 'Reset failed')
+    } catch (error) {
+      setOverviewError(error instanceof Error ? error.message : 'Reset failed')
     } finally {
       setOverviewSaving(false)
     }
-  }
-
-  // Load service history when tab or filters change
-  useEffect(() => {
-    if (tab === 'history') loadServiceHistory()
-  }, [tab, selectedCompany, dateRange, ticketTypeFilter])
-
-  // Load billing when tab activates
-  useEffect(() => {
-    if (tab === 'billing' && canBilling && !billingData) loadBillingSummary()
-  }, [tab])
-
-  // Load H2S company list when tab activates
-  useEffect(() => {
-    if (tab === 'h2s' && h2sCompanies.length === 0) loadH2sCompanies()
-  }, [tab])
-
-  // Load H2S data when company changes
-  useEffect(() => {
-    if (tab === 'h2s' && h2sCompany) loadH2sData(h2sCompany.id)
-  }, [h2sCompany])
-
-  async function loadWidgets() {
-    try {
-      const data = await api.get<{ data: PendingCardGroup[]; totalPending: number }>('/tickets/training/pending-cards')
-      if (data) { setPendingCards(data.data); setTotalPending(data.totalPending) }
-    } catch { /* offline */ }
-    if (canEnverus) {
-      try {
-        const data = await api.get<EnverusAlert>('/enverus/alerts')
-        if (data) setEnverusAlerts(data)
-      } catch { /* not configured */ }
-    }
-    setWidgetLoading(false)
-  }
-
-  async function loadServiceHistory() {
-    setHistoryLoading(true)
-    try {
-      const params = new URLSearchParams()
-      params.set('dateFrom', dateRange.from)
-      params.set('dateTo', dateRange.to)
-      if (selectedCompany) params.set('companyId', selectedCompany.id)
-      if (ticketTypeFilter) params.set('ticketType', ticketTypeFilter)
-      const data = await api.get<ServiceHistoryData>(`/dashboard/service-history?${params}`)
-      if (data) setHistoryData(data)
-    } catch { /* offline */ }
-    setHistoryLoading(false)
-  }
-
-  async function loadBillingSummary() {
-    setBillingLoading(true)
-    try {
-      const data = await api.get<BillingSummaryData>('/dashboard/billing-summary')
-      if (data) setBillingData(data)
-    } catch { /* offline */ }
-    setBillingLoading(false)
-  }
-
-  async function loadH2sCompanies() {
-    try {
-      const data = await api.get<{ companies: H2SCompanySummary[] }>('/dashboard/h2s-analytics')
-      if (data) setH2sCompanies(data.companies)
-    } catch { /* offline */ }
-  }
-
-  async function loadH2sData(companyId: string) {
-    setH2sLoading(true)
-    setH2sData(null)
-    setH2sPieFilter('all')
-    setH2sSelectedLocation(null)
-    try {
-      const data = await api.get<H2SAnalyticsData>(`/dashboard/h2s-analytics?companyId=${companyId}`)
-      if (data) setH2sData(data)
-    } catch { /* offline */ }
-    setH2sLoading(false)
   }
 
   function openCustomerPortalPreview() {
@@ -517,6 +476,7 @@ export function DashboardPage() {
   const tabs: { key: Tab; label: string; icon: typeof BarChart3; show: boolean }[] = [
     { key: 'overview', label: 'Overview', icon: BarChart3, show: true },
     { key: 'approvals', label: 'Approvals', icon: CheckSquare, show: canApprove },
+    { key: 'rental_billing', label: 'Rental Billing', icon: Truck, show: canReleaseRentals },
     { key: 'history', label: 'Service History', icon: Building2, show: true },
     { key: 'h2s', label: 'H2S Analytics', icon: Activity, show: true },
     { key: 'cards', label: 'Card Issuance', icon: CreditCard, show: true },
@@ -526,7 +486,9 @@ export function DashboardPage() {
   return (
     <div>
       <div className="mb-4 flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
-        <h1 className="text-2xl font-bold text-slate-900">Dashboard</h1>
+        <div><h1 className="text-2xl font-bold text-slate-900">Dashboard</h1>
+          {(hasPermission(user?.role, 'reports:financial') || hasPermission(user?.role, 'reports:ops')) && hasPermission(user?.role, 'tickets:view_all') && <button className="text-blue-700 underline mt-2" onClick={() => navigate('/operations-report')}>Daily operations report · jobs and coverage</button>}
+        </div>
         {canPreviewPortal && (
           <div className="bg-white border border-slate-200 rounded-lg p-3 w-full xl:w-[460px] shadow-sm">
             <div className="flex items-center justify-between gap-3 mb-2">
@@ -549,6 +511,12 @@ export function DashboardPage() {
         )}
       </div>
 
+      <RentalUnbilledBanner
+        summary={releaseSummary}
+        onOpenReleaseTab={() => setTab('rental_billing')}
+        onOpenBilling={() => navigate('/billing?tab=rentals')}
+      />
+
       {/* Tab Bar */}
       <div className="flex gap-1 mb-6 overflow-x-auto border-b border-slate-200">
         {tabs.filter(t => t.show).map(t => (
@@ -569,6 +537,11 @@ export function DashboardPage() {
                 {totalPending}
               </span>
             )}
+            {t.key === 'rental_billing' && (releaseSummary?.needsSending ?? 0) > 0 && (
+              <span className="ml-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-red-100 text-red-700">
+                {releaseSummary!.needsSending}
+              </span>
+            )}
             {t.key === 'approvals' && approvalCount > 0 && (
               <span className="ml-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700">
                 {approvalCount}
@@ -580,6 +553,9 @@ export function DashboardPage() {
 
       {/* ═══ APPROVALS TAB ═══ */}
       {tab === 'approvals' && canApprove && <ApprovalsHost />}
+
+      {/* ═══ RENTAL BILLING TAB (send for billing) ═══ */}
+      {tab === 'rental_billing' && canReleaseRentals && <RentalReleaseTab />}
 
       {/* ═══ OVERVIEW TAB ═══ */}
       {tab === 'overview' && (
@@ -703,6 +679,8 @@ export function DashboardPage() {
           </div>
           {widgetLoading ? (
             <div className="flex items-center justify-center py-6"><Loader2 className="w-5 h-5 text-slate-400 animate-spin" /></div>
+          ) : cards.error ? (
+            <DashboardLoadError message={cards.error} onRetry={cards.reload} />
           ) : pendingCards.length === 0 ? (
             <p className="text-sm text-slate-400 text-center py-4">No pending card issuances</p>
           ) : (
@@ -733,13 +711,16 @@ export function DashboardPage() {
         <H2SAnalyticsTab
           companies={h2sCompanies}
           selectedCompany={h2sCompany}
-          onSelectCompany={setH2sCompany}
+          onSelectCompany={selectH2sCompany}
           data={h2sData}
           loading={h2sLoading}
+          listLoading={h2sList.loading}
+          error={h2sCompany ? h2sDetail.error : h2sList.error}
+          onRetry={h2sCompany ? h2sDetail.reload : h2sList.reload}
           pieFilter={h2sPieFilter}
           onPieFilter={setH2sPieFilter}
           selectedLocation={h2sSelectedLocation}
-          onSelectLocation={setH2sSelectedLocation}
+          onSelectLocation={location => setH2sLocationKey(location?.locationKey ?? null)}
           navigate={navigate}
         />
       )}
@@ -761,7 +742,7 @@ export function DashboardPage() {
                     <span className="text-sm font-medium text-blue-900 truncate flex-1">{selectedCompany.name}</span>
                     <button
                       type="button"
-                      onClick={() => { setSelectedCompany(null); setSelectedPadId(null) }}
+                      onClick={() => selectHistoryCompany(null)}
                       className="text-blue-400 hover:text-blue-600"
                     >
                       <X className="w-4 h-4" />
@@ -770,7 +751,7 @@ export function DashboardPage() {
                 ) : (
                   <CustomerSearch
                     value={null}
-                    onChange={(c: any) => setSelectedCompany(c ? { id: c.id, name: c.name } : null)}
+                    onChange={company => selectHistoryCompany(company ? { id: company.id, name: company.name } : null)}
                   />
                 )}
               </div>
@@ -793,6 +774,8 @@ export function DashboardPage() {
 
           {historyLoading ? (
             <div className="flex items-center justify-center py-12"><Loader2 className="w-6 h-6 text-slate-400 animate-spin" /></div>
+          ) : history.error ? (
+            <DashboardLoadError message={history.error} onRetry={history.reload} />
           ) : !historyData || historyData.customers.length === 0 ? (
             <div className="bg-white rounded-lg border border-slate-200 p-8 text-center text-slate-400">
               No service history found for the selected filters.
@@ -805,7 +788,7 @@ export function DashboardPage() {
                   {historyData.customers.map(c => (
                     <button
                       key={c.companyId}
-                      onClick={() => setSelectedCompany({ id: c.companyId, name: c.companyName })}
+                      onClick={() => selectHistoryCompany({ id: c.companyId, name: c.companyName })}
                       className="bg-white rounded-lg border border-slate-200 p-4 text-left hover:border-blue-300 hover:shadow-sm transition-all"
                     >
                       <div className="flex items-start justify-between mb-2">
@@ -838,7 +821,7 @@ export function DashboardPage() {
                     </p>
                   </div>
                   <button
-                    onClick={() => { setSelectedCompany(null); setSelectedPadId(null) }}
+                    onClick={() => selectHistoryCompany(null)}
                     className="text-xs text-blue-600 hover:text-blue-800 font-medium"
                   >
                     ← All Customers
@@ -1001,6 +984,8 @@ export function DashboardPage() {
         <>
           {billingLoading ? (
             <div className="flex items-center justify-center py-12"><Loader2 className="w-6 h-6 text-slate-400 animate-spin" /></div>
+          ) : billing.error ? (
+            <DashboardLoadError message={billing.error} onRetry={billing.reload} />
           ) : !billingData ? (
             <div className="bg-white rounded-lg border border-slate-200 p-8 text-center text-slate-400">
               Unable to load billing data.
@@ -1154,12 +1139,22 @@ export function DashboardPage() {
 
 // ─── H2S Analytics Sub-component ─────────────────────────────
 
+function DashboardLoadError({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+    Could not load this report. {message}
+    <button type="button" onClick={onRetry} className="ml-2 font-medium underline">Retry</button>
+  </div>
+}
+
 function H2SAnalyticsTab({
   companies,
   selectedCompany,
   onSelectCompany,
   data,
   loading,
+  listLoading,
+  error,
+  onRetry,
   pieFilter,
   onPieFilter,
   selectedLocation,
@@ -1171,6 +1166,9 @@ function H2SAnalyticsTab({
   onSelectCompany: (c: { id: string; name: string } | null) => void
   data: H2SAnalyticsData | null
   loading: boolean
+  listLoading: boolean
+  error: string | null
+  onRetry: () => void
   pieFilter: 'all' | 'safe' | 'elevated'
   onPieFilter: (f: 'all' | 'safe' | 'elevated') => void
   selectedLocation: H2SLocation | null
@@ -1189,13 +1187,15 @@ function H2SAnalyticsTab({
           <div className="w-72">
             <CustomerSearch
               value={null}
-              onChange={(c: any) => {
+              onChange={c => {
                 if (c) onSelectCompany({ id: c.id, name: c.name })
               }}
             />
           </div>
         </div>
 
+        {listLoading && <p role="status" className="text-sm text-slate-500">Loading customers…</p>}
+        {error && <DashboardLoadError message={error} onRetry={onRetry} />}
         {companies.length > 0 && (
           <div className="bg-white rounded-lg border border-slate-200 p-4">
             <h3 className="text-sm font-semibold text-slate-700 mb-3">Customers with H2S Data</h3>
@@ -1308,9 +1308,10 @@ function H2SAnalyticsTab({
                   dataKey="h2s"
                   stroke="#3b82f6"
                   strokeWidth={2}
-                  dot={(props: any) => {
+                  dot={(props: DotItemDotProps) => {
                     const { cx, cy, payload } = props
-                    const isOver = payload.h2s >= H2S_THRESHOLD
+                    const reading = payload as { h2s: number }
+                    const isOver = reading.h2s >= H2S_THRESHOLD
                     return (
                       <circle
                         key={`dot-${cx}-${cy}`}
@@ -1397,6 +1398,8 @@ function H2SAnalyticsTab({
 
       {loading ? (
         <div className="flex items-center justify-center py-12"><Loader2 className="w-6 h-6 text-slate-400 animate-spin" /></div>
+      ) : error ? (
+        <DashboardLoadError message={error} onRetry={onRetry} />
       ) : !data || data.totalLocations === 0 ? (
         <div className="bg-white rounded-lg border border-slate-200 p-8 text-center text-slate-400">
           No H2S readings found for this customer.
@@ -1436,13 +1439,14 @@ function H2SAnalyticsTab({
                       paddingAngle={data.safeCount > 0 && data.elevatedCount > 0 ? 4 : 0}
                       dataKey="value"
                       cursor="pointer"
-                      onClick={(entry: any) => {
-                        const key = entry.key || entry.payload?.key
+                      onClick={entry => {
+                        const datum = entry as { key?: 'safe' | 'elevated'; payload?: { key?: 'safe' | 'elevated' } }
+                        const key = datum.key || datum.payload?.key
                         if (key === 'safe') onPieFilter(pieFilter === 'safe' ? 'all' : 'safe')
                         else if (key === 'elevated') onPieFilter(pieFilter === 'elevated' ? 'all' : 'elevated')
                       }}
-                      label={({ value, percent }: any) =>
-                        value > 0 ? `${value} (${(percent * 100).toFixed(0)}%)` : ''
+                      label={({ value, percent }) =>
+                        value > 0 ? `${value} (${((percent ?? 0) * 100).toFixed(0)}%)` : ''
                       }
                       labelLine={false}
                     >

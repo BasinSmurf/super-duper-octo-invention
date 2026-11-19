@@ -11,7 +11,7 @@
 // and the board renders it as "not started". The kiosk never writes.
 
 import { Router, Request, Response } from 'express';
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { authenticateUserOrKiosk } from '../middleware/kioskAuth.js';
 import { resolveOrigin, signinLinkForTicket } from './trainingSignin.js';
 

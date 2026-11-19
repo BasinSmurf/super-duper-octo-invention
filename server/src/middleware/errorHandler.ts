@@ -34,7 +34,22 @@ export function errorHandler(
       res.status(404).json({ error: 'Record not found' });
       return;
     }
+    if (['P2000', 'P2003', 'P2011', 'P2012', 'P2020'].includes(prismaErr.code)) {
+      res.status(400).json({ error: 'Invalid value or related record' });
+      return;
+    }
+  }
+  if (err.name === 'PrismaClientValidationError') {
+    res.status(400).json({ error: 'Invalid request data' });
+    return;
   }
 
   res.status(500).json({ error: 'Internal server error' });
+}
+
+/** Never echo ORM statements, driver messages, or filesystem paths to a device. */
+export function safeErrorMessage(err: unknown): string {
+  if (err instanceof AppError) return err.message;
+  if (err instanceof Error && !/Prisma|Driver|Adapter/i.test(err.name) && !/Invalid .*invocation|\bquery\b|[A-Z]:\\/i.test(err.message)) return err.message;
+  return 'Unable to save this change. Check the data and retry.';
 }

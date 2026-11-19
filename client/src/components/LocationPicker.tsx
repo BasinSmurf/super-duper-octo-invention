@@ -1,3 +1,4 @@
+import { HelpTip } from '@/components/HelpTip'
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { db } from '@/lib/db'
 import { api } from '@/lib/api'
@@ -410,7 +411,7 @@ export function LocationPicker({ companyId, value, onChange, multiWell = true, m
 
   return (
     <div className="space-y-3">
-      <label className="block text-sm font-medium text-slate-700">Location</label>
+      <label className="block text-sm font-medium text-slate-700">Location <HelpTip text="Search by pad, site, or well name, then select the location where the work is performed." /></label>
 
       {/* Pad search / selected pad */}
       <div>

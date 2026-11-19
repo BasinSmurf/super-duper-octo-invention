@@ -136,6 +136,12 @@ export function resolveDeployCategory(product: { category?: string | null; name?
 
 /** Stored on the rental item (rental_agreement_items.deploy_inspection). */
 export interface DeployInspectionResult {
+  /** Visit metadata retained when stock equipment is swapped or returned. */
+  testDate?: string
+  lastSwapDate?: string
+  returnInspectionId?: string
+  /** Actual deployment instant; inspection and recording may happen later. */
+  deployedAt?: string
   category: DeployCategory
   /** question key → 'pass' | 'needs_repair' | 'inoperable' (tri) or 'yes' | 'no' (yn) */
   answers: Record<string, string>

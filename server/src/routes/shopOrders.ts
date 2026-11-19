@@ -1,15 +1,21 @@
+import { pdfToBuffer } from '../utils/pdfToBuffer.js';
+import { pdfExportAttachments } from '../services/pdfExportAttachments.js';
+import { appendPdfAttachments } from '../services/appendPdfAttachments.js';
+import { assertShopSerialsCollected } from '../services/shopSerials.js';
+import { assertShopBinsAvailable } from '../services/shopBins.js';
 import { serviceQaMapping, normalizeServiceCharges, servicesFromBilling, linkedQaActions, validateVendorServiceLink } from '../services/shopServiceCharges.js';
 import { applyReceiveBilling } from '../services/shopVendorReceiveBilling.js';
 import type { ReceivePayload } from '../services/shopVendorReceive.js';
 import { Router, Request, Response } from 'express';
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { Prisma } from '../db.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { requirePermission } from '../middleware/rbac.js';
 import { createAuditLog } from '../utils/auditLog.js';
 import { generateShopWorkOrderNumber } from '../utils/ticketNumber.js';
 import { resolvePrinter, getDefaultTemplate } from '../services/printService.js';
-import { createShopWorkOrderWithItems, PREFERRED_CONTACT_VALUES } from '../services/shopWoCreate.js';
+import { createShopWorkOrderWithItems, validateShopIntakeItems, PREFERRED_CONTACT_VALUES } from '../services/shopWoCreate.js';
+import { assertNewShopUnits } from '../services/shopUnitIdentity.js';
 import { assertShopReturnAllowed } from '../utils/companyGuards.js';
 import {
   canTransitionShopItem,
@@ -84,26 +90,6 @@ export const shopOrdersRouter = Router();
 // HELPER: Bin-location occupancy guard
 // ============================================================
 
-/**
- * Rejects (409) any candidate bin that's already held by a different active
- * item, or claimed twice within the same request. Call before persisting a
- * personal-monitor's customData.binLocation on create/update.
- */
-async function assertBinsAvailable(candidates: Array<{ bin: string; excludeItemId?: string }>) {
-  if (!candidates.length) return;
-  const occupied = await getOccupiedBins();
-  const claimedNow = new Set<string>();
-  for (const { bin, excludeItemId } of candidates) {
-    const hit = occupied.get(bin);
-    if (hit && hit.itemId !== excludeItemId) {
-      throw new AppError(409, `${bin} is already assigned on WO ${hit.workOrderNumber} — pick it up before reusing it.`);
-    }
-    if (claimedNow.has(bin)) {
-      throw new AppError(409, `${bin} is picked for two units in this request — choose different bins.`);
-    }
-    claimedNow.add(bin);
-  }
-}
 
 // ============================================================
 // HELPER: Recompute WO status from its item statuses
@@ -113,7 +99,7 @@ async function assertBinsAvailable(candidates: Array<{ bin: string; excludeItemI
  * Looks at all item statuses on a WO and derives the correct WO-level status:
  *
  * - If ALL items are 'returned' → WO = 'closed'
- * - If ALL items are 'shop_complete' or 'returned' → WO = 'complete'
+ * - If ALL items are 'shop_complete', 'returned', or 'condemned' → WO = 'complete'
  * - If ANY item is warranty_out | outside_service | awaiting_parts | on_hold → WO = 'hold'
  * - If ANY item is in an active working state → WO = 'in_progress'
  * - Otherwise (all received) → WO = 'intake'
@@ -132,16 +118,15 @@ export async function recomputeWOStatus(workOrderId: string) {
   }
   const total = allItems.length;
 
-  // 'condemned' is a terminal, settled state (the unit is dead — DEAD record
-  // written, inspection labor billable). It counts toward "done" like returned.
-  const terminalCount = (counts['returned'] || 0) + (counts['condemned'] || 0);
-  const completedCount = (counts['shop_complete'] || 0) + terminalCount;
+  // Condemned is final for the unit, but the WO still needs pickup signoff.
+  const returnedCount = counts['returned'] || 0;
+  const completedCount = (counts['shop_complete'] || 0) + (counts['condemned'] || 0) + returnedCount;
 
   // Derive WO status
   let derivedStatus: ShopWorkOrderStatus = 'intake';
 
-  if (terminalCount === total) {
-    // Every item has reached a terminal disposition (picked up or condemned)
+  if (returnedCount === total) {
+    // Every item has been picked up
     derivedStatus = 'closed';
   } else if (completedCount === total) {
     // All done but not all picked up yet → waiting for pickup
@@ -517,7 +502,15 @@ shopOrdersRouter.get('/:id', async (req: Request, res: Response, next) => {
     // never appears here.
     const identityCandidates = await findIdentityCandidates(prisma, order.id);
 
-    res.json({ ...order, documentationPending, closeStates, identityCandidates });
+    const sourceIds = [...new Set(order.items.map(item => {
+      const data = item.customData as { fieldInspectionRecord?: { sourceTicketOfflineId?: string } } | null;
+      return data?.fieldInspectionRecord?.sourceTicketOfflineId;
+    }).filter((id): id is string => typeof id === 'string' && !!id))];
+    const sourceTickets = sourceIds.length ? await prisma.serviceTicket.findMany({
+      where: { companyId: order.companyId, OR: [{ id: { in: sourceIds } }, { offlineId: { in: sourceIds } }] },
+      select: { id: true, ticketNumber: true, status: true },
+    }) : [];
+    res.json({ ...order, sourceTickets, documentationPending, closeStates, identityCandidates });
   } catch (err) {
     next(err);
   }
@@ -528,6 +521,15 @@ shopOrdersRouter.get('/:id', async (req: Request, res: Response, next) => {
 // ============================================================
 
 // GET /api/shop-orders/:id/pdf — download the work order document as PDF
+shopOrdersRouter.get('/:id/pdf-attachments', async (req: Request, res: Response, next) => {
+  try {
+    const record = await prisma.shopWorkOrder.findUnique({ where: { id: req.params.id as string }, select: { id: true } });
+    if (!record) throw new AppError(404, 'Record not found');
+    const attachments = await pdfExportAttachments({ workOrderId: record.id });
+    res.json({ count: attachments.length });
+  } catch (error) { next(error); }
+});
+
 shopOrdersRouter.get('/:id/pdf', async (req: Request, res: Response, next) => {
   try {
     const order = await prisma.shopWorkOrder.findUnique({
@@ -537,13 +539,20 @@ shopOrdersRouter.get('/:id/pdf', async (req: Request, res: Response, next) => {
 
     if (!order) throw new AppError(404, 'Shop work order not found');
 
+    const pdfDoc = await generateShopWorkOrderPdf(order as any);
+    const combinedPdf = req.query.includeAttachments === 'true'
+      ? await appendPdfAttachments(await pdfToBuffer(pdfDoc), await pdfExportAttachments({ workOrderId: order.id }))
+      : null;
+
     const fileName = `work-order-${order.workOrderNumber}.pdf`;
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
 
-    const pdfDoc = generateShopWorkOrderPdf(order as any);
-    pdfDoc.pipe(res);
-    pdfDoc.end();
+    if (combinedPdf) res.send(combinedPdf);
+    else {
+      pdfDoc.pipe(res);
+      pdfDoc.end();
+    }
   } catch (err) {
     next(err);
   }
@@ -563,12 +572,6 @@ shopOrdersRouter.post('/', async (req: Request, res: Response, next) => {
       throw new AppError(400, 'At least one item is required');
     }
 
-    await assertBinsAvailable(
-      items
-        .filter((it: any) => it.equipmentCategory === 'personal_monitor')
-        .map((it: any) => ({ bin: binLocationOf(it.customData) }))
-        .filter((c: any): c is { bin: string } => !!c.bin),
-    );
 
     // Validate company exists
     const company = await prisma.company.findUnique({
@@ -606,7 +609,13 @@ shopOrdersRouter.post('/', async (req: Request, res: Response, next) => {
     });
 
     if (full) {
+      const byCategory = new Map<string, number>();
+      for (const item of full.items) {
+        byCategory.set(item.equipmentCategory, (byCategory.get(item.equipmentCategory) ?? 0) + 1);
+      }
       void emitEvent('shopwo.intake.created', {
+        priority: full.priority,
+        categoryCounts: [...byCategory].map(([category, count]) => ({ category, count })),
         workOrderId: order.id,
         workOrderNumber: order.workOrderNumber,
         companyId,
@@ -749,10 +758,11 @@ shopOrdersRouter.patch(
 
       const existing = await prisma.shopWorkOrder.findUnique({
         where: { id: woId },
-        select: { id: true, paidAtDropVia: true, lightspeedTxnNumber: true },
+        select: { id: true, isInternal: true, status: true, paidAtDropVia: true, lightspeedTxnNumber: true },
       });
       if (!existing) throw new AppError(404, 'Shop work order not found');
 
+      if (via && (existing.isInternal || existing.status === 'closed')) throw new AppError(409, 'Paid-at-drop requires an open customer work order');
       const updated = await prisma.shopWorkOrder.update({
         where: { id: woId },
         data: {
@@ -836,12 +846,13 @@ shopOrdersRouter.get('/:id/billing-route', async (req: Request, res: Response, n
     });
     if (!order) throw new AppError(404, 'Shop work order not found');
 
-    // A shop WO stores no total -- billing is derived from its units. Derive the
-    // same figure the invoice would use, so the panel is not quoting an estimate.
+    // Counter collection covers saved work, including units in the correction
+    // window. Invoice eligibility is a separate gate; excluding pending units
+    // here made a priced $35 calibration appear to owe $0 at drop-off.
     const now = new Date();
     const projected = order.items.map((i) => toBillingItem(i as unknown as Record<string, unknown>));
-    const billable = projected.filter((i) => isBillableShopItem(i, now));
-    const { lines } = await priceShopCharges(order, billable);
+    const chargeable = projected.filter(isChargeableShopItem);
+    const { lines } = await priceShopCharges(order, chargeable);
     const total = round2(lines.reduce((sum, l) => sum + l.amount, 0));
 
     const route = billingRoute({ ...order, total }, order.payments);
@@ -874,7 +885,7 @@ shopOrdersRouter.get('/:id/billing-route', async (req: Request, res: Response, n
       // Units still inside their 48h window are not billable yet (WI-05), so
       // the total can still move. Say so rather than letting the panel imply a
       // settled figure.
-      unitsPending: projected.filter((i) => !isBillableShopItem(i, now) && !i.parentItemId).length,
+      unitsPending: chargeable.filter((i) => !isBillableShopItem(i, now)).length,
     });
   } catch (err) {
     next(err);
@@ -1032,6 +1043,8 @@ shopOrdersRouter.patch('/:id/status', async (req: Request, res: Response, next) 
       throw new AppError(400, `Cannot transition from '${existing.status}' to '${newStatus}'`);
     }
 
+    if (newStatus === 'complete' || newStatus === 'closed') await assertShopSerialsCollected(prisma, woId);
+
     // QA gate: manually flipping the WO to "Ready for Pickup" must not bypass the
     // per-item equipment inspection requirement.
     if (newStatus === 'complete') {
@@ -1090,12 +1103,6 @@ shopOrdersRouter.post('/:id/items', requirePermission('shop_orders:edit'), async
       throw new AppError(400, 'At least one item is required');
     }
 
-    await assertBinsAvailable(
-      items
-        .filter((it: any) => it.equipmentCategory === 'personal_monitor')
-        .map((it: any) => ({ bin: binLocationOf(it.customData) }))
-        .filter((c: any): c is { bin: string } => !!c.bin),
-    );
 
     const existing = await prisma.shopWorkOrder.findUnique({
       where: { id: woId },
@@ -1109,18 +1116,27 @@ shopOrdersRouter.post('/:id/items', requirePermission('shop_orders:edit'), async
       throw new AppError(409, 'This work order is closed. Start a new intake for the additional equipment.');
     }
 
-    // Get current max itemNumber
-    const lastItem = await prisma.shopWorkOrderItem.findFirst({
-      where: { workOrderId: woId },
-      orderBy: { itemNumber: 'desc' },
-      select: { itemNumber: true },
-    });
-    let itemNumber = (lastItem?.itemNumber ?? 0) + 1;
-
     const userId = req.user!.userId;
     const createdItems: any[] = [];
 
     await prisma.$transaction(async (tx) => {
+      // Serialize additions on this order so duplicate checks, item numbers,
+      // and counts describe the same committed state under retries/concurrency.
+      await tx.$queryRaw(Prisma.sql`SELECT id FROM shop_work_orders WHERE id = ${woId} FOR UPDATE`);
+      const current = await tx.shopWorkOrder.findUnique({ where: { id: woId }, select: { status: true } });
+      if (!current) throw new AppError(404, 'Shop work order not found');
+      if (current.status === 'closed') throw new AppError(409, 'This work order is closed. Start a new intake for the additional equipment.');
+      const currentUnits = await tx.shopWorkOrderItem.findMany({
+        where: { workOrderId: woId, parentItemId: null },
+        select: { serialNumber: true, equipmentCategory: true, serializedEquipmentId: true },
+      });
+      assertNewShopUnits(items, currentUnits);
+      await validateShopIntakeItems(tx, items);
+      await assertShopBinsAvailable(tx, items, woId);
+      const lastItem = await tx.shopWorkOrderItem.findFirst({
+        where: { workOrderId: woId }, orderBy: { itemNumber: 'desc' }, select: { itemNumber: true },
+      });
+      let itemNumber = (lastItem?.itemNumber ?? 0) + 1;
       for (const item of items) {
         const {
           serialNumber, serializedEquipmentId, equipmentCategory,
@@ -1203,7 +1219,7 @@ shopOrdersRouter.post('/:id/items', requirePermission('shop_orders:edit'), async
       // Update totalItems count
       await tx.shopWorkOrder.update({
         where: { id: woId },
-        data: { totalItems: existing.totalItems + createdItems.length },
+        data: { totalItems: { increment: createdItems.length } },
       });
     });
 
@@ -1396,6 +1412,7 @@ shopOrdersRouter.patch('/:id/items/:itemId/status', async (req: Request, res: Re
       },
     });
     if (!item) throw new AppError(404, 'Item not found');
+    if (['shop_complete', 'returned', 'condemned'].includes(newStatus)) await assertShopSerialsCollected(prisma, item.workOrderId, [item.id]);
 
     // WI-05: a hard-closed unit's record is final; a soft-closed one may only be
     // moved by the tech who closed it or a supervisor.
@@ -1423,7 +1440,7 @@ shopOrdersRouter.patch('/:id/items/:itemId/status', async (req: Request, res: Re
     const userId = req.user!.userId;
 
     // QA gate: block "Ready for Pickup" until the equipment inspection is complete.
-    if (newStatus === 'shop_complete') {
+    if (newStatus === 'shop_complete' || (newStatus === 'returned' && item.status === 'shop_complete')) {
       await assertItemQaSatisfied(item);
     } else if (newStatus === 'condemned') {
       // WI-04: evidence before the irreversible bit. Checked BEFORE the ledger
@@ -1578,7 +1595,7 @@ shopOrdersRouter.put('/:id/items/:itemId', async (req: Request, res: Response, n
 
     const item = await prisma.shopWorkOrderItem.findUnique({
       where: { id: itemId as string },
-      select: {
+      select: { workOrderId: true, customData: true,
         id: true, status: true, equipmentCategory: true, parentItemId: true, serialNumber: true, billing: true,
         softClosedAt: true, hardClosesAt: true, closedById: true,
       },
@@ -1590,10 +1607,7 @@ shopOrdersRouter.put('/:id/items/:itemId', async (req: Request, res: Response, n
     const editVerdict = canEditUnit(item, { userId: req.user!.userId, role: req.user!.role });
     if (!editVerdict.allowed) throw new AppError(409, editVerdict.reason!);
 
-    if (customData !== undefined) {
-      const newBin = binLocationOf(customData);
-      if (newBin) await assertBinsAvailable([{ bin: newBin, excludeItemId: item.id }]);
-    }
+
 
     // Service type and equipment category are intake details — locked once the
     // unit hits QA so a finished item can't have its identity changed.
@@ -1678,6 +1692,10 @@ shopOrdersRouter.put('/:id/items/:itemId', async (req: Request, res: Response, n
       !item.parentItemId;
 
     const updated = await prisma.$transaction(async (tx) => {
+      await assertShopBinsAvailable(tx, [{
+        equipmentCategory: equipmentCategory ?? item.equipmentCategory,
+        customData: customData ?? item.customData,
+      }], item.workOrderId);
       if (categoryChanged) {
         await tx.shopWorkOrderItem.deleteMany({ where: { parentItemId: itemId as string } });
       }
@@ -1934,6 +1952,7 @@ shopOrdersRouter.post('/:id/items/:itemId/decline-quote', async (req: Request, r
       select: { id: true, status: true, workOrderId: true },
     });
     if (!item) throw new AppError(404, 'Item not found');
+    await assertShopSerialsCollected(prisma, item.workOrderId, [item.id]);
 
     if (item.status !== 'awaiting_approval') {
       throw new AppError(400, `Item is not awaiting approval (current: ${item.status})`);
@@ -2018,6 +2037,7 @@ shopOrdersRouter.get('/:id/items/:itemId/transitions', async (req: Request, res:
 shopOrdersRouter.post('/:id/bulk-clear', async (req: Request, res: Response, next) => {
   try {
     const woId = req.params.id as string;
+    await assertShopSerialsCollected(prisma, woId, Array.isArray(req.body?.itemIds) ? req.body.itemIds : undefined);
     const userId = req.user!.userId;
     const { itemIds, attestedBy } = req.body ?? {};
     if (!Array.isArray(itemIds) || itemIds.length === 0) {
@@ -2184,6 +2204,7 @@ shopOrdersRouter.post('/:id/bulk-status', async (req: Request, res: Response, ne
 shopOrdersRouter.post('/:id/bulk-return', async (req: Request, res: Response, next) => {
   try {
     const woId = req.params.id as string;
+    await assertShopSerialsCollected(prisma, woId, Array.isArray(req.body?.itemIds) ? req.body.itemIds : undefined);
     const userId = req.user!.userId;
     const { itemIds } = req.body ?? {};
     if (!Array.isArray(itemIds) || itemIds.length === 0) {
@@ -2192,8 +2213,11 @@ shopOrdersRouter.post('/:id/bulk-return', async (req: Request, res: Response, ne
     await assertShopReturnAllowed(woId);
     const items = await prisma.shopWorkOrderItem.findMany({
       where: { id: { in: itemIds as string[] }, workOrderId: woId, status: 'shop_complete' },
-      select: { id: true, status: true },
+      select: { id: true, status: true, equipmentCategory: true, parentItemId: true },
     });
+    // A QA correction can invalidate an earlier ready status. Validate the
+    // entire selection before returning any units.
+    for (const item of items) await assertItemQaSatisfied(item);
     const now = new Date();
     let returned = 0;
     for (const item of items) {
@@ -2360,6 +2384,7 @@ shopOrdersRouter.post(
 
       const skipped = items.filter((i) => QA_INELIGIBLE_STATUSES.has(i.status));
       const eligible = items.filter((i) => !QA_INELIGIBLE_STATUSES.has(i.status));
+      await assertShopSerialsCollected(prisma, woId, eligible.map(item => item.id));
 
       // Category coherence is checked BEFORE anything is written. A mixed
       // selection is a mistake to refuse, not a batch to partially apply.
@@ -2805,9 +2830,13 @@ shopOrdersRouter.post('/:id/force-close', requirePermission('shop_orders:force_c
     }
 
     await prisma.$transaction(async (tx) => {
-      // Force all non-returned items to returned
+      await tx.$queryRaw`SELECT id FROM shop_work_order_items WHERE work_order_id = ${woId} FOR UPDATE`;
+      const away = await tx.shopWorkOrderItem.count({ where: { workOrderId: woId, OR: [{ status: { in: ['outside_service', 'warranty_out'] } }, { transferItems: { some: { event: { receivedAt: null } } } }] } });
+      if (away) throw new AppError(409, 'Receive equipment from the vendor or transfer before closing this work order');
+      await assertShopSerialsCollected(tx, woId);
+      // Return remaining items, preserving the final condemned disposition
       const openItems = await tx.shopWorkOrderItem.findMany({
-        where: { workOrderId: woId, status: { not: 'returned' } },
+        where: { workOrderId: woId, status: { notIn: ['returned', 'condemned'] } },
         select: { id: true, status: true, serialNumber: true },
       });
 
@@ -2882,6 +2911,7 @@ shopOrdersRouter.post('/:id/force-close', requirePermission('shop_orders:force_c
 shopOrdersRouter.post('/:id/void', requirePermission('shop_orders:cancel'), async (req: Request, res: Response, next) => {
   try {
     const woId = req.params.id as string;
+    await assertShopSerialsCollected(prisma, woId);
     const userId = req.user!.userId;
     const reason = (req.body?.reason || '').trim();
     if (!reason) throw new AppError(400, 'A reason is required to void a work order');
@@ -2891,11 +2921,16 @@ shopOrdersRouter.post('/:id/void', requirePermission('shop_orders:cancel'), asyn
       select: { id: true, status: true, workOrderNumber: true, customData: true },
     });
     if (!existing) throw new AppError(404, 'Shop work order not found');
+    const paymentState = await prisma.shopWorkOrder.findUnique({ where: { id: woId }, select: { paidAtDropVia: true, payments: { where: { status: { in: ['succeeded', 'pending'] } }, select: { id: true } } } });
+    if (paymentState?.paidAtDropVia || paymentState?.payments.length) throw new AppError(409, 'Reconcile or refund the payment before voiding this work order');
     if (existing.status === 'closed') throw new AppError(400, 'Work order is already closed');
 
     await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM shop_work_order_items WHERE work_order_id = ${woId} FOR UPDATE`;
+      const away = await tx.shopWorkOrderItem.count({ where: { workOrderId: woId, OR: [{ status: { in: ['outside_service', 'warranty_out'] } }, { transferItems: { some: { event: { receivedAt: null } } } }] } });
+      if (away) throw new AppError(409, 'Receive equipment from the vendor or transfer before closing this work order');
       const openItems = await tx.shopWorkOrderItem.findMany({
-        where: { workOrderId: woId, status: { not: 'returned' } },
+        where: { workOrderId: woId, status: { notIn: ['returned', 'condemned'] } },
         select: { id: true, status: true },
       });
       for (const item of openItems) {
@@ -3013,7 +3048,9 @@ shopOrdersRouter.post('/:id/release', async (req: Request, res: Response, next) 
     const woId = req.params.id as string;
     const { pickupSignedByName, pickupSignature, pickupNotes } = req.body;
 
+    if (typeof pickupSignature !== 'string' || !pickupSignature.trim()) throw new AppError(400, 'Pickup signature is required');
     if (!pickupSignedByName) throw new AppError(400, 'Pickup name is required');
+    await assertShopSerialsCollected(prisma, woId);
 
     const existing = await prisma.shopWorkOrder.findUnique({
       where: { id: woId },
@@ -3029,18 +3066,22 @@ shopOrdersRouter.post('/:id/release', async (req: Request, res: Response, next) 
     // credit hold stops. force-close remains the supervisor override.
     await assertShopReturnAllowed(woId);
 
+    const releaseItems = await prisma.shopWorkOrderItem.findMany({ where: { workOrderId: woId, status: { not: 'returned' } } });
+    if (!releaseItems.length || releaseItems.some(item => item.status !== 'shop_complete' && item.status !== 'condemned')) throw new AppError(409, 'All items must be ready for pickup or condemned before release; use the supervisor return-without-service workflow otherwise');
+    for (const item of releaseItems) await assertItemQaSatisfied(item);
     const userId = req.user!.userId;
 
     await prisma.$transaction(async (tx) => {
-      // Advance ALL non-returned items to 'returned'.
-      // For items still in early states (received, in_work, etc.) this acts as
-      // "close with no work done" — e.g. air fills, simple inspections, refused service.
+      // Recheck under row locks: readiness may change while pickup is being signed.
+      await tx.$queryRaw`SELECT id FROM shop_work_order_items WHERE work_order_id = ${woId} FOR UPDATE`;
       const openItems = await tx.shopWorkOrderItem.findMany({
-        where: { workOrderId: woId, status: { not: 'returned' } },
-        select: { id: true, status: true },
+        where: { workOrderId: woId, status: { notIn: ['returned', 'condemned'] } },
+        select: { id: true, status: true, equipmentCategory: true, parentItemId: true },
       });
 
+      if (openItems.some(item => item.status !== 'shop_complete')) throw new AppError(409, 'Items are no longer ready for pickup');
       for (const item of openItems) {
+        if (item.status === 'shop_complete') await assertItemQaSatisfied(item);
         await tx.shopWorkOrderItem.update({
           where: { id: item.id },
           data: { status: 'returned', returnedAt: new Date(), returnMethod: 'picked_up', closedById: userId },

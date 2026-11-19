@@ -1,5 +1,5 @@
 import { Router, Request, Response, NextFunction } from 'express';
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { getFileStore } from '../services/fileStore.js';
 import { sendMail, mailerConfigured, FROM_ADDRESS, type MailAttachment } from '../services/mailer.js';
 

@@ -1,4 +1,4 @@
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import type { AuditAction } from '../db.js';
 import { Prisma } from '../db.js';
 

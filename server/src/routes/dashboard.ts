@@ -1,8 +1,9 @@
+import { rentalToday } from '../services/rentalLifecycle.js';
 import { internalShopValue } from '../services/internalShopValue.js';
 import { requirePermission } from '../middleware/rbac.js';
 import { excludedShopTicketIds, getBilledShopWorkOrderIds } from '../services/shopBillingQueue.js';
 import { Router, Request, Response } from 'express';
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { Prisma } from '../db.js';
 import type { TicketType } from '../db.js';
 import { AppError } from '../middleware/errorHandler.js';
@@ -13,6 +14,9 @@ import {
 } from '../services/widgetCatalog.js';
 import { computeH2sAnalytics } from '../services/h2sAnalytics.js';
 import { getPeriodActivity, resolvePeriod, type PeriodKey } from '../services/opsStats.js';
+import { getOperationsReport } from '../services/operationsReport.js';
+import { getTicketVolume } from '../services/ticketVolume.js';
+import { REPORT_TYPES, canReceiveReport, selectReport, type ReportType } from '../services/reportSubscriptions.js';
 import {
   getShopAging,
   isAgingBucket,
@@ -23,6 +27,21 @@ import { roleHasCapability } from '../services/permissions.js';
 import { isFollowUpDue, describeOverdue, activeFollowUp } from '../services/shopContactLog.js';
 
 export const dashboardRouter = Router();
+
+dashboardRouter.get('/ticket-volume', requirePermission('tickets:view_all'), async (_req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json(await getTicketVolume(prisma, rentalToday()));
+});
+
+dashboardRouter.get('/operations-report', requirePermission('tickets:view_all'), async (req, res) => {
+  const financial = roleHasCapability(req.user!.role, 'reports:financial');
+  const type = req.query.type;
+  if (type !== undefined && !REPORT_TYPES.some(r => r.id === type)) throw new AppError(400, 'Unknown report type');
+  if (type ? !canReceiveReport(req.user!.role, type as ReportType) : !financial && !roleHasCapability(req.user!.role, 'reports:ops')) throw new AppError(403, 'Report permission required');
+  res.set('Cache-Control', 'no-store');
+  const report = await getOperationsReport(prisma, new Date(), financial);
+  res.json(type ? selectReport(report, type as ReportType) : report);
+});
 
 dashboardRouter.get('/internal-shop-value', requirePermission('reports:financial'), async (req: Request, res: Response) => {
   const { from, to } = req.query;
@@ -764,4 +783,24 @@ dashboardRouter.get('/h2s-analytics', async (req: Request, res: Response, next) 
   } catch (err) {
     next(err);
   }
+});
+
+// Today's team work is grouped by the responsible tech, using the Basin business calendar.
+dashboardRouter.get('/team-activity', requirePermission('dispatch:manage'), async (_req: Request, res: Response, next) => {
+  try {
+    const start = rentalToday(), end = new Date(+start + 86400000);
+    const tickets = await prisma.serviceTicket.findMany({ where: { serviceDate: { gte: start, lt: end }, status: { notIn: ['draft', 'void'] } },
+      select: { status: true, assignedTech: { select: { id: true, name: true } } } });
+    const groups = new Map<string, { id: string; name: string; total: number; working: number; review: number; done: number }>();
+    for (const ticket of tickets) {
+      const id = ticket.assignedTech?.id || 'unassigned';
+      const row = groups.get(id) || { id, name: ticket.assignedTech?.name || 'Unassigned', total: 0, working: 0, review: 0, done: 0 };
+      row.total++;
+      if (['dispatched', 'in_progress'].includes(ticket.status)) row.working++;
+      else if (ticket.status === 'supervisor_review') row.review++;
+      else row.done++;
+      groups.set(id, row);
+    }
+    res.json({ date: start.toISOString().slice(0, 10), rows: [...groups.values()].sort((a, b) => a.name.localeCompare(b.name)) });
+  } catch (err) { next(err); }
 });

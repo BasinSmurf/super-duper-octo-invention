@@ -55,7 +55,7 @@ export async function getTicketPdfBuffer(
 
   if (!ticket) throw new Error(`Ticket ${ticketId} not found`);
 
-  const pdfDoc = generateTicketPdf(ticket as any);
+  const pdfDoc = await generateTicketPdf(ticket as any);
   const buffer = await pdfToBuffer(pdfDoc);
   const fileName = `ticket-${ticket.ticketNumber || ticket.id}.pdf`;
 
@@ -105,7 +105,7 @@ export async function getInvoicePdfBuffer(
 
   if (!invoice) throw new Error(`Invoice ${invoiceId} not found`);
 
-  const pdfDoc = generateInvoicePdf(invoice as any);
+  const pdfDoc = await generateInvoicePdf(invoice as any);
   const buffer = await pdfToBuffer(pdfDoc);
   const fileName = `invoice-${invoice.invoiceNumber}.pdf`;
 

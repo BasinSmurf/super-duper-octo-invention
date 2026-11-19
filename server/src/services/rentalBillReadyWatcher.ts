@@ -1,22 +1,30 @@
 /**
  * rentalBillReadyWatcher.ts
  *
- * Periodically checks active rental agreements against their billing cadence
- * and notifies Supervisors (field_super) + Billing (billing_ar) once a
- * period is due, so billing doesn't rely on someone remembering to check.
- * Modeled on qbInvoiceDiffWatcher.ts, but on an hours-scale interval —
- * billing periods are day/week/month scale, not the QB watcher's 30-min.
+ * Nags the people who SEND rentals for billing once a rental is due and has
+ * not been sent. It used to tell Billing that every open rental had hit its
+ * cadence — but an open rental is no longer AR's to act on until the field
+ * sends it (services/rentalBillingRelease.ts), so that message now goes to
+ * whoever holds `rentals:release_billing`, and only about rentals that are
+ * actually waiting on them:
  *
- * Dedup is period-based, not time-based: `lastBillReadyNotifiedFor` stores
- * the due date already notified for. Once billing actually advances (a new
- * invoice posts, moving nextDueDate forward), the next tick notifies again
- * for the new period on its own — no blind cooldown to tune.
+ *   - open, not sent, and past the billing cadence (for monthly billing that is
+ *     the last day of the month — the "send it for end of month" reminder
+ *     supervisors used to send by hand);
+ *   - closed, but stuck behind tickets that still need approval.
+ *
+ * Dedup is period-based, not time-based: `lastBillReadyNotifiedFor` stores the
+ * date already notified for (the due date, or the close date). Once billing
+ * actually advances, the next due date differs and it notifies again on its
+ * own — no blind cooldown to tune. The standing reminder between nags is the
+ * dashboard banner, not a repeat message.
  */
 
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { runScheduledJob } from './jobs.js';
 import { heartbeat } from './supervisor.js';
-import { computeRentalBillingState } from './rentalBilling.js';
+import { listRentalsForRelease } from './rentalBillingRelease.js';
+import { getEffectiveMatrix } from './permissions.js';
 import { sendMail, mailerConfigured, FROM_ADDRESS, BILLING_CC } from './mailer.js';
 import { notify as ringcentralNotify, isConfigured as ringcentralConfigured } from './ringcentralNotify.js';
 
@@ -28,70 +36,59 @@ export const CHECK_INTERVAL_MS = parseInt(
 
 let timer: ReturnType<typeof setInterval> | null = null;
 
-interface DueAgreement {
+export interface DueRental {
   id: string;
   agreementNumber: string | null;
   companyName: string;
-  nextDueDate: Date;
+  /** What `lastBillReadyNotifiedFor` is set to once this has been announced. */
+  notifyFor: Date;
+  /** One line, ready to print. */
+  detail: string;
 }
 
-async function findDueAgreements(): Promise<DueAgreement[]> {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+type ReleaseRow = Awaited<ReturnType<typeof listRentalsForRelease>>[number];
+export type NagRow = Pick<ReleaseRow, 'id' | 'agreementNumber' | 'state' | 'endDate' | 'unbilledFrom' | 'unbilledDays'
+  | 'overdue' | 'nextDueDate' | 'lastBillReadyNotifiedFor'> & {
+    company: { name: string } | null;
+    blockers: { ticketNumber: string }[];
+  };
 
-  const agreements = await prisma.rentalAgreement.findMany({
-    where: { status: 'active' },
-    select: {
-      id: true, agreementNumber: true, status: true, startDate: true, endDate: true,
-      billingCadence: true, lastBillReadyNotifiedFor: true,
-      company: { select: { name: true } },
-    },
-  });
-  if (agreements.length === 0) return [];
-
-  const invoices = await prisma.invoice.findMany({
-    where: { rentalAgreementId: { in: agreements.map(a => a.id) }, status: { not: 'void' } },
-    select: { rentalAgreementId: true, periodEnd: true },
-  });
-  const invoicesFor = new Map<string, { periodEnd: Date | null }[]>();
-  for (const inv of invoices) {
-    if (!inv.rentalAgreementId) continue;
-    const list = invoicesFor.get(inv.rentalAgreementId) ?? [];
-    list.push({ periodEnd: inv.periodEnd });
-    invoicesFor.set(inv.rentalAgreementId, list);
-  }
-
-  const due: DueAgreement[] = [];
-  for (const a of agreements) {
-    const { nextDueDate } = computeRentalBillingState(a, invoicesFor.get(a.id) ?? []);
-    if (!nextDueDate || nextDueDate > today) continue;
-    const alreadyNotified =
-      a.lastBillReadyNotifiedFor &&
-      a.lastBillReadyNotifiedFor.getTime() === nextDueDate.getTime();
-    if (alreadyNotified) continue;
-    due.push({
-      id: a.id,
-      agreementNumber: a.agreementNumber,
-      companyName: a.company?.name ?? 'Unknown',
-      nextDueDate,
-    });
+/** Rentals waiting on the field that have not been announced for this period. Pure. */
+export function dueForNag(rows: NagRow[]): DueRental[] {
+  const due: DueRental[] = [];
+  for (const r of rows) {
+    let notifyFor: Date | null = null;
+    let detail = '';
+    if (r.state === 'closed_blocked') {
+      notifyFor = r.endDate ?? r.unbilledFrom;
+      detail = `closed, ${r.blockers.length} ticket${r.blockers.length === 1 ? '' : 's'} to approve (${r.blockers.map(b => b.ticketNumber).join(', ')})`;
+    } else if (r.overdue && r.nextDueDate) {
+      notifyFor = r.nextDueDate;
+      detail = `${r.unbilledDays} day${r.unbilledDays === 1 ? '' : 's'} unbilled, not sent`;
+    }
+    if (!notifyFor) continue;
+    if (r.lastBillReadyNotifiedFor && r.lastBillReadyNotifiedFor.getTime() === notifyFor.getTime()) continue;
+    due.push({ id: r.id, agreementNumber: r.agreementNumber, companyName: r.company?.name ?? 'Unknown', notifyFor, detail });
   }
   return due;
 }
 
-async function notifyDue(due: DueAgreement[]): Promise<void> {
+async function notifyDue(due: DueRental[]): Promise<void> {
+  // Whoever can send rentals for billing — by capability, so a role the admin
+  // grants it to on the Permissions page is included without a code change.
+  const roles = getEffectiveMatrix()['rentals:release_billing'] ?? [];
   const recipients = await prisma.user.findMany({
-    where: { role: { in: ['field_super', 'billing_ar'] }, isActive: true },
+    where: { role: { in: roles as any }, isActive: true },
     select: { email: true, notificationPrefs: true },
   });
-  // No digest-batching mechanism exists anywhere yet — any non-'off' pref
-  // just means "send now" (known gap, not a bug; digest queue is future work).
+  // Daily/weekly recipients receive persistent rental exceptions in the operations digest.
   const emails = recipients
-    .filter(u => (u.notificationPrefs as any)?.default?.cadence !== 'off')
+    .filter(u => ((u.notificationPrefs as any)?.default?.cadence ?? 'immediate') === 'immediate')
     .map(u => u.email)
     .filter(Boolean);
 
-  const lines = due.map(d => `${d.companyName} — ${d.agreementNumber ?? 'Pending...'} (ready to invoice ${d.nextDueDate.toISOString().slice(0, 10)})`);
+  const lines = due.map(d => `${d.companyName} — ${d.agreementNumber ?? 'Pending...'} (${d.detail})`);
+  const headline = `${due.length} rental${due.length === 1 ? '' : 's'} to send for billing`;
 
   if (emails.length > 0 && mailerConfigured) {
     try {
@@ -99,9 +96,9 @@ async function notifyDue(due: DueAgreement[]): Promise<void> {
         from: FROM_ADDRESS,
         to: emails.join(','),
         cc: BILLING_CC,
-        subject: `${due.length} rental agreement${due.length === 1 ? '' : 's'} ready to invoice`,
-        html: `<p>The following active rentals have reached their billing cadence:</p><ul>${
-          due.map(d => `<li>${d.companyName} — ${d.agreementNumber ?? 'Pending...'} (ready to invoice ${d.nextDueDate.toISOString().slice(0, 10)})</li>`).join('')
+        subject: headline,
+        html: `<p>These rentals are due and have not been sent for billing. Send them from the dashboard Rental Billing tab:</p><ul>${
+          lines.map(l => `<li>${l}</li>`).join('')
         }</ul>`,
       });
     } catch (err) {
@@ -109,25 +106,24 @@ async function notifyDue(due: DueAgreement[]): Promise<void> {
     }
   }
 
-  if (ringcentralConfigured('billing')) {
-    const text = `💵 **Ready to invoice** — ${due.length} rental agreement${due.length === 1 ? '' : 's'}\n${lines.join('\n')}`;
-    await ringcentralNotify('billing', text);
+  if (await ringcentralConfigured('billing')) {
+    await ringcentralNotify('billing', `**${headline}**\n${lines.join('\n')}`);
   }
 }
 
 async function processTick(): Promise<void> {
-  const due = await findDueAgreements();
+  const due = dueForNag(await listRentalsForRelease());
   if (due.length === 0) return;
 
   await notifyDue(due);
 
   await prisma.$transaction(
     due.map(d =>
-      prisma.rentalAgreement.update({ where: { id: d.id }, data: { lastBillReadyNotifiedFor: d.nextDueDate } }),
+      prisma.rentalAgreement.update({ where: { id: d.id }, data: { lastBillReadyNotifiedFor: d.notifyFor } }),
     ),
   );
 
-  console.log(`[RentalBillReady] Notified for ${due.length} agreement${due.length === 1 ? '' : 's'} ready to bill`);
+  console.log(`[RentalBillReady] Notified for ${due.length} rental${due.length === 1 ? '' : 's'} waiting to be sent for billing`);
 }
 
 export function startRentalBillReadyWatcher(): void {

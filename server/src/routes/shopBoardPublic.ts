@@ -14,7 +14,7 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { authenticateUserOrKiosk } from '../middleware/kioskAuth.js';
 import {
   boardItemInclude, buildBoard, getAgingThresholds, getColumnColors,

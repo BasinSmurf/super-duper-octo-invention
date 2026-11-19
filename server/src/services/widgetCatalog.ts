@@ -16,6 +16,7 @@ export type Role =
   | 'dispatch'
   | 'field_super'
   | 'billing_ar'
+  | 'ar_supervisor'
   | 'trainer'
   | 'train_admin'
   | 'boss'
@@ -65,7 +66,7 @@ export interface WidgetCatalogEntry {
 // ---------------------------------------------------------------------------
 
 export const WIDGET_CATALOG: WidgetCatalogEntry[] = [
-  { type: 'internal_shop_value', label: 'Internal Shop — Retail Value', description: 'Retail value of completed internal shop work; never billed', roles: ['boss', 'billing_ar', 'platform_admin'], sizes: ['large', 'full'], defaultSize: 'large' },
+  { type: 'internal_shop_value', label: 'Internal Shop — Retail Value', description: 'Retail value of completed internal shop work; never billed', roles: ['boss', 'billing_ar', 'ar_supervisor', 'platform_admin'], sizes: ['large', 'full'], defaultSize: 'large' },
   {
     type: 'my_tickets',
     label: 'My Tickets',
@@ -78,7 +79,7 @@ export const WIDGET_CATALOG: WidgetCatalogEntry[] = [
     type: 'quick_actions',
     label: 'Quick Actions',
     description: 'New Ticket, Scan Barcode, and shortcuts for common tasks',
-    roles: ['field_tech', 'dispatch', 'field_super', 'billing_ar', 'trainer', 'train_admin', 'platform_admin'],
+    roles: ['field_tech', 'dispatch', 'field_super', 'billing_ar', 'ar_supervisor', 'trainer', 'train_admin', 'platform_admin'],
     sizes: ['small', 'medium'],
     defaultSize: 'medium',
   },
@@ -119,7 +120,7 @@ export const WIDGET_CATALOG: WidgetCatalogEntry[] = [
     type: 'approval_queue',
     label: 'Approval Queue',
     description: 'Tickets awaiting supervisor review',
-    roles: ['field_super', 'billing_ar', 'boss', 'platform_admin'],
+    roles: ['field_super', 'billing_ar', 'ar_supervisor', 'boss', 'platform_admin'],
     sizes: ['medium', 'large'],
     defaultSize: 'medium',
   },
@@ -127,7 +128,7 @@ export const WIDGET_CATALOG: WidgetCatalogEntry[] = [
     type: 'ready_to_invoice',
     label: 'Ready to Invoice',
     description: 'Completed tickets + closed shop WOs that have not yet been billed',
-    roles: ['field_super', 'billing_ar', 'boss', 'platform_admin'],
+    roles: ['field_super', 'billing_ar', 'ar_supervisor', 'boss', 'platform_admin'],
     sizes: ['medium', 'large'],
     defaultSize: 'medium',
   },
@@ -135,15 +136,15 @@ export const WIDGET_CATALOG: WidgetCatalogEntry[] = [
     type: 'enverus_status',
     label: 'Enverus Status',
     description: 'Recent receipt/invoice submissions and their acceptance state',
-    roles: ['billing_ar', 'boss', 'platform_admin'],
+    roles: ['billing_ar', 'ar_supervisor', 'boss', 'platform_admin'],
     sizes: ['medium', 'large'],
     defaultSize: 'medium',
   },
   {
     type: 'qb_sync_queue',
     label: 'QuickBooks Sync',
-    description: 'Sales orders awaiting conversion to QB invoices',
-    roles: ['billing_ar', 'boss', 'platform_admin'],
+    description: 'Approved invoices, queued pushes and sales orders awaiting conversion',
+    roles: ['billing_ar', 'ar_supervisor', 'boss', 'platform_admin'],
     sizes: ['small', 'medium'],
     defaultSize: 'small',
   },
@@ -167,14 +168,14 @@ export const WIDGET_CATALOG: WidgetCatalogEntry[] = [
     type: 'revenue_summary',
     label: 'Revenue Summary',
     description: 'Today / WTD / MTD revenue totals',
-    roles: ['billing_ar', 'boss', 'platform_admin'],
+    roles: ['billing_ar', 'ar_supervisor', 'boss', 'platform_admin'],
     sizes: ['small', 'medium'],
     defaultSize: 'medium',
   },
   {
     type: 'ticket_volume',
     label: 'Ticket Volume',
-    description: 'Trend of ticket count over the last 30 days',
+    description: 'Tickets by service date over the last 30 Central-time calendar days',
     roles: ['dispatch', 'field_super', 'boss', 'platform_admin'],
     sizes: ['medium', 'large'],
     defaultSize: 'large',
@@ -183,7 +184,7 @@ export const WIDGET_CATALOG: WidgetCatalogEntry[] = [
     type: 'activity_summary',
     label: 'Activity Summary',
     description: 'Tickets closed + dollars billed, today / this week / this month',
-    roles: ['dispatch', 'field_super', 'billing_ar', 'boss', 'platform_admin'],
+    roles: ['dispatch', 'field_super', 'billing_ar', 'ar_supervisor', 'boss', 'platform_admin'],
     sizes: ['small', 'medium'],
     defaultSize: 'medium',
   },
@@ -195,7 +196,7 @@ export const WIDGET_CATALOG: WidgetCatalogEntry[] = [
     type: 'shop_aging',
     label: 'Shop Aging',
     description: 'Open / On Hold / Waiting-on-pickup shop units, filtered by age',
-    roles: ['field_tech', 'dispatch', 'field_super', 'billing_ar', 'boss', 'platform_admin'],
+    roles: ['field_tech', 'dispatch', 'field_super', 'billing_ar', 'ar_supervisor', 'boss', 'platform_admin'],
     sizes: ['small', 'medium', 'large'],
     defaultSize: 'medium',
   },
@@ -266,6 +267,13 @@ export const BASELINE_LAYOUTS: Record<Role, WidgetInstance[]> = {
     ...agingBaselines(),
   ],
   billing_ar: [
+    baseline('approval_queue'),
+    baseline('ready_to_invoice'),
+    baseline('enverus_status'),
+  ],
+  // Same desk as billing_ar; the role differs in what it may force, not in
+  // what it watches.
+  ar_supervisor: [
     baseline('approval_queue'),
     baseline('ready_to_invoice'),
     baseline('enverus_status'),

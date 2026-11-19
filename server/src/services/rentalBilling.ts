@@ -16,16 +16,22 @@ export interface RentalBillingState {
   isFullyBilled: boolean;
   /** When the next invoice is due. Completed-and-not-fully-billed uses the
    *  agreement's endDate (the final bill was already due); active uses
-   *  lastBilledThrough (or startDate if never billed) + one cadence step.
+   *  end of the first unbilled calendar month for monthly billing, otherwise one cadence step.
    *  Null once fully billed, or for statuses that never bill (scheduled/cancelled). */
   nextDueDate: Date | null;
 }
 
 function addCadenceStep(d: Date, cadence: RentalRateType): Date {
   const next = new Date(d);
-  if (cadence === 'daily') next.setDate(next.getDate() + 1);
-  else if (cadence === 'weekly') next.setDate(next.getDate() + 7);
-  else next.setMonth(next.getMonth() + 1); // monthly (default)
+  if (cadence === 'daily') next.setUTCDate(next.getUTCDate() + 1);
+  else if (cadence === 'weekly') next.setUTCDate(next.getUTCDate() + 7);
+  else {
+    const day = next.getUTCDate();
+    next.setUTCDate(1);
+    next.setUTCMonth(next.getUTCMonth() + 1);
+    const lastDay = new Date(Date.UTC(next.getUTCFullYear(), next.getUTCMonth() + 1, 0)).getUTCDate();
+    next.setUTCDate(Math.min(day, lastDay));
+  }
   return next;
 }
 
@@ -52,7 +58,10 @@ export function computeRentalBillingState(
     nextDueDate = isFullyBilled ? null : agreement.endDate;
   } else if (agreement.status === 'active') {
     const base = lastBilledThrough || agreement.startDate;
-    nextDueDate = addCadenceStep(base, agreement.billingCadence);
+    if (agreement.billingCadence === 'monthly') {
+      const firstUnbilled = lastBilledThrough ? new Date(+lastBilledThrough + 86400000) : base;
+      nextDueDate = new Date(Date.UTC(firstUnbilled.getUTCFullYear(), firstUnbilled.getUTCMonth() + 1, 0));
+    } else nextDueDate = addCadenceStep(base, agreement.billingCadence);
   }
 
   return { lastBilledThrough, isFullyBilled, nextDueDate };

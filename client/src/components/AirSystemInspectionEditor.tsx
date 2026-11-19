@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { cn } from '@/lib/cn'
 import type { AirSystemDraftRecord, CylinderRecord } from '@/lib/db-types'
 import { api } from '@/lib/api'
+import { WorkPointVerification, verificationCurrent } from '@/components/WorkPointVerification'
 import { SerialInput } from '@/components/SerialInput'
 import { MobileAssetPicker, type MobileAssetOption } from '@/components/MobileAssetPicker'
 import {
@@ -33,6 +34,8 @@ interface WorkPointInfo {
   reelSerialNumber: string | null
   standSerialNumber: string | null
   cylinders: WorkPointCylinder[]
+  verified: boolean
+  dateVerified: string | null
 }
 
 interface AirSystemInspectionEditorProps {
@@ -154,6 +157,8 @@ function createFromWorkPoint(wp: WorkPointInfo): AirSystemDraftRecord {
     reelSerialNumber: wp.reelSerialNumber || '',
     standSerialNumber: wp.standSerialNumber || '',
     cylinders,
+    verified: wp.verified,
+    dateVerified: wp.dateVerified,
   }
 }
 
@@ -201,6 +206,16 @@ function AirSerialField({ label, value, onChange, placeholder = 'Scan or type', 
 export function AirSystemInspectionEditor({ records, onChange, wellIds = [], padId }: AirSystemInspectionEditorProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [availableWorkPoints, setAvailableWorkPoints] = useState<WorkPointInfo[]>([])
+  const [expiryDays, setExpiryDays] = useState(0)
+  const [policyLoaded, setPolicyLoaded] = useState(false)
+  useEffect(() => {
+    api.get<{ expiryDays: number }>('/locations/work-point-verification-settings')
+      .then(data => { setExpiryDays(data.expiryDays); setPolicyLoaded(true); localStorage.setItem('workPointVerificationExpiryDays', String(data.expiryDays)) })
+      .catch(() => {
+        const cached = localStorage.getItem('workPointVerificationExpiryDays')
+        if (cached !== null) { setExpiryDays(Number(cached)); setPolicyLoaded(true) }
+      })
+  }, [])
   // A customer's numbered air trailer isn't tied to the ticket's wellsite —
   // its cylinder/hydro-test history lives on a standalone MobileAsset (see
   // MobileAsset in schema.prisma), picked here rather than threaded through
@@ -230,6 +245,7 @@ export function AirSystemInspectionEditor({ records, onChange, wellIds = [], pad
               id: wp.id, name: wp.name, airSystemType: wp.airSystemType || null,
               reelSerialNumber: wp.reelSerialNumber || null, standSerialNumber: wp.standSerialNumber || null,
               cylinders: rawCyls,
+              verified: wp.verified, dateVerified: wp.dateVerified,
             }
           }))
         }
@@ -245,7 +261,11 @@ export function AirSystemInspectionEditor({ records, onChange, wellIds = [], pad
     const rec = createFromWorkPoint(wp); onChange([...records, rec]); setExpandedId(rec.id)
   }
   function updateRecord(id: string, updates: Partial<AirSystemDraftRecord>) {
-    onChange(records.map(r => r.id === id ? { ...r, ...updates } : r))
+    const record = records.find(r => r.id === id)
+    const cylinderIdentity = (items: CylinderRecord[]) => items.map(c => [c.serialNumber, c.hydroDate, c.expiryDate, c.replaced, c.replacedNewSerial, c.replacedNewHydroDate, c.replacedNewExpiryDate])
+    const identityChanged = ['workPointName', 'reelSerialNumber', 'standSerialNumber'].some(key => key in updates && updates[key as keyof AirSystemDraftRecord] !== record?.[key as keyof AirSystemDraftRecord])
+      || (!!updates.cylinders && JSON.stringify(cylinderIdentity(updates.cylinders)) !== JSON.stringify(cylinderIdentity(record?.cylinders || [])))
+    onChange(records.map(r => r.id === id ? { ...r, ...updates, ...(identityChanged ? { verified: false, dateVerified: null, ...(r.workPointId ? { verificationUpdate: { verified: false, changedAt: new Date().toISOString() } } : {}) } : {}) } : r))
   }
   function removeRecord(id: string) { onChange(records.filter(r => r.id !== id)); if (expandedId === id) setExpandedId(null) }
 
@@ -309,7 +329,7 @@ export function AirSystemInspectionEditor({ records, onChange, wellIds = [], pad
                 className="flex items-center gap-3 px-4 py-3 text-sm font-medium bg-white border border-blue-300 text-blue-800 rounded-lg hover:bg-blue-100 transition-colors active:scale-[0.98] text-left">
                 <Plus className="w-5 h-5 text-blue-500 flex-shrink-0" />
                 <div className="flex-1 min-w-0">
-                  <div className="font-semibold">{wp.name}</div>
+                  <div className={cn('font-semibold inline-block', policyLoaded && verificationCurrent(wp.verified, wp.dateVerified, expiryDays) && 'border-2 border-green-500 rounded px-2')}>{wp.name}</div>
                   <div className="text-xs text-blue-500 mt-0.5">
                     {AIR_SYSTEM_TYPES.find(t => t.value === wp.airSystemType)?.label || ''}
                     {wp.reelSerialNumber && ` · Reel: ${wp.reelSerialNumber}`}
@@ -338,6 +358,9 @@ export function AirSystemInspectionEditor({ records, onChange, wellIds = [], pad
         const complete = isComplete(rec)
         const hasFails = hasAnyFail(rec)
         const activeReplacements = Object.entries(REPLACEMENT_SERIAL_ACTIONS).filter(([k]) => rec.serviceActions.includes(k))
+        const point = availableWorkPoints.find(wp => wp.id === rec.workPointId)
+        const verified = rec.verificationUpdate ? rec.verified : point?.verified ?? rec.verified
+        const dateVerified = rec.verificationUpdate ? rec.dateVerified : point?.dateVerified ?? rec.dateVerified
 
         return (
           <div key={rec.id} className="border rounded-lg overflow-hidden bg-white shadow-sm">
@@ -347,7 +370,7 @@ export function AirSystemInspectionEditor({ records, onChange, wellIds = [], pad
               <div className="flex items-center gap-3">
                 {getResultIcon(rec.overallResult)}
                 <div className="text-left">
-                  <div className="text-sm font-medium text-gray-900">{rec.workPointName || 'Unnamed System'}</div>
+                  <div className={cn('text-sm font-medium text-gray-900 inline-block', policyLoaded && verificationCurrent(verified, dateVerified, expiryDays) && 'border-2 border-green-500 rounded px-2')}>{rec.workPointName || 'Unnamed System'}</div>
                   <div className="text-xs text-gray-500">
                     {AIR_SYSTEM_TYPES.find(t => t.value === rec.airSystemType)?.label || ''}
                     {rec.reelSerialNumber && ` · Reel: ${rec.reelSerialNumber}`}
@@ -364,6 +387,9 @@ export function AirSystemInspectionEditor({ records, onChange, wellIds = [], pad
 
             {isExpanded && (
               <div className="p-4 space-y-5 border-t">
+                <WorkPointVerification verified={policyLoaded && verified} dateVerified={dateVerified} expiryDays={expiryDays} disabled={!policyLoaded || !rec.workPointId}
+                  onChange={checked => updateRecord(rec.id, { verified: checked, dateVerified: checked ? new Date().toISOString() : null, verificationUpdate: { verified: checked, changedAt: new Date().toISOString() } })} />
+                {!rec.workPointId && <p className="text-xs text-slate-500">Select a known Work Point to record verification.</p>}
                 {/* Section 1: System Identity */}
                 <div>
                   <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-1">

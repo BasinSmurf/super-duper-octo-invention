@@ -19,7 +19,7 @@ import { isFieldMobileRole } from '@/lib/roleMobility'
 export function RequireSyncingRole({ children }: { children: React.ReactNode }) {
   const { user } = useAuth()
 
-  if (isFieldMobileRole(user?.role)) return <>{children}</>
+  if (isFieldMobileRole(user?.role) && user?.role !== 'boss') return <>{children}</>
 
   return (
     <div className="max-w-lg mx-auto mt-10 px-4">
@@ -32,13 +32,13 @@ export function RequireSyncingRole({ children }: { children: React.ReactNode }) 
             </h1>
             <p>
               Tickets are written offline first and synced up afterwards, and the
-              sync engine only runs for field roles. On{' '}
+              server must permit ticket editing for the signed-in role. On{' '}
               <span className="font-medium">{user?.role || 'this role'}</span> a
               ticket would save locally and never reach the server — so this is
               blocked rather than lost.
             </p>
             <p className="mt-2">
-              Sign in as a field tech, field supervisor, dispatcher or boss to
+              Sign in as a field tech, field supervisor or dispatcher to
               create or edit a ticket. Viewing tickets works on any role.
             </p>
           </div>

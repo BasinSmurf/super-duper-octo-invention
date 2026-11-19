@@ -29,7 +29,9 @@ import {
   deleteAttachment,
   type AttachmentKind,
 } from '@/lib/attachments'
+import { db } from '@/lib/db'
 import { BENCH_CAPTURE, type CaptureOption } from '@/lib/attachmentCapture'
+import { openStoredAttachment } from '@/lib/attachmentDownload'
 
 interface ServerAttachment {
   id: string
@@ -40,6 +42,7 @@ interface ServerAttachment {
   storageState: string
   capturedAt: string
   serialNumber: string | null
+  offlineBlobId?: string | null
   uploadedBy?: { id: string; name: string } | null
 }
 
@@ -53,6 +56,9 @@ interface Row {
   by?: string | null
   local: boolean
   fileSizeBytes: number | null
+  groupId?: string
+  shared?: boolean
+  serverId?: string
 }
 
 const KIND_LABEL: Record<string, string> = {
@@ -79,6 +85,9 @@ function dataUrlToBlob(dataUrl: string): Blob {
 }
 
 interface Props {
+  job?: { workOrderId: string; units: { id: string; serialNumber: string; itemNumber: number; equipmentCategory: string }[] }
+  refreshKey?: number
+  onCaptured?: () => void
   shopItemId: string
   serialNumber: string
   /** Notifies the parent so it can enable/disable the condemn action. */
@@ -91,9 +100,12 @@ interface Props {
   onSavedKindsChange?: (kinds: string[]) => void
 }
 
-export function UnitAttachments({ shopItemId, serialNumber, onCountChange, disabled, capture = BENCH_CAPTURE, scope, onSavedKindsChange }: Props) {
+export function UnitAttachments({ shopItemId, serialNumber, onCountChange, disabled, capture = BENCH_CAPTURE, scope, onSavedKindsChange, job, refreshKey, onCaptured }: Props) {
   const [rows, setRows] = useState<Row[]>([])
   const [busy, setBusy] = useState(false)
+  const [selectionKind, setSelectionKind] = useState<AttachmentKind | null>(null)
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const captureTargets = useRef<string[]>([])
   const [error, setError] = useState<string | null>(null)
   const photoInput = useRef<HTMLInputElement>(null)
   const docInput = useRef<HTMLInputElement>(null)
@@ -104,9 +116,12 @@ export function UnitAttachments({ shopItemId, serialNumber, onCountChange, disab
     // knows about a capture taken thirty seconds ago on a dead connection.
     let local: Row[] = []
     try {
-      const localRows = await attachmentsFor({ shopItemId })
+      const localRows = job
+        ? await db.attachments.filter(a => a.workOrderId === job.workOrderId || job.units.some(unit => unit.id === a.shopItemId)).toArray()
+        : await attachmentsFor({ shopItemId })
       local = localRows.map(a => ({
         id: a.id,
+        shared: (a.linkedShopItemIds?.length ?? 0) > 1,
         kind: a.kind,
         fileName: a.fileName,
         capturedAt: a.capturedAt,
@@ -119,14 +134,17 @@ export function UnitAttachments({ shopItemId, serialNumber, onCountChange, disab
     let server: Row[] = []
     try {
       const res = await api.get<{ attachments: ServerAttachment[] }>(
-        `/attachments?shopItemId=${encodeURIComponent(shopItemId)}`,
+        job ? `/attachments?workOrderId=${encodeURIComponent(job.workOrderId)}` : `/attachments?shopItemId=${encodeURIComponent(shopItemId)}`,
       )
-      server = res.attachments.map(a => ({
-        id: a.id,
+      const unique = job ? [...new Map(res.attachments.map(a => [a.offlineBlobId || a.id, a])).values()] : res.attachments
+      server = unique.map(a => ({
+        id: job ? a.offlineBlobId || a.id : a.id,
         kind: a.kind,
         fileName: a.fileName,
         capturedAt: a.capturedAt,
         state: a.storageState as Row['state'],
+        groupId: a.offlineBlobId || a.id,
+        serverId: a.id,
         by: a.uploadedBy?.name,
         local: false,
         fileSizeBytes: a.fileSizeBytes,
@@ -136,7 +154,7 @@ export function UnitAttachments({ shopItemId, serialNumber, onCountChange, disab
     // Server wins on id collision: once it has the row, its state is the truth.
     const merged = new Map<string, Row>()
     for (const r of local) merged.set(r.id, r)
-    for (const r of server) merged.set(r.id, r)
+    for (const r of server) merged.set(r.groupId || r.id, r)
     const list = [...merged.values()].filter(a => {
       const ticketDocument = a.kind === 'vendor_invoice' || a.kind === 'packing_slip'
       return !scope || (scope === 'ticket' ? ticketDocument : !ticketDocument)
@@ -144,16 +162,16 @@ export function UnitAttachments({ shopItemId, serialNumber, onCountChange, disab
     setRows(list)
     onCountChange?.(list.length)
     onSavedKindsChange?.(server.filter(a => (a.fileSizeBytes ?? 0) > 0 && list.some(r => r.id === a.id)).map(a => a.kind))
-  }, [shopItemId, onCountChange, scope, onSavedKindsChange])
+  }, [shopItemId, onCountChange, scope, onSavedKindsChange, job])
 
-  useEffect(() => { void refresh() }, [refresh])
+  useEffect(() => { void refresh() }, [refresh, refreshKey])
 
   // The receive gate opens only after the server acknowledges the queued file.
   useEffect(() => {
-    if (!onSavedKindsChange) return
+    if (!onSavedKindsChange && !job) return
     const timer = setInterval(() => { void refresh() }, 3000)
     return () => clearInterval(timer)
-  }, [refresh, onSavedKindsChange])
+  }, [refresh, onSavedKindsChange, job])
 
   async function handleFiles(files: FileList | null, kind: AttachmentKind) {
     if (!files || files.length === 0) return
@@ -173,15 +191,18 @@ export function UnitAttachments({ shopItemId, serialNumber, onCountChange, disab
         }
         await captureAttachment({
           id: crypto.randomUUID(),
-          parent: { shopItemId },
+          parent: { shopItemId: job ? captureTargets.current[0] : shopItemId },
+          workOrderId: job?.workOrderId,
+          linkedShopItemIds: job ? captureTargets.current : undefined,
           kind,
           file: payload,
           fileName,
-          serialNumber,
+          serialNumber: job ? job.units.find(unit => unit.id === captureTargets.current[0])?.serialNumber : serialNumber,
         })
       }
       await refresh()
-      if (onSavedKindsChange) void runFullSync().then(refresh)
+      onCaptured?.()
+      void runFullSync().then(async () => { await refresh(); onCaptured?.() }).catch(() => {})
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not save the file')
     } finally {
@@ -195,9 +216,20 @@ export function UnitAttachments({ shopItemId, serialNumber, onCountChange, disab
     if (!confirm(`Remove ${row.fileName}?`)) return
     setBusy(true)
     try {
-      if (row.local) await deleteAttachment(row.id)
-      else await api.delete(`/attachments/${row.id}`)
+      if (row.local) await deleteAttachment(row.id, !!job)
+      else {
+        await api.delete(`/attachments/${row.serverId || row.id}${job ? '?wholeJob=true' : ''}`)
+        const localId = row.groupId || row.id
+        const local = await db.attachments.get(localId)
+        const remaining = local?.linkedShopItemIds?.filter(id => id !== shopItemId) || []
+        if (!job && remaining.length) {
+          await db.attachments.update(localId, { linkedShopItemIds: remaining, shopItemId: remaining[0] })
+        } else {
+          await db.attachments.delete(localId)
+        }
+      }
       await refresh()
+      onCaptured?.()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not remove the file')
     } finally {
@@ -206,6 +238,17 @@ export function UnitAttachments({ shopItemId, serialNumber, onCountChange, disab
   }
 
   function pickDoc(kind: AttachmentKind) {
+    setError(null)
+    if (job) {
+      if (kind === 'ue_report') {
+        captureTargets.current = job.units.filter(unit => unit.equipmentCategory === 'ue_cylinder').map(unit => unit.id)
+        if (!captureTargets.current.length) { setError('This job has no UE cylinders.'); return }
+      } else {
+        setSelectedIds([])
+        setSelectionKind(kind)
+        return
+      }
+    }
     pendingKind.current = kind
     docInput.current?.click()
   }
@@ -254,6 +297,28 @@ export function UnitAttachments({ shopItemId, serialNumber, onCountChange, disab
         </div>
       )}
 
+      {job && <p className="text-xs text-slate-500 mb-2">UE reports attach to all UE cylinders. Select units for Posi-Check and other documents.</p>}
+      {job && selectionKind && (
+        <div role="dialog" aria-label="Select units for document" className="border border-blue-200 rounded-lg p-3 mb-3 space-y-2">
+          <p className="text-sm font-medium">Select units for {KIND_LABEL[selectionKind]}</p>
+          <button type="button" className="text-xs text-blue-700" onClick={() => setSelectedIds(job.units.map(unit => unit.id))}>Select all</button>
+          {job.units.map(unit => (
+            <label key={unit.id} className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={selectedIds.includes(unit.id)} onChange={e => setSelectedIds(ids => e.target.checked ? [...ids, unit.id] : ids.filter(id => id !== unit.id))} />
+              Unit {unit.itemNumber} — {unit.serialNumber || 'No serial'}
+            </label>
+          ))}
+          <div className="flex gap-2">
+            <button type="button" disabled={!selectedIds.length} className="px-3 py-2 text-xs rounded bg-blue-600 text-white disabled:opacity-40" onClick={() => {
+              captureTargets.current = [...selectedIds]
+              pendingKind.current = selectionKind
+              setSelectionKind(null)
+              docInput.current?.click()
+            }}>Choose document</button>
+            <button type="button" className="px-3 py-2 text-xs" onClick={() => setSelectionKind(null)}>Cancel</button>
+          </div>
+        </div>
+      )}
       {error && (
         <div className="text-xs text-red-600 mb-2 flex items-start gap-1.5">
           <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
@@ -263,7 +328,7 @@ export function UnitAttachments({ shopItemId, serialNumber, onCountChange, disab
 
       {rows.length === 0 ? (
         <p className="text-xs text-slate-400 italic">
-          {scope === 'ticket' ? 'No return documents on this ticket yet.' : 'No attachments on this unit yet.'}
+          {job ? 'No documents on this job yet.' : scope === 'ticket' ? 'No return documents on this ticket yet.' : 'No attachments on this unit yet.'}
         </p>
       ) : (
         <ul className="divide-y divide-slate-100 border border-slate-200 rounded-lg overflow-hidden">
@@ -273,19 +338,23 @@ export function UnitAttachments({ shopItemId, serialNumber, onCountChange, disab
                 {KIND_LABEL[row.kind] ?? row.kind}
                 {(row.kind === 'vendor_invoice' || row.kind === 'packing_slip') && ' · Ticket'}
               </span>
-              <a
-                href={row.local ? undefined : `/api/attachments/${row.id}/content`}
-                target="_blank"
-                rel="noreferrer"
+              <button
+                type="button"
+                disabled={row.local || busy}
+                onClick={async () => {
+                  setError(null)
+                  try { await openStoredAttachment(row.serverId || row.id, row.fileName) }
+                  catch (err) { setError(err instanceof Error ? err.message : 'Could not open attachment') }
+                }}
                 className={cn(
-                  'text-xs truncate flex-1',
+                  'text-xs truncate flex-1 text-left',
                   row.local ? 'text-slate-700' : 'text-blue-700 hover:underline',
                 )}
               >
                 {row.fileName}
-              </a>
+              </button>
               <SyncBadge state={row.state} />
-              {!disabled && (
+              {!disabled && (!row.local || !row.shared || job) && (
                 <button
                   type="button"
                   onClick={() => handleDelete(row)}

@@ -1,4 +1,5 @@
 import PDFDocument from 'pdfkit';
+import { drawCompanyHeader, drawPdfFooters, loadPdfBranding, type PdfBranding } from './pdfBranding.js';
 
 // ---- Types (mirrors the WO_DETAIL_INCLUDE shape from GET /shop-orders/:id) ----
 
@@ -22,6 +23,7 @@ interface ShopItemForPdf {
   qcResult: string | null;
   qcNotes: string | null;
   parentItemId: string | null;
+  customData?: unknown;
   product?: { name: string; partNumber: string } | null;
   diagnosedBy?: { name: string } | null;
   assignedTo?: { name: string } | null;
@@ -132,14 +134,15 @@ const BRAND_ACCENT = '#0e7490';
 
 // ---- Main Generator ----
 
-export function generateShopWorkOrderPdf(wo: ShopWorkOrderForPdf): PDFKit.PDFDocument {
+export async function generateShopWorkOrderPdf(wo: ShopWorkOrderForPdf, providedBranding?: PdfBranding): Promise<PDFKit.PDFDocument> {
+  const branding = providedBranding ?? await loadPdfBranding();
   const doc = new PDFDocument({
     size: 'LETTER',
     margins: { top: 36, bottom: 10, left: 50, right: 50 },
     bufferPages: true,
     info: {
       Title: `Work Order ${wo.workOrderNumber}`,
-      Author: 'Basin Safety',
+      Author: branding.companyName,
       Creator: 'Sundog Field Service Platform',
     },
   });
@@ -154,7 +157,7 @@ export function generateShopWorkOrderPdf(wo: ShopWorkOrderForPdf): PDFKit.PDFDoc
   // ================================================================
   let y = 36;
 
-  doc.fontSize(22).font('Helvetica-Bold').fillColor(BRAND_DARK).text('BASIN SAFETY', contentLeft, y);
+  drawCompanyHeader(doc, branding, contentLeft, y, contentWidth / 2 - 14, BRAND_DARK);
   doc.fontSize(7.5).font('Helvetica').fillColor('#666666');
   doc.text('701.572.8140  |  billing@basinsafetyus.com  |  Williston, ND 58801', contentLeft, y + 26);
 
@@ -297,6 +300,13 @@ export function generateShopWorkOrderPdf(wo: ShopWorkOrderForPdf): PDFKit.PDFDoc
           y = doc.y + 2;
         }
       }
+      const notIncluded = (item.customData as { partsNotIncluded?: unknown } | null | undefined)?.partsNotIncluded;
+      if (Array.isArray(notIncluded) && notIncluded.length > 0) {
+        if (y > 730) { doc.addPage(); y = 40; }
+        doc.fontSize(7.5).font('Helvetica-Oblique').fillColor('#666666')
+          .text(`Not included at intake: ${notIncluded.join(', ')}`, contentLeft + 16, y, { width: contentWidth - 16 });
+        y = doc.y + 2;
+      }
 
       y += 6;
       doc.moveTo(contentLeft, y).lineTo(contentRight, y).strokeColor('#eeeeee').lineWidth(0.5).stroke();
@@ -350,17 +360,7 @@ export function generateShopWorkOrderPdf(wo: ShopWorkOrderForPdf): PDFKit.PDFDoc
   // FOOTER — every page
   // ================================================================
   const now = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-  const footerY = 752;
-  const range = doc.bufferedPageRange();
-  const pageCount = range.count;
-  for (let i = 0; i < pageCount; i++) {
-    doc.switchToPage(range.start + i);
-    doc.moveTo(contentLeft, footerY - 6).lineTo(contentRight, footerY - 6).strokeColor('#e0e0e0').lineWidth(0.5).stroke();
-    doc.fontSize(7).font('Helvetica').fillColor('#aaaaaa')
-      .text(`Generated ${now}  |  Basin Safety  |  Williston, ND  |  701.572.8140`, contentLeft, footerY, { width: contentWidth - 60, align: 'center', lineBreak: false });
-    doc.fontSize(7).font('Helvetica').fillColor('#bbbbbb')
-      .text(`Page ${i + 1} of ${pageCount}`, contentRight - 55, footerY, { lineBreak: false });
-  }
+  drawPdfFooters(doc, branding, now, contentLeft, contentRight);
 
   // NOTE: caller is responsible for calling doc.end()
   return doc;

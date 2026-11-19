@@ -1,4 +1,4 @@
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { buildShopBillingLines, buildWoExtraLines, toBillingItem, type ShopBillingItem, type WoBillingExtras } from './shopBillingLines.js';
 import { getLaborProduct, getMileageProduct } from '../utils/servicePartMap.js';
 import { SHOP_DIVISION } from '../utils/qbClass.js';
@@ -54,7 +54,7 @@ export async function internalShopValue(from: Date, until: Date) {
   const rows = nonvoid.map(wo => {
     const retail = retailShopItems(wo.items.map(i => toBillingItem(i as unknown as Record<string, unknown>)), products, labor?.defaultSellPrice);
     const built = buildShopBillingLines(retail.items);
-    const lines = [...built, ...buildWoExtraLines(wo.billingExtras as WoBillingExtras, built.length + 1, travel)];
+    const lines = [...built, ...buildWoExtraLines(wo.billingExtras as WoBillingExtras, built.length + 1, travel, labor)];
     const byCategory: Record<string, number> = {};
     for (const line of lines) {
       const kind = line.chargeKind ?? line.lineType;

@@ -2,10 +2,11 @@ import express, { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { OAuth2Client } from 'google-auth-library';
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { authenticate, type AuthPayload } from '../middleware/auth.js';
 import { resolveRoleForUser, isGoogleGroupsConfigured } from '../services/googleGroups.js';
+import { getReportSubscriptions, saveReportPreference } from '../services/reportSubscriptions.js';
 
 export const authRouter = Router();
 
@@ -22,8 +23,21 @@ function issueToken(user: { id: string; email: string; role: string }): string {
   });
 }
 
-function userResponse(user: { id: string; email: string; name: string; role: string; companyId?: string | null; homeSiteId?: string | null; pinHash?: string | null }) {
-  return { id: user.id, email: user.email, name: user.name, role: user.role, companyId: user.companyId ?? null, homeSiteId: user.homeSiteId ?? null, hasPin: !!user.pinHash };
+async function userResponse(user: { id: string; email: string; name: string; role: string; companyId?: string | null; homeSiteId?: string | null; pinHash?: string | null }) {
+  const help = await startHelpTips(user.id);
+  return { ...help, id: user.id, email: user.email, name: user.name, role: user.role, companyId: user.companyId ?? null, homeSiteId: user.homeSiteId ?? null, hasPin: !!user.pinHash };
+}
+
+// Set once on first authenticated use, including for existing accounts.
+async function startHelpTips(userId: string) {
+  await prisma.user.updateMany({
+    where: { id: userId, helpTipsStartedAt: null },
+    data: { helpTipsStartedAt: new Date() },
+  });
+  return prisma.user.findUniqueOrThrow({
+    where: { id: userId },
+    select: { helpTipsStartedAt: true, helpTipsEnabled: true },
+  });
 }
 
 /**
@@ -102,7 +116,7 @@ authRouter.post('/login', async (req: Request, res: Response, next) => {
       data: { lastLoginAt: new Date() },
     });
 
-    res.json({ token: issueToken(user), user: userResponse(user) });
+    res.json({ token: issueToken(user), user: await userResponse(user) });
   } catch (err) {
     next(err);
   }
@@ -134,7 +148,7 @@ authRouter.post('/pin', async (req: Request, res: Response, next) => {
       data: { lastLoginAt: new Date() },
     });
 
-    res.json({ token: issueToken(user), user: userResponse(user) });
+    res.json({ token: issueToken(user), user: await userResponse(user) });
   } catch (err) {
     next(err);
   }
@@ -151,7 +165,7 @@ authRouter.post('/google', async (req: Request, res: Response, next) => {
     }
 
     const user = await resolveGoogleUser(idToken);
-    res.json({ token: issueToken(user), user: userResponse(user) });
+    res.json({ token: issueToken(user), user: await userResponse(user) });
   } catch (err) {
     // Google auth library throws generic errors — wrap them
     if (err instanceof AppError) {
@@ -208,7 +222,7 @@ authRouter.post('/google/callback', express.urlencoded({ extended: false }), asy
 <script>
 try {
   localStorage.setItem('sundog_token', ${jsonForScript(token)});
-  localStorage.setItem('sundog_user', ${jsonForScript(JSON.stringify(userResponse(user)))});
+  localStorage.setItem('sundog_user', ${jsonForScript(JSON.stringify(await userResponse(user)))});
 } catch (e) {}
 location.replace('/');
 </script></body>`);
@@ -255,6 +269,14 @@ authRouter.put('/me/password', authenticate, async (req: Request, res: Response,
 
 const NOTIFY_CADENCES = ['immediate', 'daily', 'weekly', 'off'] as const;
 
+authRouter.get('/me/reports', authenticate, async (req, res) => {
+  res.json(await getReportSubscriptions(prisma, req.user!.userId));
+});
+authRouter.put('/me/reports/:type', authenticate, async (req, res) => {
+  await saveReportPreference(prisma, req.user!.userId, req.user!.userId, req.params.type, req.body?.cadence);
+  res.json(await getReportSubscriptions(prisma, req.user!.userId));
+});
+
 // PUT /api/auth/me/notifications — the signed-in user sets their own email
 // notification cadence. Stored as JSON (User.notificationPrefs), same pattern
 // as dashboardWidgets — only a single "default" category exists today; this
@@ -266,7 +288,7 @@ authRouter.put('/me/notifications', authenticate, async (req: Request, res: Resp
       throw new AppError(400, `cadence must be one of: ${NOTIFY_CADENCES.join(', ')}`);
     }
     const notificationPrefs = { default: { channel: 'email', cadence } };
-    await prisma.user.update({ where: { id: req.user!.userId }, data: { notificationPrefs } });
+    await prisma.$executeRaw`UPDATE users SET notification_prefs = COALESCE(notification_prefs, '{}'::jsonb) || ${JSON.stringify(notificationPrefs)}::jsonb, updated_at = NOW() WHERE id = ${req.user!.userId}`;
     res.json({ ok: true, notificationPrefs });
   } catch (err) {
     next(err);
@@ -274,6 +296,23 @@ authRouter.put('/me/notifications', authenticate, async (req: Request, res: Resp
 });
 
 // GET /api/auth/me — current user info
+// null restores the automatic 90-day policy; a boolean overrides it.
+authRouter.put('/me/help-tips', authenticate, async (req: Request, res: Response, next) => {
+  try {
+    const enabled = req.body?.enabled;
+    if (enabled !== null && typeof enabled !== 'boolean') {
+      throw new AppError(400, 'enabled must be true, false, or null');
+    }
+    const user = await prisma.user.update({
+      where: { id: req.user!.userId },
+      data: { helpTipsEnabled: enabled },
+      select: { helpTipsStartedAt: true, helpTipsEnabled: true },
+    });
+    res.json(user);
+  } catch (err) { next(err); }
+});
+
+// GET /api/auth/me - current user info
 authRouter.get('/me', authenticate, async (req: Request, res: Response, next) => {
   try {
     const user = await prisma.user.findUnique({
@@ -296,7 +335,8 @@ authRouter.get('/me', authenticate, async (req: Request, res: Response, next) =>
     });
     if (!user) throw new AppError(404, 'User not found');
     const { pinHash, passwordHash, ...rest } = user;
-    res.json({ ...rest, hasPin: !!pinHash, hasPassword: !!passwordHash });
+    const help = await startHelpTips(user.id);
+    res.json({ ...rest, ...help, hasPin: !!pinHash, hasPassword: !!passwordHash });
   } catch (err) {
     next(err);
   }

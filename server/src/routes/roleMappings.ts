@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { requirePermission } from '../middleware/rbac.js';
 import { isGoogleGroupsConfigured } from '../services/googleGroups.js';
@@ -34,7 +34,7 @@ roleMappingsRouter.post('/', async (req: Request, res: Response, next) => {
     }
 
     // Validate role is a real UserRole
-    const validRoles = ['field_tech', 'dispatch', 'field_super', 'billing_ar', 'trainer', 'train_admin', 'boss', 'platform_admin'];
+    const validRoles = ['field_tech', 'dispatch', 'field_super', 'billing_ar', 'ar_supervisor', 'trainer', 'train_admin', 'boss', 'platform_admin'];
     if (!validRoles.includes(sundogRole)) {
       throw new AppError(400, `Invalid role: ${sundogRole}. Valid: ${validRoles.join(', ')}`);
     }

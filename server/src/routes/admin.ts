@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { requirePermission } from '../middleware/rbac.js';
 import { attachmentQueueDepth } from '../services/attachmentUploader.js';
 
@@ -8,6 +8,7 @@ import { loadApiKeys, issueApiKey, V1_SCOPES } from '../v1/apiKeyStore.js';
 import { isServiceDivision } from '../utils/qbClass.js';
 import type { ServiceDivision } from '../db.js';
 import { supervisorStatus } from '../services/supervisor.js';
+import { suggestCompanyMatches } from '../services/qbCustomerListSync.js';
 
 export const adminRouter = Router();
 
@@ -439,6 +440,176 @@ adminRouter.patch('/qb/sales-tax-mapping', requirePermission('billing:qb_sync'),
 });
 
 // ============================================================
+// QuickBooks customer list — pull, review, link
+// ============================================================
+// POST /admin/qb/sync-customers — enqueue a pull of the whole QB customer
+// list. This button is the ONLY way a customer pull happens (scheduled pulls
+// don't work against QB Desktop). Same idempotency pattern as sync-items.
+adminRouter.post('/qb/sync-customers', requirePermission('billing:qb_sync'), async (req: Request, res: Response, next) => {
+  try {
+    const existing = await prisma.qbSyncQueue.findFirst({
+      where: { entityType: 'customer_list', action: 'query', status: { in: ['pending', 'sent'] } },
+      select: { id: true, status: true, createdAt: true },
+    });
+    if (existing) {
+      res.json({ queued: false, message: `Customer pull already ${existing.status} (queued ${existing.createdAt.toISOString()})`, entry: existing });
+      return;
+    }
+    const entry = await prisma.qbSyncQueue.create({
+      data: { entityType: 'customer_list', action: 'query', entityId: 'all-customers', priority: 5, status: 'pending' },
+      select: { id: true, status: true, createdAt: true },
+    });
+    console.log(`[QBWC] Manual customer pull queued by ${req.user?.userId || 'unknown'}`);
+    res.json({ queued: true, message: 'Customer pull queued — QBWC will pick it up on next poll.', entry });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /admin/qb/customers — QuickBooks customers no Sundog company is linked
+// to. Jobs (sub-customers), inactive and ignored rows are hidden unless asked
+// for: ?jobs=1&inactive=1&ignored=1.
+adminRouter.get('/qb/customers', requirePermission('billing:qb_sync'), async (req: Request, res: Response, next) => {
+  try {
+    const on = (k: string) => req.query[k] === '1' || req.query[k] === 'true';
+    const [mirror, linked, lastPull] = await Promise.all([
+      prisma.qbCustomer.findMany({ orderBy: { fullName: 'asc' } }),
+      prisma.company.findMany({ where: { OR: [{ qbCustomerListId: { not: null } }, { isActive: true }] }, select: { id: true, name: true, qbCustomerListId: true } }),
+      prisma.qbSyncQueue.findFirst({
+        where: { entityType: 'customer_list', action: 'query', status: 'success' },
+        orderBy: { completedAt: 'desc' }, select: { completedAt: true },
+      }),
+    ]);
+    const held = new Set(linked.map(c => c.qbCustomerListId).filter(Boolean));
+    const unlinked = mirror.filter(c => !held.has(c.qbListId));
+    // Near-name suggestions come from Sundog customers that have no QuickBooks
+    // link yet. Rows with a suggestion sort first: they are one click from done.
+    const linkable = linked.filter(c => !c.qbCustomerListId).map(c => ({ id: c.id, name: c.name }));
+    const unmatched = unlinked
+      .filter(c => (on('jobs') || c.sublevel === 0) && (on('inactive') || c.isActive) && (on('ignored') || !c.ignored))
+      .map(c => ({ ...c, suggestions: suggestCompanyMatches(c.name, linkable) }))
+      .sort((a, b) => Number(b.suggestions.length > 0) - Number(a.suggestions.length > 0));
+    res.json({
+      lastPulledAt: lastPull?.completedAt ?? null,
+      qbCustomerCount: mirror.length,
+      linkedCount: mirror.length - unlinked.length,
+      unmatchedCount: unmatched.length,
+      unlinkedSundogCount: linkable.length,
+      unmatched: unmatched.slice(0, 500),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PATCH /admin/qb/customers/:id — mark a QuickBooks customer as deliberately
+// not a Sundog customer (or undo that).
+adminRouter.patch('/qb/customers/:id', requirePermission('billing:qb_sync'), async (req: Request, res: Response, next) => {
+  try {
+    const { ignored } = (req.body ?? {}) as { ignored?: unknown };
+    if (typeof ignored !== 'boolean') {
+      res.status(400).json({ error: 'ignored (boolean) is required' });
+      return;
+    }
+    const updated = await prisma.qbCustomer.updateMany({ where: { id: req.params.id as string }, data: { ignored } });
+    if (!updated.count) {
+      res.status(404).json({ error: 'QuickBooks customer not found' });
+      return;
+    }
+    res.json({ ok: true, ignored });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /admin/qb/customers/:id/link — bind an existing Sundog company to this
+// QuickBooks customer. Refuses to steal: the company must be unlinked and the
+// QB customer must not already belong to another company.
+adminRouter.post('/qb/customers/:id/link', requirePermission('customers:manage'), async (req: Request, res: Response, next) => {
+  try {
+    const { companyId } = (req.body ?? {}) as { companyId?: unknown };
+    if (typeof companyId !== 'string' || !companyId) {
+      res.status(400).json({ error: 'companyId is required' });
+      return;
+    }
+    const [qb, company] = await Promise.all([
+      prisma.qbCustomer.findUnique({ where: { id: req.params.id as string } }),
+      prisma.company.findUnique({ where: { id: companyId }, select: { id: true, name: true, qbCustomerListId: true, qbCustomerFullName: true } }),
+    ]);
+    if (!qb || !company) {
+      res.status(404).json({ error: !qb ? 'QuickBooks customer not found' : 'Company not found' });
+      return;
+    }
+    if (company.qbCustomerListId && company.qbCustomerListId !== qb.qbListId) {
+      res.status(409).json({ error: `${company.name} is already linked to a different QuickBooks customer` });
+      return;
+    }
+    const holder = await prisma.company.findFirst({
+      where: { qbCustomerListId: qb.qbListId, NOT: { id: company.id } }, select: { name: true },
+    });
+    if (holder) {
+      res.status(409).json({ error: `That QuickBooks customer is already linked to ${holder.name}` });
+      return;
+    }
+    const after = await prisma.company.update({
+      where: { id: company.id },
+      data: { qbCustomerListId: qb.qbListId, qbCustomerFullName: qb.fullName },
+      select: { id: true, name: true, qbCustomerListId: true, qbCustomerFullName: true },
+    });
+    await createAuditLog({
+      userId: req.user!.userId, entityType: 'company', entityId: company.id, action: 'update',
+      changes: { before: company, after }, ipAddress: req.ip,
+    });
+    res.json({ ok: true, company: after });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /admin/qb/customers/:id/create-company — make a Sundog customer from a
+// QuickBooks one by hand. The pull already does this for active top-level
+// customers; this covers what it skips (jobs, inactive). A same-named active
+// company blocks it (link that one instead).
+adminRouter.post('/qb/customers/:id/create-company', requirePermission('customers:manage'), async (req: Request, res: Response, next) => {
+  try {
+    const qb = await prisma.qbCustomer.findUnique({ where: { id: req.params.id as string } });
+    if (!qb) {
+      res.status(404).json({ error: 'QuickBooks customer not found' });
+      return;
+    }
+    const clash = await prisma.company.findFirst({
+      where: { OR: [
+        { qbCustomerListId: qb.qbListId },
+        { isActive: true, name: { equals: qb.name, mode: 'insensitive' } },
+      ] },
+      select: { id: true, name: true, qbCustomerListId: true },
+    });
+    if (clash) {
+      res.status(409).json({
+        error: clash.qbCustomerListId === qb.qbListId
+          ? `Already linked to ${clash.name}`
+          : `A customer named ${clash.name} already exists — link it instead`,
+        companyId: clash.id,
+      });
+      return;
+    }
+    const data = {
+      name: qb.name, companyType: 'customer' as const,
+      phone: qb.phone, email: qb.email, address: qb.address, city: qb.city, state: qb.state, zip: qb.zip,
+      qbCustomerListId: qb.qbListId, qbCustomerFullName: qb.fullName,
+    };
+    const company = await prisma.company.create({ data });
+    await createAuditLog({
+      userId: req.user!.userId, entityType: 'company', entityId: company.id, action: 'create',
+      changes: { ...data, source: 'quickbooks_customer_pull' }, ipAddress: req.ip,
+    });
+    res.status(201).json({ ok: true, company: { id: company.id, name: company.name } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ============================================================
 // GET /admin/qb/failed — list dead QB sync entries (for triage + retry)
 // ============================================================
 // Surfaces every entry the dispatcher will no longer pick up: anything
@@ -582,8 +753,9 @@ adminRouter.post('/qb/retry-failed', requirePermission('billing:qb_sync'), async
 
 adminRouter.get('/jobs', requirePermission('page:ops'), async (_req: Request, res: Response, next) => {
   try {
-    // DISTINCT ON gets the most recent row per job_name (Postgres-only;
-    // matches existing patterns in this file).
+    // Walk distinct names through the existing (job_name, started_at DESC)
+    // index, then fetch one latest row each. DISTINCT ON scans every historical
+    // run even though this card only displays a handful of jobs.
     const latest = await prisma.$queryRaw<Array<{
       job_name: string;
       started_at: Date;
@@ -592,10 +764,21 @@ adminRouter.get('/jobs', requirePermission('page:ops'), async (_req: Request, re
       duration_ms: number | null;
       error_message: string | null;
     }>>`
-      SELECT DISTINCT ON (job_name)
-        job_name, started_at, finished_at, status, duration_ms, error_message
-      FROM job_runs
-      ORDER BY job_name, started_at DESC
+      WITH RECURSIVE names AS (
+        (SELECT job_name FROM job_runs ORDER BY job_name LIMIT 1)
+        UNION ALL
+        SELECT next_name.job_name FROM names
+        CROSS JOIN LATERAL (
+          SELECT job_name FROM job_runs
+          WHERE job_name > names.job_name ORDER BY job_name LIMIT 1
+        ) next_name
+      )
+      SELECT latest.* FROM names CROSS JOIN LATERAL (
+        SELECT job_name, started_at, finished_at, status, duration_ms, error_message
+        FROM job_runs WHERE job_name = names.job_name
+        ORDER BY started_at DESC LIMIT 1
+      ) latest
+      ORDER BY latest.job_name
     `;
 
     const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);

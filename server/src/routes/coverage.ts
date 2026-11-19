@@ -1,5 +1,7 @@
+import { cycleLength, validDate } from '../services/writeValidation.js';
+import { defaultDivisionForWork } from '../utils/qbClass.js';
 import { Router, Request, Response } from 'express';
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { requirePermission } from '../middleware/rbac.js';
 import { generateTicketNumbers } from '../utils/ticketNumber.js';
@@ -37,6 +39,7 @@ interface CalendarPeriod {
  * @param refDate     - Reference date (defaults to now)
  */
 function getCalendarPeriod(cycleMonths: number, refDate?: Date): CalendarPeriod {
+  if (![1, 2, 3, 6, 12].includes(cycleMonths)) cycleMonths = 6;
   const ref = refDate || new Date();
   const year = ref.getFullYear();
   const month = ref.getMonth(); // 0-indexed
@@ -76,9 +79,9 @@ function getCalendarPeriod(cycleMonths: number, refDate?: Date): CalendarPeriod 
  * Find or auto-create a RouteCycle for the given route and period.
  * This ensures every route+period combo has a RouteCycle record.
  */
-async function findOrCreateCycle(routeId: string, period: CalendarPeriod, totalStops: number): Promise<string> {
+async function findOrCreateCycle(routeId: string, period: CalendarPeriod, totalStops: number, db: Pick<typeof prisma, 'routeCycle'>): Promise<string> {
   // Look for an existing cycle overlapping this period
-  const existing = await prisma.routeCycle.findFirst({
+  const existing = await db.routeCycle.findFirst({
     where: {
       routeId,
       startDate: period.startDate,
@@ -88,7 +91,7 @@ async function findOrCreateCycle(routeId: string, period: CalendarPeriod, totalS
   if (existing) return existing.id;
 
   // Auto-create
-  const cycle = await prisma.routeCycle.create({
+  const cycle = await db.routeCycle.create({
     data: {
       routeId,
       cycleName: period.cycleName,
@@ -234,9 +237,6 @@ coverageRouter.get('/routes', async (req: Request, res: Response) => {
     });
 
     const pct = totalStops > 0 ? Math.round((servicedStops / totalStops) * 100) : 0;
-
-    // Auto-create cycle record (fire and forget — don't block response)
-    findOrCreateCycle(route.id, period, totalStops).catch(() => {});
 
     return {
       routeId: route.id,
@@ -442,9 +442,6 @@ coverageRouter.get('/routes/:routeId', async (req: Request, res: Response) => {
   }
   const techBreakdown = Array.from(techMap.values()).sort((a, b) => b.count - a.count);
 
-  // Auto-create cycle record
-  await findOrCreateCycle(route.id, period, stops.length).catch(() => {});
-
   res.json({
     route: {
       id: route.id,
@@ -487,186 +484,200 @@ coverageRouter.post('/routes/:routeId/generate-tickets', requirePermission('disp
     const tech = await prisma.user.findUnique({ where: { id: assignedTechId }, select: { id: true, name: true } });
     if (!tech) throw new AppError(404, 'Tech not found');
 
-    // Get route with active stops
-    const route = await prisma.serviceRoute.findUnique({
-      where: { id: routeId as string },
-      include: {
-        company: { select: { id: true, name: true } },
-        stops: {
-          where: { isActive: true },
-          include: {
-            pad: {
-              select: {
-                id: true,
-                name: true,
-                fieldId: true,
-                field: { select: { id: true, name: true } },
+    validDate(serviceDate, 'serviceDate');
+    const result = await prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM service_routes WHERE id = ${routeId as string} FOR UPDATE`;
+      // Get route with active stops
+      const route = await tx.serviceRoute.findUnique({
+        where: { id: routeId as string },
+        include: {
+          company: { select: { id: true, name: true } },
+          stops: {
+            where: { isActive: true },
+            include: {
+              pad: {
+                select: {
+                  id: true,
+                  name: true,
+                  fieldId: true,
+                  field: { select: { id: true, name: true } },
+                },
               },
+              well: { select: { id: true, wellName: true, fieldId: true } },
             },
-            well: { select: { id: true, wellName: true, fieldId: true } },
+            orderBy: { stopIndex: 'asc' },
           },
-          orderBy: { stopIndex: 'asc' },
         },
-      },
-    });
+      });
 
-    if (!route) throw new AppError(404, 'Route not found');
-    if (!route.isActive) throw new AppError(400, 'Route is inactive');
+      if (!route) throw new AppError(404, 'Route not found');
+      if (!route.isActive) throw new AppError(400, 'Route is inactive');
 
-    // Get current calendar period + cycle
-    const period = getCalendarPeriod(route.cycleMonths);
-    const cycleId = await findOrCreateCycle(route.id, period, route.stops.length);
+      cycleLength(route.cycleMonths);
+      if (stopIds !== undefined && (!Array.isArray(stopIds) || stopIds.length === 0 || stopIds.some((id: string) => !route.stops.some(stop => stop.id === id)))) throw new AppError(400, 'stopIds must belong to this route');
+      if (!route.stops.length) return { created: 0, message: 'This route has no active stops', tickets: [] };
+      // Get current calendar period + cycle
+      const period = getCalendarPeriod(route.cycleMonths, new Date(serviceDate));
+      const cycleId = await findOrCreateCycle(route.id, period, route.stops.length, tx);
 
-    // Find stops already serviced in this cycle (have a RouteCycleVisit with a ticketId)
-    const existingVisits = await prisma.routeCycleVisit.findMany({
-      where: { cycleId, ticketId: { not: null } },
-      select: { stopId: true },
-    });
-    const servicedStopIds = new Set(existingVisits.map(v => v.stopId));
+      // Find stops already serviced in this cycle (have a RouteCycleVisit with a ticketId)
+      const existingVisits = await tx.routeCycleVisit.findMany({
+        where: { cycleId, ticketId: { not: null }, ticket: { status: { not: 'void' } } },
+        select: { stopId: true },
+      });
+      const servicedStopIds = new Set(existingVisits.map(v => v.stopId));
 
-    // Also check for tickets already covering these locations in this period
-    // (tickets created outside the route system). Wells are checked separately
-    // from pads: a well stop with no pad matched nothing here before, so it got
-    // a fresh duplicate ticket on every run.
-    const padIds = route.stops.map(s => s.padId).filter(Boolean) as string[];
-    const wellIds = route.stops.map(s => s.wellId).filter(Boolean) as string[];
-    const existingTickets = (padIds.length > 0 || wellIds.length > 0) ? await prisma.serviceTicket.findMany({
-      where: {
-        OR: [
-          ...(padIds.length > 0 ? [{ padId: { in: padIds } }] : []),
-          ...(wellIds.length > 0 ? [{ wellId: { in: wellIds } }] : []),
-        ],
-        status: { in: ['draft', 'dispatched', 'in_progress', 'completed', 'supervisor_review', 'billing_queue', 'invoiced', 'closed'] },
-        serviceDate: { gte: period.startDate, lte: period.endDate },
-      },
-      select: { padId: true, wellId: true },
-    }) : [];
-    const padsWithTickets = new Set(existingTickets.map(t => t.padId).filter(Boolean));
-    const wellsWithTickets = new Set(existingTickets.map(t => t.wellId).filter(Boolean));
+      // Also check for tickets already covering these locations in this period
+      // (tickets created outside the route system). Wells are checked separately
+      // from pads: a well stop with no pad matched nothing here before, so it got
+      // a fresh duplicate ticket on every run.
+      const padIds = route.stops.map(s => s.padId).filter(Boolean) as string[];
+      const wellIds = route.stops.map(s => s.wellId).filter(Boolean) as string[];
+      const existingTickets = (padIds.length > 0 || wellIds.length > 0) ? await tx.serviceTicket.findMany({
+        where: {
+          OR: [
+            ...(padIds.length > 0 ? [{ padId: { in: padIds } }] : []),
+            ...(wellIds.length > 0 ? [{ wellId: { in: wellIds } }] : []),
+          ],
+          status: { in: ['draft', 'dispatched', 'in_progress', 'completed', 'supervisor_review', 'billing_queue', 'invoiced', 'closed'] },
+          serviceDate: { gte: period.startDate, lte: period.endDate },
+        },
+        select: { padId: true, wellId: true },
+      }) : [];
+      const padsWithTickets = new Set(existingTickets.map(t => t.padId).filter(Boolean));
+      const wellsWithTickets = new Set(existingTickets.map(t => t.wellId).filter(Boolean));
 
-    // Filter to unserviced stops (optionally limited to selected stop IDs).
-    // A well stop is only suppressed by a ticket for THAT well — matching the
-    // coverage rule, so the two screens can't disagree about what's left.
-    const unservicedStops = route.stops.filter(stop => {
-      if (servicedStopIds.has(stop.id)) return false;
-      if (stop.wellId) {
-        if (wellsWithTickets.has(stop.wellId)) return false;
-      } else if (stop.padId && padsWithTickets.has(stop.padId)) {
-        return false;
+      // Filter to unserviced stops (optionally limited to selected stop IDs).
+      // A well stop is only suppressed by a ticket for THAT well — matching the
+      // coverage rule, so the two screens can't disagree about what's left.
+      const selectedLocations = new Set<string>();
+      const unservicedStops = route.stops.filter(stop => {
+        const key = stop.wellId ? `well:${stop.wellId}` : stop.padId ? `pad:${stop.padId}` : `facility:${stop.facilityId}`;
+        if (selectedLocations.has(key)) return false;
+        if (selectedStopIds && !selectedStopIds.includes(stop.id)) return false;
+        selectedLocations.add(key);
+        if (servicedStopIds.has(stop.id)) return false;
+        if (stop.wellId) {
+          if (wellsWithTickets.has(stop.wellId)) return false;
+        } else if (stop.padId && padsWithTickets.has(stop.padId)) {
+          return false;
+        }
+        if (selectedStopIds && !selectedStopIds.includes(stop.id)) return false;
+        return true;
+      });
+
+      if (unservicedStops.length === 0) {
+        return { created: 0, message: 'All selected stops are scheduled or serviced in this period', tickets: [] };
       }
-      if (selectedStopIds && !selectedStopIds.includes(stop.id)) return false;
-      return true;
-    });
 
-    if (unservicedStops.length === 0) {
-      res.json({ created: 0, message: 'All stops already serviced in this period', tickets: [] });
-      return;
-    }
+      const resolvedServiceDate = new Date(serviceDate);
+      const createdTickets: Array<{ id: string; ticketNumber: string; location: string }> = [];
 
-    const resolvedServiceDate = new Date(serviceDate);
-    const createdTickets: Array<{ id: string; ticketNumber: string; location: string }> = [];
+      // Reserve every ticket number up front: generateTicketNumber reads the
+      // highest COMMITTED number, so calling it per-stop inside the transaction
+      // handed out the same number twice and the batch died on the unique index.
+      const ticketNumbers = await generateTicketNumbers('field_service', unservicedStops.length);
 
-    // Reserve every ticket number up front: generateTicketNumber reads the
-    // highest COMMITTED number, so calling it per-stop inside the transaction
-    // handed out the same number twice and the batch died on the unique index.
-    const ticketNumbers = await generateTicketNumbers('field_service', unservicedStops.length);
+      // Create tickets in a transaction
+      {
+        for (const [stopIdx, stop] of unservicedStops.entries()) {
+          const ticketNumber = ticketNumbers[stopIdx];
 
-    // Create tickets in a transaction
-    await prisma.$transaction(async (tx) => {
-      for (const [stopIdx, stop] of unservicedStops.entries()) {
-        const ticketNumber = ticketNumbers[stopIdx];
+          // A padless well stop still has a field of its own — without this
+          // fallback its ticket lands field-less and drops out of the
+          // field-scoped billing group.
+          const stopFieldId = stop.pad?.fieldId || stop.well?.fieldId || undefined;
 
-        // A padless well stop still has a field of its own — without this
-        // fallback its ticket lands field-less and drops out of the
-        // field-scoped billing group.
-        const stopFieldId = stop.pad?.fieldId || stop.well?.fieldId || undefined;
-
-        const locationDisplay = await buildLocationDisplay({
-          companyId: route.companyId,
-          fieldId: stopFieldId,
-          padId: stop.padId,
-          wellId: stop.wellId,
-        });
-
-        const billingGroupKey = computeBillingGroupKey({
-          ticketType: 'field_service',
-          companyId: route.companyId,
-          fieldId: stopFieldId,
-          serviceDate: resolvedServiceDate,
-        });
-
-        const ticket = await tx.serviceTicket.create({
-          data: {
-            ticketNumber,
-            ticketType: 'field_service',
-            serviceSubtype: 'air_system',
-            status: 'dispatched',
+          const locationDisplay = await buildLocationDisplay({
             companyId: route.companyId,
             fieldId: stopFieldId,
-            padId: stop.padId || undefined,
-            wellId: stop.wellId || undefined,
-            assignedTechId,
+            padId: stop.padId,
+            wellId: stop.wellId,
+          });
+
+          const billingGroupKey = computeBillingGroupKey({
+            ticketType: 'field_service',
+            companyId: route.companyId,
+            fieldId: stopFieldId,
             serviceDate: resolvedServiceDate,
-            locationDisplay,
-            billingGroupKey: billingGroupKey || undefined,
-            afeNumber: stop.afeNumber || undefined,
-            costCenter: stop.costCenter || undefined,
-            dispatchNotes: dispatchNotes || undefined,
-            dispatchedAt: new Date(),
-            dispatchedById: req.user!.userId,
-            createdById: req.user!.userId,
-          },
-        });
+          });
 
-        // Create RouteCycleVisit linking stop → ticket
-        await tx.routeCycleVisit.create({
-          data: {
-            cycleId,
-            stopId: stop.id,
-            ticketId: ticket.id,
-          },
-        });
+          const ticket = await tx.serviceTicket.create({
+            data: {
+              ticketNumber,
+              ticketType: 'field_service',
+              serviceSubtype: 'cascade_air',
+              division: defaultDivisionForWork({ ticketType: 'field_service', serviceSubtype: 'cascade_air' }) || 'D3',
+              status: 'dispatched',
+              companyId: route.companyId,
+              fieldId: stopFieldId,
+              padId: stop.padId || undefined,
+              wellId: stop.wellId || undefined,
+              assignedTechId,
+              serviceDate: resolvedServiceDate,
+              locationDisplay,
+              billingGroupKey: billingGroupKey || undefined,
+              afeNumber: stop.afeNumber || undefined,
+              costCenter: stop.costCenter || undefined,
+              dispatchNotes: dispatchNotes || undefined,
+              dispatchedAt: new Date(),
+              dispatchedById: req.user!.userId,
+              createdById: req.user!.userId,
+            },
+          });
 
-        createdTickets.push({
-          id: ticket.id,
-          ticketNumber,
-          location: locationDisplay || stop.well?.wellName || stop.clientName || stop.pad?.name || `Stop ${stop.stopIndex}`,
+          // Create RouteCycleVisit linking stop → ticket
+          await tx.routeCycleVisit.upsert({
+            where: { cycleId_stopId: { cycleId, stopId: stop.id } },
+            update: { ticketId: ticket.id, visitedAt: null, visitedById: null, skipped: false },
+            create: {
+              cycleId,
+              stopId: stop.id,
+              ticketId: ticket.id,
+            },
+          });
+
+          createdTickets.push({
+            id: ticket.id,
+            ticketNumber,
+            location: locationDisplay || stop.well?.wellName || stop.clientName || stop.pad?.name || `Stop ${stop.stopIndex}`,
+          });
+        }
+
+        // Update cycle completed count
+        const totalVisits = await tx.routeCycleVisit.count({
+          where: { cycleId, ticketId: { not: null } },
+        });
+        await tx.routeCycle.update({
+          where: { id: cycleId },
+          data: { completedStops: totalVisits },
         });
       }
 
-      // Update cycle completed count
-      const totalVisits = await tx.routeCycleVisit.count({
-        where: { cycleId, ticketId: { not: null } },
+      await createAuditLog({
+        userId: req.user!.userId,
+        entityType: 'coverage_batch',
+        entityId: routeId as string,
+        action: 'create',
+        changes: {
+          routeName: route.name,
+          techName: tech.name,
+          ticketCount: createdTickets.length,
+          cycleName: period.cycleName,
+        },
+        ipAddress: req.ip,
       });
-      await tx.routeCycle.update({
-        where: { id: cycleId },
-        data: { completedStops: totalVisits },
-      });
-    });
 
-    await createAuditLog({
-      userId: req.user!.userId,
-      entityType: 'coverage_batch',
-      entityId: routeId as string,
-      action: 'create',
-      changes: {
-        routeName: route.name,
-        techName: tech.name,
-        ticketCount: createdTickets.length,
+      return {
+        created: createdTickets.length,
+        cycleId,
         cycleName: period.cycleName,
-      },
-      ipAddress: req.ip,
-    });
-
-    res.status(201).json({
-      created: createdTickets.length,
-      cycleId,
-      cycleName: period.cycleName,
-      assignedTech: tech.name,
-      tickets: createdTickets,
-    });
+        assignedTech: tech.name,
+        tickets: createdTickets,
+      };
+    }, { timeout: 60000 });
+    res.status(result.created ? 201 : 200).json(result);
   } catch (err) {
     next(err);
   }
 });
-

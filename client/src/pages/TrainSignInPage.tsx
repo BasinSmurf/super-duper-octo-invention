@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom'
 import { api } from '@/lib/api'
 import { SignaturePad } from '@/components/SignaturePad'
+import { formatCalendarDate } from '@/lib/dates'
 import { GraduationCap, Loader2, CheckCircle2, AlertCircle } from 'lucide-react'
 
 interface ClassInfo {
@@ -85,7 +86,7 @@ export function TrainSignInPage() {
     setDone(false)
   }
 
-  const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
+  const classDate = formatCalendarDate(info?.serviceDate, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
 
   return (
     <div className="min-h-screen bg-slate-100 flex items-start justify-center p-4">
@@ -115,7 +116,7 @@ export function TrainSignInPage() {
             <div className="text-center py-10">
               <CheckCircle2 className="w-14 h-14 text-green-500 mx-auto mb-3" />
               <p className="text-lg font-semibold text-slate-900">You're signed in!</p>
-              <p className="text-sm text-slate-500 mt-1">{info?.courseName} — {today}</p>
+              <p className="text-sm text-slate-500 mt-1">{info?.courseName} — {classDate}</p>
               {kioskMode ? (
                 <>
                   <button
@@ -143,7 +144,7 @@ export function TrainSignInPage() {
               <div className="bg-slate-50 rounded-lg p-3">
                 <p className="font-semibold text-slate-900">{info?.courseName}</p>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  {today}
+                  {classDate}
                   {info?.trainerName && <> · Trainer: {info.trainerName}</>}
                   {info?.companyName && <> · {info.companyName}</>}
                 </p>

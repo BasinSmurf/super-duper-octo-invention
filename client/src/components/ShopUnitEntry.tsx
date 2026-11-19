@@ -1,3 +1,4 @@
+import { SharedBinConfirmation } from './SharedBinConfirmation'
 import { useEffect, useRef, useState } from 'react'
 import { v4 as uuidv4 } from 'uuid'
 import { cn } from '@/lib/cn'
@@ -34,6 +35,8 @@ export interface IntakeItem {
   scbaMaskSerial: string
   scbaHarnessSerial: string
   scbaBottleSerials: string[]
+  /** Part types the customer did not bring in ('regulator', 'mask', …). */
+  scbaNotIncluded?: string[]
   // Legacy components array (kept for server payload conversion)
   components: Array<{
     id: string
@@ -101,6 +104,65 @@ const GAS_TYPES = [
   'Other',
 ]
 
+// The parts of an SCBA / EEBA assembly. Customers routinely bring in only some
+// of them (a lone cylinder, a lone regulator), so each can be marked absent.
+export const SCBA_PARTS = [
+  { value: 'case', label: 'Case' },
+  { value: 'regulator', label: 'Regulator' },
+  { value: 'mask', label: 'Mask' },
+  { value: 'harness', label: 'Harness' },
+  { value: 'bottle', label: 'Bottle' },
+]
+
+export function partLabel(type: string) {
+  return SCBA_PARTS.find(p => p.value === type)?.label ?? type
+}
+
+// What people type when there is nothing to type. Mirrors PLACEHOLDERS in
+// server/src/services/serialQuality.ts — none of these identify a unit.
+const PLACEHOLDER_SERIALS = new Set([
+  'N/A', 'NA', 'NONE', 'NO SERIAL', 'NOSERIAL', 'NOSN', 'NO SN', 'UNKNOWN',
+  'UNK', 'TBD', 'PENDING', 'MISSING', 'X', 'XX', 'XXX', 'XXXX', '0', '00',
+  '000', '0000', '-', '--', '.', '?',
+])
+
+export function isPlaceholderSerial(raw: string) {
+  return PLACEHOLDER_SERIALS.has(raw.trim().replace(/\s+/g, ' ').toUpperCase())
+}
+
+/**
+ * Settle an SCBA draft: a part ticked "Not included" — or "filled in" with N/A
+ * — has no serial and is recorded as absent. The unit's own serial falls back
+ * to the case, then to whichever part actually came in, so a lone cylinder is
+ * identified by the cylinder.
+ */
+export function resolveScbaParts(draft: {
+  serial: string; caseSerial: string; regulatorSerial: string; maskSerial: string
+  harnessSerial: string; bottleSerials: string[]; notIncluded: string[]
+}) {
+  const missing = new Set(draft.notIncluded)
+  const part = (type: string, raw: string) => {
+    const value = raw.trim()
+    if (missing.has(type)) return ''
+    if (value && isPlaceholderSerial(value)) { missing.add(type); return '' }
+    return value
+  }
+  const caseSerial = part('case', draft.caseSerial)
+  const regulatorSerial = part('regulator', draft.regulatorSerial)
+  const maskSerial = part('mask', draft.maskSerial)
+  const harnessSerial = part('harness', draft.harnessSerial)
+  const typedBottles = missing.has('bottle') ? [] : draft.bottleSerials.map(s => s.trim()).filter(Boolean)
+  const bottleSerials = typedBottles.filter(s => !isPlaceholderSerial(s))
+  if (typedBottles.length > 0 && bottleSerials.length === 0) missing.add('bottle')
+  const typedSerial = draft.serial.trim()
+  const serial = (isPlaceholderSerial(typedSerial) ? '' : typedSerial)
+    || caseSerial || bottleSerials[0] || regulatorSerial || maskSerial || harnessSerial || ''
+  return {
+    serial, caseSerial, regulatorSerial, maskSerial, harnessSerial, bottleSerials,
+    notIncluded: SCBA_PARTS.map(p => p.value).filter(v => missing.has(v)),
+  }
+}
+
 export function isMonitor(cat: string) {
   return cat === 'area_monitor' || cat === 'personal_monitor'
 }
@@ -111,23 +173,35 @@ export function buildShopItemPayload(item: IntakeItem) {
   const isScba = item.equipmentCategory === 'scba'
   const isFa = item.equipmentCategory === 'fall_arrest'
   const isOther = item.equipmentCategory === 'other'
+  const serialNumber = item.serialNumber.trim() || (isScba ? item.scbaCaseSerial.trim() : '')
 
   // Build SCBA components array from named fields.
-  //
-  // WI-07 bug fix: the CASE serial was collected here, echoed back in the review
-  // list so the counter person believed it was recorded, and then never sent to
-  // the server. It only ever existed in form state. It is a constituent part
-  // like any other, so it becomes a child item like the others -- which is also
-  // what makes it a child record in VaultPRO.
+  // When a part supplies the unit identity (the case, or the lone cylinder a
+  // customer dropped off), the parent already records that serial — a child
+  // item with the same serial would be a duplicate unit. Only separately
+  // numbered parts get a child item and their own label.
   let components: any[] | undefined
+  let unitSerialPart: string | undefined
   if (isScba) {
     const comps: any[] = []
-    if (item.scbaCaseSerial) comps.push({ type: 'case', serialNumber: item.scbaCaseSerial, serviceType: item.serviceType })
-    if (item.scbaRegulatorSerial) comps.push({ type: 'regulator', serialNumber: item.scbaRegulatorSerial, serviceType: item.serviceType })
-    if (item.scbaMaskSerial) comps.push({ type: 'mask', serialNumber: item.scbaMaskSerial, serviceType: item.serviceType })
-    if (item.scbaHarnessSerial) comps.push({ type: 'harness', serialNumber: item.scbaHarnessSerial, serviceType: item.serviceType })
-    for (const bs of item.scbaBottleSerials) {
-      if (bs) comps.push({ type: 'bottle', serialNumber: bs, serviceType: item.serviceType })
+    const add = (type: string, raw: string) => {
+      const partSerial = raw.trim()
+      if (!partSerial) return
+      // Exactly ONE part can be the unit's identity. A second part carrying the
+      // same serial is a keying mistake and stays in the payload so the server
+      // rejects it as a duplicate instead of it vanishing silently.
+      if (!unitSerialPart && partSerial.toLowerCase() === serialNumber.toLowerCase()) { unitSerialPart = type; return }
+      comps.push({ type, serialNumber: partSerial, serviceType: item.serviceType })
+    }
+    add('case', item.scbaCaseSerial)
+    add('regulator', item.scbaRegulatorSerial)
+    add('mask', item.scbaMaskSerial)
+    add('harness', item.scbaHarnessSerial)
+    for (const bs of item.scbaBottleSerials) add('bottle', bs)
+    // Parts the customer did not bring in. The server records these on the
+    // parent unit (customData.partsNotIncluded) and creates no child for them.
+    for (const type of item.scbaNotIncluded ?? []) {
+      comps.push({ type, notIncluded: true, serviceType: item.serviceType })
     }
     if (comps.length > 0) components = comps
   }
@@ -150,10 +224,13 @@ export function buildShopItemPayload(item: IntakeItem) {
     customData = {
       otherDescription: item.otherDescription,
     }
+  } else if (isScba && unitSerialPart) {
+    // Which part the unit's serial was read off, so QA knows what it is holding.
+    customData = { unitSerialPart }
   }
 
   return {
-    serialNumber: item.serialNumber,
+    serialNumber,
     equipmentCategory: item.equipmentCategory,
     serviceType: item.serviceType,
     reportedIssue: item.reportedIssue || null,
@@ -171,15 +248,31 @@ interface ShopUnitEntryProps {
   /** WO-level primary category seeds the per-unit category picker for faster intake. */
   defaultCategory?: string | null
   /** Bins held by other active items — disables them in the picker below. */
-  occupiedBins?: Map<string, { workOrderNumber: string; itemId: string }>
+  allowMassIntake?: boolean
+  workOrderId?: string
+  occupiedBins?: Map<string, { workOrderNumber: string; workOrderId?: string; itemId: string }>
 }
 
 function validCategory(category: string | null | undefined): string | null {
   return category && CATEGORIES.some(c => c.value === category) ? category : null
 }
 
-export function ShopUnitEntry({ items, onChange, defaultCategory, occupiedBins }: ShopUnitEntryProps) {
-  const [entryMode, setEntryMode] = useState<'single' | 'paste'>('single')
+export function ShopUnitEntry({ items, onChange, defaultCategory, occupiedBins, workOrderId, allowMassIntake }: ShopUnitEntryProps) {
+  const [entryMode, setEntryMode] = useState<'single' | 'paste' | 'mass'>('single')
+  const [massCount, setMassCount] = useState('11')
+  const validMassCount = Number.isInteger(Number(massCount)) && Number(massCount) > 10 && items.length + Number(massCount) <= 1000
+
+  function acceptMassIntake() {
+    if (!validMassCount) return
+    const units: IntakeItem[] = Array.from({ length: Number(massCount) }, () => ({
+      id: uuidv4(), serialNumber: '', equipmentCategory: newCategory, serviceType: newServiceType,
+      reportedIssue: '', fexBrand: '', fexSize: '', fexType: '', monitorBrand: '', monitorModel: '',
+      monitorGasTypes: [], binLocation: '', fallArrestBrand: '', fallArrestModel: '', otherDescription: '',
+      scbaCaseSerial: '', scbaRegulatorSerial: '', scbaMaskSerial: '', scbaHarnessSerial: '',
+      scbaBottleSerials: [], components: [],
+    }))
+    onChange([...items, ...units])
+  }
   const [newSerial, setNewSerial] = useState('')
   const [newCategory, setNewCategory] = useState(() => validCategory(defaultCategory) ?? 'other')
   const [newServiceType, setNewServiceType] = useState('general')
@@ -208,6 +301,38 @@ export function ShopUnitEntry({ items, onChange, defaultCategory, occupiedBins }
   const [newScbaMaskSerial, setNewScbaMaskSerial] = useState('')
   const [newScbaHarnessSerial, setNewScbaHarnessSerial] = useState('')
   const [newScbaBottleSerials, setNewScbaBottleSerials] = useState<string[]>([''])
+  const [newScbaNotIncluded, setNewScbaNotIncluded] = useState<string[]>([])
+  const scbaDraft = resolveScbaParts({
+    serial: newSerial, caseSerial: newScbaCaseSerial, regulatorSerial: newScbaRegulatorSerial,
+    maskSerial: newScbaMaskSerial, harnessSerial: newScbaHarnessSerial,
+    bottleSerials: newScbaBottleSerials, notIncluded: newScbaNotIncluded,
+  })
+  const scbaPartInputs: Array<[string, string, (v: string) => void]> = [
+    ['case', newScbaCaseSerial, setNewScbaCaseSerial],
+    ['regulator', newScbaRegulatorSerial, setNewScbaRegulatorSerial],
+    ['mask', newScbaMaskSerial, setNewScbaMaskSerial],
+    ['harness', newScbaHarnessSerial, setNewScbaHarnessSerial],
+  ]
+
+  function toggleScbaNotIncluded(type: string) {
+    setNewScbaNotIncluded(prev => prev.includes(type) ? prev.filter(t => t !== type) : [...prev, type])
+  }
+
+  /** "Not included" checkbox shown beside each SCBA part label. */
+  function notIncludedToggle(type: string) {
+    return (
+      <label className="flex items-center gap-1 text-[11px] font-normal text-blue-700 cursor-pointer select-none">
+        <input
+          type="checkbox"
+          checked={newScbaNotIncluded.includes(type)}
+          onChange={() => toggleScbaNotIncluded(type)}
+          aria-label={`${partLabel(type)} not included`}
+          className="rounded border-blue-300"
+        />
+        Not included
+      </label>
+    )
+  }
 
   const serialInputRef = useRef<HTMLInputElement>(null)
   const [showScanner, setShowScanner] = useState(false)
@@ -223,12 +348,24 @@ export function ShopUnitEntry({ items, onChange, defaultCategory, occupiedBins }
     )
   }
 
-  function addItem() {
+  const [binConfirmation, setBinConfirmation] = useState<{ bin: string; confirm: () => void } | null>(null)
+
+  function confirmSharedBin(bin: string, count: number, confirm: () => void): boolean {
+    if (newCategory !== 'personal_monitor' || !bin) return false
+    const alreadyInDraft = items.some(item => item.equipmentCategory === 'personal_monitor' && item.binLocation.trim() === bin)
+    const occupied = occupiedBins?.get(bin)
+    if (count > 1 || alreadyInDraft || (workOrderId && occupied?.workOrderId === workOrderId)) {
+      setBinConfirmation({ bin, confirm })
+      return true
+    }
+    return false
+  }
+
+  function addItem(confirmed = false) {
     const isScba = newCategory === 'scba'
-    // For SCBA, use case serial as the main serial if serial field is empty
-    const serial = isScba
-      ? (newSerial.trim() || newScbaCaseSerial.trim())
-      : newSerial.trim()
+    // For SCBA with no unit serial, fall back to the case, then to whichever
+    // part actually came in.
+    const serial = isScba ? scbaDraft.serial : newSerial.trim()
     if (!serial) return
 
     const resolvedFexSize = newFexSize === 'other' ? newFexSizeOther.trim() : newFexSize
@@ -238,6 +375,8 @@ export function ShopUnitEntry({ items, onChange, defaultCategory, occupiedBins }
     const isFa = newCategory === 'fall_arrest'
     const isOther = newCategory === 'other'
     const isPersonalMon = newCategory === 'personal_monitor'
+
+    if (!confirmed && confirmSharedBin(resolvedBin, 1, () => addItem(true))) return
 
     const item: IntakeItem = {
       id: uuidv4(),
@@ -255,11 +394,12 @@ export function ShopUnitEntry({ items, onChange, defaultCategory, occupiedBins }
       fallArrestBrand: isFa ? newFallArrestBrand.trim() : '',
       fallArrestModel: isFa ? newFallArrestModel.trim() : '',
       otherDescription: isOther ? newOtherDescription.trim() : '',
-      scbaCaseSerial: isScba ? newScbaCaseSerial.trim() : '',
-      scbaRegulatorSerial: isScba ? newScbaRegulatorSerial.trim() : '',
-      scbaMaskSerial: isScba ? newScbaMaskSerial.trim() : '',
-      scbaHarnessSerial: isScba ? newScbaHarnessSerial.trim() : '',
-      scbaBottleSerials: isScba ? newScbaBottleSerials.map(s => s.trim()).filter(Boolean) : [],
+      scbaCaseSerial: isScba ? scbaDraft.caseSerial : '',
+      scbaRegulatorSerial: isScba ? scbaDraft.regulatorSerial : '',
+      scbaMaskSerial: isScba ? scbaDraft.maskSerial : '',
+      scbaHarnessSerial: isScba ? scbaDraft.harnessSerial : '',
+      scbaBottleSerials: isScba ? scbaDraft.bottleSerials : [],
+      scbaNotIncluded: isScba ? scbaDraft.notIncluded : [],
       components: [],
     }
 
@@ -273,12 +413,13 @@ export function ShopUnitEntry({ items, onChange, defaultCategory, occupiedBins }
       setNewScbaMaskSerial('')
       setNewScbaHarnessSerial('')
       setNewScbaBottleSerials([''])
+      setNewScbaNotIncluded([])
     }
     // Keep category + service type + FEX/Monitor defaults for rapid batch entry
     setTimeout(() => serialInputRef.current?.focus(), 50)
   }
 
-  function addItemsFromPaste() {
+  function addItemsFromPaste(confirmed = false) {
     const lines = pasteText
       .split('\n')
       .map(l => l.trim())
@@ -293,6 +434,8 @@ export function ShopUnitEntry({ items, onChange, defaultCategory, occupiedBins }
     const isPersonalMon = newCategory === 'personal_monitor'
     const resolvedFexSize = newFexSize === 'other' ? newFexSizeOther.trim() : newFexSize
     const resolvedBin = newBinLocation === 'other' ? newBinLocationOther.trim() : newBinLocation
+
+    if (!confirmed && confirmSharedBin(resolvedBin, lines.length, () => addItemsFromPaste(true))) return
 
     const newItems: IntakeItem[] = lines.map(serial => ({
       id: uuidv4(),
@@ -328,8 +471,18 @@ export function ShopUnitEntry({ items, onChange, defaultCategory, occupiedBins }
 
   return (
     <div className="space-y-4">
+      {binConfirmation && <SharedBinConfirmation bin={binConfirmation.bin} onCancel={() => setBinConfirmation(null)} onConfirm={() => { const action = binConfirmation.confirm; setBinConfirmation(null); action() }} />}
       {/* Entry mode tabs */}
       <div className="flex gap-2">
+        {allowMassIntake && (
+          <button type="button" onClick={() => {
+            setEntryMode('mass')
+            setNewCategory(validCategory(defaultCategory) ?? 'ue_cylinder')
+            setNewServiceType('ue_testing')
+          }} className={cn('px-4 py-2 rounded-lg text-sm font-medium border', entryMode === 'mass' ? 'bg-blue-100 border-blue-300 text-blue-800' : 'bg-white border-slate-200 text-slate-600')}>
+            Mass Intake
+          </button>
+        )}
         <button
           type="button"
           onClick={() => setEntryMode('single')}
@@ -367,7 +520,7 @@ export function ShopUnitEntry({ items, onChange, defaultCategory, occupiedBins }
           </select>
         </div>
         <div>
-          <label className="block text-xs font-medium text-slate-500 mb-1">Service Type</label>
+          <label className="block text-xs font-medium text-slate-500 mb-1">{entryMode === 'mass' ? 'Work Type' : 'Service Type'}</label>
           <select
             value={newServiceType}
             onChange={e => setNewServiceType(e.target.value)}
@@ -378,6 +531,17 @@ export function ShopUnitEntry({ items, onChange, defaultCategory, occupiedBins }
         </div>
       </div>
 
+      {entryMode === 'mass' && (
+        <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg space-y-3">
+          <p className="text-sm text-blue-900">Receive more than 10 pieces by count. Record and confirm every serial during QA, including failed or condemned pieces, before closing or returning equipment.</p>
+          <label className="block text-sm font-medium text-slate-700">Number of pieces
+            <input type="number" min={11} max={1000} step={1} value={massCount} onChange={e => setMassCount(e.target.value)} className="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-lg" />
+          </label>
+          <button type="button" disabled={!validMassCount} onClick={acceptMassIntake} className="px-4 py-2 bg-blue-800 text-white rounded-lg disabled:opacity-40">Accept {validMassCount ? massCount : ''} pieces</button>
+        </div>
+      )}
+
+      {entryMode !== 'mass' && <>
       {/* FEX-specific fields */}
       {newCategory === 'fire_extinguisher' && (
         <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 space-y-3">
@@ -491,8 +655,8 @@ export function ShopUnitEntry({ items, onChange, defaultCategory, occupiedBins }
                 {BIN_LOCATIONS.map(b => {
                   const hit = occupiedBins?.get(b)
                   return (
-                    <option key={b} value={b} disabled={!!hit}>
-                      {hit ? `${b} — in use (${hit.workOrderNumber})` : b}
+                    <option key={b} value={b} disabled={!!hit && (!workOrderId || hit.workOrderId !== workOrderId)}>
+                      {hit && (!workOrderId || hit.workOrderId !== workOrderId) ? `${b} — in use (${hit.workOrderNumber})` : b}
                     </option>
                   )
                 })}
@@ -559,51 +723,36 @@ export function ShopUnitEntry({ items, onChange, defaultCategory, occupiedBins }
       {newCategory === 'scba' && (
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 space-y-3">
           <p className="text-xs font-semibold text-blue-800 uppercase tracking-wide">SCBA Component Serials</p>
+          <p className="text-xs text-blue-700">Didn&apos;t get a part? Tick <span className="font-semibold">Not included</span> instead of typing N/A.</p>
           <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="block text-xs font-medium text-blue-700 mb-1">Case #</label>
-              <input
-                type="text"
-                value={newScbaCaseSerial}
-                onChange={e => setNewScbaCaseSerial(e.target.value)}
-                placeholder="Case serial"
-                className="w-full px-2 py-1.5 border border-blue-200 rounded text-sm font-mono bg-white"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-blue-700 mb-1">Regulator</label>
-              <input
-                type="text"
-                value={newScbaRegulatorSerial}
-                onChange={e => setNewScbaRegulatorSerial(e.target.value)}
-                placeholder="Regulator serial"
-                className="w-full px-2 py-1.5 border border-blue-200 rounded text-sm font-mono bg-white"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-blue-700 mb-1">Mask</label>
-              <input
-                type="text"
-                value={newScbaMaskSerial}
-                onChange={e => setNewScbaMaskSerial(e.target.value)}
-                placeholder="Mask serial"
-                className="w-full px-2 py-1.5 border border-blue-200 rounded text-sm font-mono bg-white"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-blue-700 mb-1">Harness</label>
-              <input
-                type="text"
-                value={newScbaHarnessSerial}
-                onChange={e => setNewScbaHarnessSerial(e.target.value)}
-                placeholder="Harness serial"
-                className="w-full px-2 py-1.5 border border-blue-200 rounded text-sm font-mono bg-white"
-              />
-            </div>
+            {scbaPartInputs.map(([type, value, setValue]) => {
+              const absent = newScbaNotIncluded.includes(type)
+              return (
+                <div key={type}>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs font-medium text-blue-700">{type === 'case' ? 'Case #' : partLabel(type)}</span>
+                    {notIncludedToggle(type)}
+                  </div>
+                  <input
+                    type="text"
+                    value={absent ? '' : value}
+                    disabled={absent}
+                    onChange={e => setValue(e.target.value)}
+                    placeholder={absent ? 'Not included' : `${partLabel(type)} serial`}
+                    aria-label={`${partLabel(type)} serial`}
+                    className="w-full px-2 py-1.5 border border-blue-200 rounded text-sm font-mono bg-white disabled:bg-blue-100/60 disabled:placeholder:text-blue-400"
+                  />
+                </div>
+              )
+            })}
           </div>
           {/* Bottle serials */}
           <div>
-            <label className="block text-xs font-medium text-blue-700 mb-1">Bottle(s)</label>
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-xs font-medium text-blue-700">Bottle(s)</span>
+              {notIncludedToggle('bottle')}
+            </div>
+            {!newScbaNotIncluded.includes('bottle') && (
             <div className="space-y-1.5">
               {newScbaBottleSerials.map((bs, idx) => (
                 <div key={idx} className="flex items-center gap-1.5">
@@ -637,10 +786,12 @@ export function ShopUnitEntry({ items, onChange, defaultCategory, occupiedBins }
                 <Plus className="w-3 h-3" /> Add Bottle
               </button>
             </div>
+            )}
           </div>
         </div>
       )}
 
+      </>}
       {/* Single entry form */}
       {entryMode === 'single' && (
         <div className="flex gap-2">
@@ -650,7 +801,7 @@ export function ShopUnitEntry({ items, onChange, defaultCategory, occupiedBins }
             value={newSerial}
             onChange={e => setNewSerial(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') addItem() }}
-            placeholder={newCategory === 'scba' ? 'Serial # (or leave blank to use Case #)' : 'Serial number'}
+            placeholder={newCategory === 'scba' ? 'Serial # (blank = use Case # or part serial)' : 'Serial number'}
             className="flex-1 px-3 py-2.5 border border-slate-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
             autoFocus
           />
@@ -664,8 +815,8 @@ export function ShopUnitEntry({ items, onChange, defaultCategory, occupiedBins }
           </button>
           <button
             type="button"
-            onClick={addItem}
-            disabled={newCategory === 'scba' ? !(newSerial.trim() || newScbaCaseSerial.trim()) : !newSerial.trim()}
+            onClick={() => addItem()}
+            disabled={newCategory === 'scba' ? !scbaDraft.serial : !newSerial.trim()}
             className="px-4 py-2.5 bg-blue-800 text-white rounded-lg font-medium text-sm disabled:opacity-40"
           >
             <Plus className="w-5 h-5" />
@@ -693,7 +844,7 @@ export function ShopUnitEntry({ items, onChange, defaultCategory, occupiedBins }
           />
           <button
             type="button"
-            onClick={addItemsFromPaste}
+            onClick={() => addItemsFromPaste()}
             disabled={!pasteText.trim()}
             className="mt-2 px-4 py-2 bg-blue-800 text-white rounded-lg text-sm font-medium disabled:opacity-40"
           >
@@ -703,6 +854,10 @@ export function ShopUnitEntry({ items, onChange, defaultCategory, occupiedBins }
       )}
 
       {/* Item count */}
+      {items.some(item => !item.serialNumber.trim()) && items.length <= 10 && (
+        <p className="text-sm text-amber-800">Mass intake requires more than 10 pieces. Add pieces or enter each serial through single entry.</p>
+      )}
+
       <div className="flex items-center justify-between">
         <p className="text-sm font-semibold text-slate-700">
           {items.length} item{items.length !== 1 ? 's' : ''}
@@ -724,7 +879,7 @@ export function ShopUnitEntry({ items, onChange, defaultCategory, occupiedBins }
           <div key={item.id} className="bg-white border border-slate-200 rounded-lg p-3">
             <div className="flex items-center gap-3">
               <span className="text-xs text-slate-400 font-mono w-6 shrink-0">{idx + 1}</span>
-              <span className="font-mono text-sm font-medium text-slate-900 flex-1">{item.serialNumber}</span>
+              <span className="font-mono text-sm font-medium text-slate-900 flex-1">{item.serialNumber || 'Serial required at QA'}</span>
               <span className="text-[10px] text-slate-400">{CATEGORIES.find(c => c.value === item.equipmentCategory)?.label}</span>
               <button
                 type="button"
@@ -774,7 +929,7 @@ export function ShopUnitEntry({ items, onChange, defaultCategory, occupiedBins }
             )}
 
             {/* SCBA component serials */}
-            {item.equipmentCategory === 'scba' && (item.scbaCaseSerial || item.scbaRegulatorSerial || item.scbaMaskSerial || item.scbaHarnessSerial || item.scbaBottleSerials.length > 0) && (
+            {item.equipmentCategory === 'scba' && (item.scbaCaseSerial || item.scbaRegulatorSerial || item.scbaMaskSerial || item.scbaHarnessSerial || item.scbaBottleSerials.length > 0 || (item.scbaNotIncluded?.length ?? 0) > 0) && (
               <div className="ml-8 mt-1 space-y-0.5 text-[10px] text-blue-600">
                 {item.scbaCaseSerial && <div>Case: <span className="font-mono">{item.scbaCaseSerial}</span></div>}
                 {item.scbaRegulatorSerial && <div>Reg: <span className="font-mono">{item.scbaRegulatorSerial}</span></div>}
@@ -783,6 +938,9 @@ export function ShopUnitEntry({ items, onChange, defaultCategory, occupiedBins }
                 {item.scbaBottleSerials.map((bs, i) => (
                   <div key={i}>Bottle {i + 1}: <span className="font-mono">{bs}</span></div>
                 ))}
+                {(item.scbaNotIncluded?.length ?? 0) > 0 && (
+                  <div className="text-amber-700">Not included: {item.scbaNotIncluded!.map(partLabel).join(', ')}</div>
+                )}
               </div>
             )}
           </div>

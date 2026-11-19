@@ -57,9 +57,12 @@ export function decodeCursor(c: string): CursorParts | null {
 }
 
 export function parseLimit(q: unknown, def = 50, max = 200): number {
-  const n = parseInt(String(q ?? ''), 10);
-  if (Number.isNaN(n)) return def;
-  return Math.min(Math.max(n, 1), max);
+  if (q === undefined) return def;
+  const n = typeof q === 'string' && /^\d+$/.test(q) ? Number(q) : NaN;
+  if (!Number.isSafeInteger(n) || n < 1 || n > max) {
+    throw new V1Error(400, 'invalid_parameter', `Invalid limit: expected an integer from 1 to ${max}`, { param: 'limit', min: 1, max });
+  }
+  return n;
 }
 
 /** Build the WHERE fragment that selects rows "after" the cursor in DESC order. */

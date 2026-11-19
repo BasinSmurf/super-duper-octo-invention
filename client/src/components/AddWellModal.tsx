@@ -493,6 +493,7 @@ function ManualEntryTab({ padId, operatorId, onCreated, onClose }: ManualEntryTa
   const [wellType, setWellType] = useState('')
   const [wellStatus, setWellStatus] = useState('A')
   const [facilityCode, setFacilityCode] = useState('')
+  const [costCenter, setCostCenter] = useState('')
   const [assetCategory, setAssetCategory] = useState('site')
   const [hasSuppliedAir, setHasSuppliedAir] = useState(false)
   const [isHighRisk, setIsHighRisk] = useState(false)
@@ -514,7 +515,7 @@ function ManualEntryTab({ padId, operatorId, onCreated, onClose }: ManualEntryTa
   // being used today," so moving it here on reuse is expected, not a bug.
   // With no pad context (standalone Add Asset), there's nothing to
   // re-parent to — just select the existing record as-is.
-  async function useExisting(m: ExistingWellMatch) {
+  async function selectExistingWell(m: ExistingWellMatch) {
     if (!padId) { onCreated(m); return }
     setLinking(m.id)
     setError(null)
@@ -577,6 +578,7 @@ function ManualEntryTab({ padId, operatorId, onCreated, onClose }: ManualEntryTa
         if (wellStatus) payload.wellStatus = wellStatus
       }
       if (facilityCode.trim()) payload.facilityCode = facilityCode.trim()
+      if (costCenter.trim()) payload.costCenter = costCenter.trim()
       payload.hasSuppliedAir = hasSuppliedAir
       payload.isHighRisk = isHighRisk
       if (isHighRisk && riskNotes) payload.riskNotes = riskNotes
@@ -618,7 +620,7 @@ function ManualEntryTab({ padId, operatorId, onCreated, onClose }: ManualEntryTa
                 key={m.id}
                 type="button"
                 disabled={linking === m.id}
-                onClick={() => useExisting(m)}
+                onClick={() => selectExistingWell(m)}
                 className="w-full text-left border border-amber-200 bg-amber-50 hover:bg-amber-100 rounded-lg px-3 py-2 transition-colors disabled:opacity-60"
               >
                 <div className="flex items-center justify-between gap-2">
@@ -701,6 +703,18 @@ function ManualEntryTab({ padId, operatorId, onCreated, onClose }: ManualEntryTa
           value={facilityCode}
           onChange={e => setFacilityCode(e.target.value)}
           placeholder="e.g. FC17708 — operator charge-to (Enverus)"
+          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+        />
+      </div>
+
+      {/* Cost Code — the buyer's cost center for work here; stamped onto new invoices */}
+      <div>
+        <label className="text-sm font-medium text-gray-700 block mb-1">Cost Code</label>
+        <input
+          type="text"
+          value={costCenter}
+          onChange={e => setCostCenter(e.target.value)}
+          placeholder="e.g. US00098792 — operator cost center (Enverus)"
           className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
         />
       </div>

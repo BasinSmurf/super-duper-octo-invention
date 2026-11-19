@@ -5,7 +5,7 @@
  * the shop-order route share one printer-resolution implementation.
  */
 
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import type { Printer } from '../db.js';
 
 const DEFAULT_TEMPLATE_NAME = 'ticket_default';

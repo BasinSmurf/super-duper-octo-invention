@@ -1,6 +1,6 @@
 import { normalizeServiceCharges, saveQaServices, linkedQaActions } from '../services/shopServiceCharges.js';
 import { Router, Request, Response } from 'express';
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { createAuditLog } from '../utils/auditLog.js';
 import { Prisma } from '../db.js';
@@ -228,6 +228,9 @@ equipmentInspectionsRouter.patch('/:id', async (req: Request, res: Response) => 
   }
 
   const services = existing.shopItemId && body.billingServices !== undefined ? await normalizeServiceCharges(body.billingServices) : null;
+  if (body.serialNumber !== undefined && (typeof body.serialNumber !== 'string' || !body.serialNumber.trim())) {
+    throw new AppError(400, 'serialNumber is required');
+  }
   if (services) serviceActions = validateServiceActions(existing.category, linkedQaActions(serviceActions as string[], services, existing.category));
   const updated = await prisma.$transaction(async tx => {
     if (services && existing.shopItemId) await saveQaServices(tx, existing.shopItemId, services, { userId, role: req.user!.role });
@@ -235,6 +238,7 @@ equipmentInspectionsRouter.patch('/:id', async (req: Request, res: Response) => 
     where: { id },
     data: {
       outcome: body.outcome ?? undefined,
+      serialNumber: typeof body.serialNumber === 'string' ? body.serialNumber.trim() : undefined,
       serviceActions,
       data: body.data ?? undefined,
       partsReplaced: body.partsReplaced ?? undefined,

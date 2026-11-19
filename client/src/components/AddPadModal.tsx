@@ -28,6 +28,7 @@ export function AddPadModal({ onCreated, onClose }: AddPadModalProps) {
   const [operatorId, setOperatorId] = useState('')
   const [operatorName, setOperatorName] = useState('')
   const [facilityCode, setFacilityCode] = useState('')
+  const [costCenter, setCostCenter] = useState('')
   const [tier1, setTier1] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -106,6 +107,7 @@ export function AddPadModal({ onCreated, onClose }: AddPadModalProps) {
         pendingReview: true,
       }
       if (facilityCode.trim()) payload.facilityCode = facilityCode.trim()
+      if (costCenter.trim()) payload.costCenter = costCenter.trim()
       if (tier1) payload.tier1 = true
       const result = await api.post<{ id: string; name: string }>('/locations/pads', payload)
       setCreatedPad({ id: result.id, name: result.name })
@@ -282,6 +284,18 @@ export function AddPadModal({ onCreated, onClose }: AddPadModalProps) {
               value={facilityCode}
               onChange={e => setFacilityCode(e.target.value)}
               placeholder="e.g. FC17708 — operator charge-to (Enverus)"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            />
+          </div>
+
+          {/* Cost Code — the buyer's cost center for work here; stamped onto new invoices */}
+          <div>
+            <label className="text-sm font-medium text-gray-700 block mb-1">Cost Code</label>
+            <input
+              type="text"
+              value={costCenter}
+              onChange={e => setCostCenter(e.target.value)}
+              placeholder="e.g. US00098792 — operator cost center (Enverus)"
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
             />
           </div>

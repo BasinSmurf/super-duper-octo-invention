@@ -9,7 +9,7 @@
  * platform_admin is always all-powerful (mirrors the server).
  */
 
-export type Role = 'field_tech' | 'dispatch' | 'field_super' | 'billing_ar' | 'trainer' | 'train_admin' | 'boss' | 'platform_admin'
+export type Role = 'field_tech' | 'dispatch' | 'field_super' | 'billing_ar' | 'ar_supervisor' | 'trainer' | 'train_admin' | 'boss' | 'platform_admin'
 
 export type Permission =
   | 'customers:view'
@@ -20,6 +20,9 @@ export type Permission =
   | 'billing:enverus'
   | 'dispatch:manage'
   | 'rentals:edit'
+  | 'rentals:release_billing'
+  | 'rentals:force_billing_release'
+  | 'rentals:edit_packages'
   | 'shop_orders:edit'
   | 'locations:view'
   | 'locations:request'
@@ -37,7 +40,7 @@ export type Permission =
   | 'users:manage'
   | 'system:config'
 
-const ALL: Role[] = ['field_tech', 'dispatch', 'field_super', 'billing_ar', 'trainer', 'train_admin', 'boss', 'platform_admin']
+const ALL: Role[] = ['field_tech', 'dispatch', 'field_super', 'billing_ar', 'ar_supervisor', 'trainer', 'train_admin', 'boss', 'platform_admin']
 
 /**
  * Bundled fallback defaults — used only until the server matrix loads (or while
@@ -47,21 +50,24 @@ const ALL: Role[] = ['field_tech', 'dispatch', 'field_super', 'billing_ar', 'tra
  */
 const FALLBACK_MAP: Record<string, Role[]> = {
   'customers:view': [...ALL],
-  'customers:manage': ['dispatch', 'billing_ar', 'platform_admin'],
-  'billing:view': ['billing_ar', 'boss', 'platform_admin'],
-  'billing:manage': ['billing_ar', 'platform_admin'],
-  'billing:profiles': ['billing_ar', 'platform_admin'],
-  'billing:enverus': ['billing_ar', 'platform_admin'],
+  'customers:manage': ['dispatch', 'billing_ar', 'ar_supervisor', 'platform_admin'],
+  'billing:view': ['billing_ar', 'ar_supervisor', 'boss', 'platform_admin'],
+  'billing:manage': ['billing_ar', 'ar_supervisor', 'platform_admin'],
+  'billing:profiles': ['billing_ar', 'ar_supervisor', 'platform_admin'],
+  'billing:enverus': ['billing_ar', 'ar_supervisor', 'platform_admin'],
   'dispatch:manage': ['dispatch', 'field_super', 'platform_admin'],
-  'rentals:edit': ['field_super', 'billing_ar', 'boss', 'platform_admin'],
+  'rentals:release_billing': ['field_super', 'boss', 'platform_admin'],
+  'rentals:force_billing_release': ['ar_supervisor', 'platform_admin'],
+  'rentals:edit': ['field_super', 'billing_ar', 'ar_supervisor', 'boss', 'platform_admin'],
+  'rentals:edit_packages': ['dispatch', 'field_super', 'billing_ar', 'ar_supervisor', 'platform_admin'],
   'locations:view': [...ALL],
   'locations:request': ['field_tech', 'dispatch', 'field_super', 'platform_admin'],
-  'locations:manage': ['dispatch', 'field_super', 'billing_ar', 'platform_admin'],
-  'locations:approve': ['dispatch', 'field_super', 'billing_ar', 'platform_admin'],
+  'locations:manage': ['dispatch', 'field_super', 'billing_ar', 'ar_supervisor', 'platform_admin'],
+  'locations:approve': ['dispatch', 'field_super', 'billing_ar', 'ar_supervisor', 'platform_admin'],
   'locations:import_dmr': ['platform_admin'],
   'inventory:view': [...ALL],
   'inventory:manage': ['dispatch', 'field_super', 'platform_admin'],
-  'products:manage': ['billing_ar', 'platform_admin'],
+  'products:manage': ['billing_ar', 'ar_supervisor', 'platform_admin'],
   'tickets:view': [...ALL],
   'tickets:create': ['field_tech', 'dispatch', 'field_super', 'trainer', 'train_admin', 'platform_admin'],
   'tickets:edit_own': ['field_tech', 'dispatch', 'field_super', 'trainer', 'train_admin', 'platform_admin'],
@@ -71,13 +77,13 @@ const FALLBACK_MAP: Record<string, Role[]> = {
   'system:config': ['platform_admin'],
 
   // Destructive (soft cancel/void + hard delete)
-  'invoices:cancel': ['billing_ar', 'platform_admin'],
+  'invoices:cancel': ['billing_ar', 'ar_supervisor', 'platform_admin'],
   'invoices:delete': ['platform_admin'],
-  'tickets:cancel': ['billing_ar', 'platform_admin'],
+  'tickets:cancel': ['billing_ar', 'ar_supervisor', 'platform_admin'],
   'tickets:delete': ['field_super', 'platform_admin'],
-  'rentals:cancel': ['dispatch', 'field_super', 'billing_ar', 'platform_admin'],
+  'rentals:cancel': ['dispatch', 'field_super', 'billing_ar', 'ar_supervisor', 'platform_admin'],
   'rentals:delete': ['platform_admin'],
-  'shop_orders:edit': ['dispatch', 'field_super', 'billing_ar', 'boss', 'platform_admin'],
+  'shop_orders:edit': ['dispatch', 'field_super', 'billing_ar', 'ar_supervisor', 'boss', 'platform_admin'],
   'shop_orders:cancel': ['field_super', 'boss', 'platform_admin'],
   'shop_orders:waive_billing': ['platform_admin'],
   'shop_orders:force_close': ['field_super', 'boss', 'platform_admin'],
@@ -86,23 +92,23 @@ const FALLBACK_MAP: Record<string, Role[]> = {
   // Page visibility (seeded from AppShell role arrays)
   'page:tickets': [...ALL],
   'page:my_jobs': ['field_tech', 'field_super', 'dispatch', 'trainer', 'train_admin', 'boss', 'platform_admin'],
-  'page:shop': ['dispatch', 'field_super', 'field_tech', 'billing_ar', 'boss', 'platform_admin'],
-  'page:billing': ['billing_ar', 'boss', 'platform_admin'],
+  'page:shop': ['dispatch', 'field_super', 'field_tech', 'billing_ar', 'ar_supervisor', 'boss', 'platform_admin'],
+  'page:billing': ['billing_ar', 'ar_supervisor', 'boss', 'platform_admin'],
   'page:dispatch': ['dispatch', 'field_super', 'platform_admin'],
   'page:dashboard': [...ALL],
   'page:ops': ['platform_admin'],
-  'page:shop_board': ['dispatch', 'field_super', 'field_tech', 'billing_ar', 'boss', 'platform_admin'],
+  'page:shop_board': ['dispatch', 'field_super', 'field_tech', 'billing_ar', 'ar_supervisor', 'boss', 'platform_admin'],
   'page:stale_transfers': ['dispatch', 'field_super', 'boss', 'platform_admin'],
-  'page:rentals': ['dispatch', 'field_super', 'field_tech', 'billing_ar', 'boss', 'platform_admin'],
+  'page:rentals': ['dispatch', 'field_super', 'field_tech', 'billing_ar', 'ar_supervisor', 'boss', 'platform_admin'],
   'page:coverage': ['dispatch', 'field_super', 'boss', 'platform_admin'],
   'page:routes': ['dispatch', 'field_super', 'boss', 'platform_admin'],
-  'page:approvals': ['field_super', 'billing_ar', 'boss', 'platform_admin'],
-  'page:history': ['dispatch', 'field_super', 'billing_ar', 'boss', 'platform_admin'],
+  'page:approvals': ['field_super', 'billing_ar', 'ar_supervisor', 'boss', 'platform_admin'],
+  'page:history': ['dispatch', 'field_super', 'billing_ar', 'ar_supervisor', 'boss', 'platform_admin'],
   'page:equipment': ['dispatch', 'field_super', 'boss', 'platform_admin'],
-  'page:companies': ['dispatch', 'field_super', 'billing_ar', 'boss', 'platform_admin'],
-  'page:locations': ['dispatch', 'field_super', 'billing_ar', 'boss', 'platform_admin'],
-  'page:products': ['billing_ar', 'boss', 'platform_admin'],
-  'page:cards': ['billing_ar', 'boss', 'platform_admin'],
+  'page:companies': ['dispatch', 'field_super', 'billing_ar', 'ar_supervisor', 'boss', 'platform_admin'],
+  'page:locations': ['dispatch', 'field_super', 'billing_ar', 'ar_supervisor', 'boss', 'platform_admin'],
+  'page:products': ['billing_ar', 'ar_supervisor', 'boss', 'platform_admin'],
+  'page:cards': ['billing_ar', 'ar_supervisor', 'boss', 'platform_admin'],
   'page:admin': ['platform_admin'],
   'page:sites': ['platform_admin'],
   'page:printers': ['platform_admin'],
@@ -110,12 +116,12 @@ const FALLBACK_MAP: Record<string, Role[]> = {
   'page:board_settings': ['platform_admin'],
   'page:permissions': ['platform_admin'],
   'page:api_keys': ['platform_admin'],
-  'page:courses': ['billing_ar', 'trainer', 'train_admin', 'boss', 'platform_admin'],
-  'page:training': ['dispatch', 'field_super', 'billing_ar', 'trainer', 'train_admin', 'boss', 'platform_admin'],
+  'page:courses': ['billing_ar', 'ar_supervisor', 'trainer', 'train_admin', 'boss', 'platform_admin'],
+  'page:training': ['dispatch', 'field_super', 'billing_ar', 'ar_supervisor', 'trainer', 'train_admin', 'boss', 'platform_admin'],
 
   // Training (ClassPRO)
-  'training:courses': ['billing_ar', 'train_admin', 'platform_admin'],
-  'training:schedule': ['dispatch', 'field_super', 'billing_ar', 'train_admin', 'boss', 'platform_admin'],
+  'training:courses': ['billing_ar', 'ar_supervisor', 'train_admin', 'platform_admin'],
+  'training:schedule': ['dispatch', 'field_super', 'billing_ar', 'ar_supervisor', 'train_admin', 'boss', 'platform_admin'],
 }
 
 // Server-provided effective matrix, registered by PermissionsContext. Seeded

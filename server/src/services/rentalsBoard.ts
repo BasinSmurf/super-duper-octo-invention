@@ -17,7 +17,7 @@
  *                halves of the same list, so this is the kiosk-role axis.
  */
 
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import type { RentalPickupType } from '../db.js';
 import type { RentalComposition } from './rentalComposition.js';
 

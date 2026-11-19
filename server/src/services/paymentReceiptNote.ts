@@ -23,7 +23,7 @@
  * settlement paths, guarded the same way -- at most one note per payment.
  */
 
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 
 /**
  * Append the receipt link to the work order's contact log, at most once.

@@ -1,4 +1,5 @@
 import PDFDocument from 'pdfkit';
+import { drawCompanyHeader, drawPdfFooters, loadPdfBranding, type PdfBranding } from './pdfBranding.js';
 
 // Minimal one-page condemnation report — the attachment BlueLion's
 // POST /documents (docType: 'condemnation') requires. Not a replacement for
@@ -40,13 +41,15 @@ const BRAND_DARK = '#1a2332';
 const BRAND_ACCENT = '#0e7490';
 const DANGER = '#b91c1c';
 
-export function generateEquipmentInspectionPdf(insp: EquipmentInspectionForPdf): PDFKit.PDFDocument {
+export async function generateEquipmentInspectionPdf(insp: EquipmentInspectionForPdf, providedBranding?: PdfBranding): Promise<PDFKit.PDFDocument> {
+  const branding = providedBranding ?? await loadPdfBranding();
   const doc = new PDFDocument({
     size: 'LETTER',
     margins: { top: 50, bottom: 50, left: 50, right: 50 },
+    bufferPages: true,
     info: {
       Title: `Condemnation Report — ${insp.serialNumber}`,
-      Author: 'Basin Safety',
+      Author: branding.companyName,
       Creator: 'Sundog Field Service Platform',
     },
   });
@@ -56,7 +59,7 @@ export function generateEquipmentInspectionPdf(insp: EquipmentInspectionForPdf):
   const contentWidth = contentRight - contentLeft;
   let y = 50;
 
-  doc.fontSize(20).font('Helvetica-Bold').fillColor(BRAND_DARK).text('BASIN SAFETY', contentLeft, y);
+  drawCompanyHeader(doc, branding, contentLeft, y, contentWidth / 2 - 14, BRAND_DARK);
   doc.fontSize(8).font('Helvetica').fillColor('#666666')
     .text('701.572.8140  |  billing@basinsafetyus.com  |  Williston, ND 58801', contentLeft, y + 24);
 
@@ -116,24 +119,8 @@ export function generateEquipmentInspectionPdf(insp: EquipmentInspectionForPdf):
     y += 8;
   }
 
-  doc.fontSize(7).font('Helvetica').fillColor('#aaaaaa')
-    .text(`Generated ${fmtDate(new Date())}  |  Basin Safety  |  Williston, ND  |  701.572.8140`, contentLeft, 740, {
-      width: contentWidth,
-      align: 'center',
-    });
+  drawPdfFooters(doc, branding, fmtDate(new Date()), contentLeft, contentRight);
 
   // NOTE: caller is responsible for calling doc.end()
   return doc;
-}
-
-/** Buffers a pdfkit document in memory — for callers that need bytes (e.g. a
- * multipart upload) rather than piping straight to an HTTP response. */
-export function pdfDocToBuffer(doc: PDFKit.PDFDocument): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    doc.on('data', (chunk: Buffer) => chunks.push(chunk));
-    doc.on('end', () => resolve(Buffer.concat(chunks)));
-    doc.on('error', reject);
-    doc.end();
-  });
 }

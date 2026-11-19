@@ -1,3 +1,6 @@
+import { PdfExportButton } from '@/components/PdfExportButton'
+import { SharedBinConfirmation } from '@/components/SharedBinConfirmation'
+import { PendingShopIntake } from '@/components/PendingShopIntake'
 import { ShopChargeBreakdown, type ShopChargePreview } from '@/components/ShopChargeBreakdown'
 import { ShopServicePicker, type ShopServiceCharge } from '@/components/ShopServicePicker'
 import { useState, useEffect, useCallback, useRef } from 'react'
@@ -53,6 +56,7 @@ import {
   qaChecklistComplete,
   type EquipmentInspectionCategory,
 } from '@/components/EquipmentInspectionEditor'
+import { BENCH_CAPTURE } from '@/lib/attachmentCapture'
 import { UnitAttachments } from '@/components/UnitAttachments'
 import { BatchQaPanel } from '@/components/BatchQaPanel'
 import { ContactLogCard } from '@/components/ContactLogCard'
@@ -151,15 +155,15 @@ const ITEM_TRANSITIONS: Record<string, string[]> = {
   // 'warranty_out' + 'outside_service' both open the send-out form; both land
   // the item in 'outside_service' (the warranty_out button just pre-checks the
   // isWarranty flag). Status is unified; the two buttons preserve the reason.
-  received: ['diagnosing', 'in_work', 'awaiting_approval', 'warranty_out', 'outside_service', 'on_hold'],
+  received: ['diagnosing', 'in_work', 'awaiting_approval', 'warranty_out', 'outside_service', 'condemned', 'on_hold'],
   diagnosing: ['in_work', 'awaiting_parts', 'awaiting_approval', 'warranty_out', 'outside_service', 'condemned', 'shop_complete', 'on_hold'],
-  awaiting_parts: ['in_work', 'diagnosing', 'awaiting_approval', 'on_hold'],
-  awaiting_approval: ['in_work', 'returned', 'on_hold'],
+  awaiting_parts: ['in_work', 'diagnosing', 'awaiting_approval', 'condemned', 'on_hold'],
+  awaiting_approval: ['in_work', 'returned', 'condemned', 'on_hold'],
   in_work: ['qc_testing', 'shop_complete', 'awaiting_parts', 'awaiting_approval', 'warranty_out', 'outside_service', 'condemned', 'on_hold'],
-  warranty_out: ['received'],
-  outside_service: ['received'],
+  warranty_out: ['received', 'condemned'],
+  outside_service: ['received', 'condemned'],
   qc_testing: ['shop_complete', 'in_work', 'outside_service', 'condemned', 'on_hold'],
-  shop_complete: ['returned'],
+  shop_complete: ['returned', 'in_work', 'qc_testing', 'condemned'],
   on_hold: ['received', 'diagnosing', 'in_work', 'awaiting_parts', 'awaiting_approval', 'outside_service', 'qc_testing', 'condemned'],
   // condemned + returned are terminal — no outbound transitions.
 }
@@ -201,21 +205,33 @@ function childrenOf(item: { id: string }, children: ChildItem[]): ChildItem[] {
   return children.filter(c => c.parentId === item.id)
 }
 
+/** Parts the customer did not bring in, recorded on the parent unit at intake. */
+function partsNotIncludedOf(item: { customData?: Record<string, unknown> | null }): string[] {
+  const v = item.customData && typeof item.customData === 'object' ? item.customData.partsNotIncluded : null
+  return Array.isArray(v) ? v.filter((p): p is string => typeof p === 'string') : []
+}
+
+const constituentLabel = (type: string) => CONSTITUENT_LABEL[type] || type
+
 function intakeConstituentsFor(
-  item: { id: string; equipmentCategory: string },
+  item: { id: string; equipmentCategory: string; customData?: Record<string, unknown> | null },
   children: ChildItem[],
-): Array<{ id: string; label: string; serialNumber: string }> | undefined {
+): Array<{ id: string; label: string; serialNumber: string; notIncluded?: boolean }> | undefined {
   if (item.equipmentCategory !== 'scba') return undefined
   const kids = childrenOf(item, children)
-  if (kids.length === 0) return undefined
-  return kids.map(k => {
-    const type = constituentType(k.equipmentDescription)
-    return {
-      id: k.id,
-      label: (type && CONSTITUENT_LABEL[type]) || k.equipmentDescription || 'Component',
-      serialNumber: k.serialNumber,
-    }
-  })
+  const missing = partsNotIncludedOf(item)
+  if (kids.length === 0 && missing.length === 0) return undefined
+  return [
+    ...kids.map(k => {
+      const type = constituentType(k.equipmentDescription)
+      return {
+        id: k.id,
+        label: (type && CONSTITUENT_LABEL[type]) || k.equipmentDescription || 'Component',
+        serialNumber: k.serialNumber,
+      }
+    }),
+    ...missing.map(type => ({ id: `not-included:${type}`, label: constituentLabel(type), serialNumber: '', notIncluded: true })),
+  ]
 }
 
 function seeded(value: unknown): unknown {
@@ -246,6 +262,7 @@ function seedDataForItem(
     fexSize?: string | null
     fexType?: string | null
     id: string
+    serialNumber?: string | null
     customData?: Record<string, unknown> | null
   },
   children: ChildItem[],
@@ -285,8 +302,10 @@ function seedDataForItem(
   if (item.equipmentCategory === 'scba') {
     const regulator = childrenOf(item, children)
       .find(k => constituentType(k.equipmentDescription) === 'regulator')
+    // A lone regulator is identified BY its regulator serial, so it has no child row.
+    const unitIsRegulator = custom.unitSerialPart === 'regulator'
     return compact({
-      regulatorSerial: seeded(regulator?.serialNumber),
+      regulatorSerial: seeded(unitIsRegulator ? item.serialNumber : regulator?.serialNumber),
     })
   }
   return undefined
@@ -490,6 +509,7 @@ export function ShopOrderDetailPage() {
   const { user } = useAuth()
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleteBusy, setDeleteBusy] = useState(false)
+  const [attachmentRefreshKey, setAttachmentRefreshKey] = useState(0)
   const [order, setOrder] = useState<OfflineShopWorkOrder | null>(null)
   const [items, setItems] = useState<OfflineShopWorkOrderItem[]>([])
   // SCBA sub-components, kept out of the main item list but selectable in the
@@ -498,6 +518,7 @@ export function ShopOrderDetailPage() {
   // regulator"); WI-07's pass-through reads it to label and match constituents.
   const [childItems, setChildItems] = useState<{ id: string; serialNumber: string; parentId: string; parentSerial: string; equipmentDescription: string | null }[]>([])
   const [loading, setLoading] = useState(true)
+  const [sourceTickets, setSourceTickets] = useState<{ id: string; ticketNumber: string; status: string }[]>([])
   const [error, setError] = useState('')
   // Batch select/clear (Wave 5 — intake fan-out at scale)
   const [selectMode, setSelectMode] = useState(false)
@@ -544,7 +565,7 @@ export function ShopOrderDetailPage() {
   const [binSaving, setBinSaving] = useState<string | null>(null)
   // Bins held by OTHER active items across all shop WOs, keyed by bin label —
   // drives the "in use" disabling in the bin picker.
-  const [occupiedBins, setOccupiedBins] = useState<Map<string, { workOrderNumber: string; itemId: string }>>(new Map())
+  const [occupiedBins, setOccupiedBins] = useState<Map<string, { workOrderNumber: string; workOrderId?: string; itemId: string }>>(new Map())
 
   // Parts catalog
   const [catalog, setCatalog] = useState<CatalogPart[]>([])
@@ -554,8 +575,11 @@ export function ShopOrderDetailPage() {
   const [partSearch, setPartSearch] = useState('')
   const [showPartPicker, setShowPartPicker] = useState(false)
 
-  // WO-level billing extras (mileage/trip + order-level misc). Billed once by
-  // the sweep; once stamped it's read-only here.
+  // Whole-job work details and charges, entered once for the order.
+  const [woWorkDetailsOpen, setWoWorkDetailsOpen] = useState(false)
+  const [woWorkNotes, setWoWorkNotes] = useState('')
+  const [woLaborHours, setWoLaborHours] = useState('')
+  const [woLaborRate, setWoLaborRate] = useState('')
   const [woMileageMiles, setWoMileageMiles] = useState('')
   const [woMileageRate, setWoMileageRate] = useState('')
   const [woTripFlat, setWoTripFlat] = useState('')
@@ -704,8 +728,8 @@ export function ShopOrderDetailPage() {
 
   async function loadOccupiedBins() {
     try {
-      const res = await api.get<{ data: Array<{ bin: string; workOrderNumber: string; itemId: string }> }>('/shop-orders/occupied-bins')
-      setOccupiedBins(new Map(res.data.map(d => [d.bin, { workOrderNumber: d.workOrderNumber, itemId: d.itemId }])))
+      const res = await api.get<{ data: Array<{ bin: string; workOrderNumber: string; workOrderId?: string; itemId: string }> }>('/shop-orders/occupied-bins')
+      setOccupiedBins(new Map(res.data.map(d => [d.bin, { workOrderNumber: d.workOrderNumber, workOrderId: d.workOrderId, itemId: d.itemId }])))
     } catch {
       setOccupiedBins(new Map())
     }
@@ -804,6 +828,9 @@ export function ShopOrderDetailPage() {
   function hydrateWoExtras(raw: unknown) {
     const b = raw && typeof raw === 'object' ? (raw as Record<string, any>) : {}
     const s = (v: unknown) => (v == null ? '' : String(v))
+    setWoWorkNotes(s(b.workNotes))
+    setWoLaborHours(s(b.labor?.hours))
+    setWoLaborRate(s(b.labor?.rate))
     setWoMileageMiles(s(b.mileage?.miles))
     setWoMileageRate(s(b.mileage?.rate))
     woMileageRateSeeded.current = !!s(b.mileage?.rate)
@@ -892,6 +919,7 @@ export function ShopOrderDetailPage() {
             updatedAt: apiData.updatedAt,
           }
           setOrder(wo)
+          setSourceTickets(apiData.sourceTickets || [])
           hydrateWoExtras(wo.billingExtras)
 
           // Cash/Card-only customer: default the release to card so staff
@@ -1470,8 +1498,12 @@ export function ShopOrderDetailPage() {
   function inspectionsSatisfyQa(item: OfflineShopWorkOrderItem, list: OfflineEquipmentInspection[]): boolean {
     if (!isGatedCategory(item.equipmentCategory)) return true
     const cat = inspectionCategoryFor(item.equipmentCategory)
+    const stamp = (insp: OfflineEquipmentInspection) => Date.parse(insp.updatedAt || insp.inspectedAt) || 0
+    const failedAt = Math.max(-1, ...list.filter(insp => insp.outcome === 'fail' || insp.outcome === 'requires_parts').map(stamp))
     return list.some(insp => {
+      if (stamp(insp) <= failedAt) return false
       if (insp.outcome === 'condemn' || insp.outcome === 'cannot_service') return true
+      if (insp.outcome !== 'pass') return false
       const qa = (insp.data as Record<string, unknown> | undefined)?.qaChecklist as Record<string, unknown> | undefined
       return qaChecklistComplete(cat, qa, insp.serviceActions)
     })
@@ -1496,6 +1528,10 @@ export function ShopOrderDetailPage() {
     const itemId = record.shopItemId
     if (!itemId) return
 
+    // QA saves can add, remove or change priced services independently of the
+    // item's status. Refresh the counter quote on every successful save.
+    setPayAtDropKey(k => k + 1)
+
     setItemInspections(prev => {
       const existing = prev[itemId] || []
       return { ...prev, [itemId]: [record, ...existing.filter(i => i.id !== record.id)] }
@@ -1514,7 +1550,7 @@ export function ShopOrderDetailPage() {
       const cat = inspectionCategoryFor(item.equipmentCategory)
       const qa = (record.data as Record<string, unknown> | undefined)?.qaChecklist as Record<string, unknown> | undefined
       const waived = record.outcome === 'condemn' || record.outcome === 'cannot_service'
-      if (waived || qaChecklistComplete(cat, qa, record.serviceActions)) {
+      if (waived || (record.outcome === 'pass' && qaChecklistComplete(cat, qa, record.serviceActions))) {
         setPendingCompleteItemId(null)
         changeItemStatus(itemId, 'shop_complete')
         return
@@ -1762,12 +1798,20 @@ export function ShopOrderDetailPage() {
     setError('')
     try {
       const n = (v: string) => { const x = parseFloat(v); return Number.isFinite(x) ? x : 0 }
+      if (woLaborHours.trim() && (!Number.isFinite(Number(woLaborHours)) || Number(woLaborHours) < 0)) {
+        throw new Error('Enter valid, non-negative whole-job labor hours')
+      }
+      if (n(woLaborHours) > 0 && (!woLaborRate.trim() || !Number.isFinite(Number(woLaborRate)) || Number(woLaborRate) < 0)) {
+        throw new Error('Enter a valid whole-job labor rate')
+      }
       const mileage =
         n(woMileageMiles) > 0 && n(woMileageRate) > 0 ? { miles: n(woMileageMiles), rate: n(woMileageRate) }
         : n(woTripFlat) > 0 ? { flat: n(woTripFlat) }
         : null
       const misc = woMisc.filter(m => m.description.trim() || m.amount.trim()).map(m => ({ description: m.description.trim(), amount: n(m.amount) }))
       const billingExtras: Record<string, unknown> = {}
+      if (woWorkNotes.trim()) billingExtras.workNotes = woWorkNotes.trim()
+      if (n(woLaborHours) > 0) billingExtras.labor = { hours: n(woLaborHours), rate: n(woLaborRate) }
       if (mileage) billingExtras.mileage = mileage
       if (misc.length) billingExtras.misc = misc
 
@@ -1821,10 +1865,25 @@ export function ShopOrderDetailPage() {
     )
   }
 
+  if (order.workOrderNumber === 'Pending...' || order._offlineStatus === 'pending' && !order.workOrderNumber) {
+    return <PendingShopIntake key={order.id} orderId={order.id} companyName={order.companyName || ''}
+      onSaved={() => loadOrder(order.id)} onBack={() => navigate('/shop')} />
+  }
+
+  const missingSerialCount = items.filter(item => !item.serialNumber?.trim()).length + childItems.filter(item => !item.serialNumber?.trim()).length
   const progress = order.totalItems > 0 ? Math.round((order.completedItems / order.totalItems) * 100) : 0
 
   return (
     <div className="max-w-2xl mx-auto">
+      {missingSerialCount > 0 && (
+        <div className="mb-4 p-3 rounded-lg bg-amber-50 border border-amber-200 text-sm text-amber-900">
+          {missingSerialCount} piece{missingSerialCount === 1 ? '' : 's'} still need a serial. Record and confirm each serial in QA before closing or return, regardless of inspection outcome.
+        </div>
+      )}
+      {!!sourceTickets.length && <div className="mb-4 rounded border bg-blue-50 p-3 text-sm">
+        <span className="font-medium">Originating field inspection: </span>
+        {sourceTickets.map(ticket => <button key={ticket.id} onClick={() => navigate(`/tickets/${ticket.id}`)} className="mr-3 text-blue-700 underline">{ticket.ticketNumber}</button>)}
+      </div>}
       {/* Header */}
       <div className="flex items-center gap-3 mb-6">
         <button onClick={() => navigate('/shop')} className="p-2 -ml-2 text-slate-600 hover:text-slate-900">
@@ -1838,30 +1897,7 @@ export function ShopOrderDetailPage() {
             {order.isInternal && <span className="ml-1 text-blue-600 font-medium">(Internal)</span>}
           </p>
         </div>
-        <button
-          onClick={async () => {
-            try {
-              const token = localStorage.getItem('sundog_token')
-              const res = await fetch(`/api/shop-orders/${id}/pdf`, {
-                headers: token ? { Authorization: `Bearer ${token}` } : {},
-              })
-              if (!res.ok) throw new Error('PDF export failed')
-              const blob = await res.blob()
-              const url = URL.createObjectURL(blob)
-              const a = document.createElement('a')
-              a.href = url
-              a.download = `work-order-${order.workOrderNumber || id}.pdf`
-              a.click()
-              URL.revokeObjectURL(url)
-            } catch (e: any) {
-              setError(e.message || 'PDF export failed')
-            }
-          }}
-          className="p-2 text-slate-500 hover:text-blue-600"
-          title="Export work order as PDF"
-        >
-          <FileDown className="w-5 h-5" />
-        </button>
+        <PdfExportButton url={`/api/shop-orders/${id}/pdf`} fileName={`work-order-${order.workOrderNumber || id}.pdf`} label="Export work order as PDF" iconOnly onError={setError} />
         <button
           onClick={() => { setShowReprint(true); setReprintMsg(''); setReprintItemId('') }}
           className="p-2 text-slate-500 hover:text-blue-600"
@@ -2005,6 +2041,7 @@ export function ShopOrderDetailPage() {
               items={addUnitDrafts}
               onChange={setAddUnitDrafts}
               defaultCategory={order.primaryCategory}
+              workOrderId={id}
               occupiedBins={occupiedBins}
             />
 
@@ -2505,6 +2542,24 @@ export function ShopOrderDetailPage() {
           </div>
         )}
 
+        {selectMode && (
+          <div className="px-4 py-3 border-b border-slate-100">
+            <label className="inline-flex items-center gap-3 text-xs font-medium text-slate-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={items.length > 0 && items.every(item => selectedIds.has(item.id))}
+                ref={input => {
+                  if (input) input.indeterminate = items.some(item => selectedIds.has(item.id))
+                    && !items.every(item => selectedIds.has(item.id))
+                }}
+                onChange={e => setSelectedIds(e.target.checked ? new Set(items.map(item => item.id)) : new Set())}
+                disabled={bulkBusy || items.length === 0}
+                className="w-4 h-4 rounded border-slate-300 text-blue-700"
+              />
+              Select all
+            </label>
+          </div>
+        )}
         <div className="divide-y divide-slate-100">
           {items.map(item => {
             const isExpanded = expandedItem === item.id
@@ -2533,7 +2588,7 @@ export function ShopOrderDetailPage() {
                   <div className="flex items-start gap-3">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-0.5">
-                        <span className="font-mono text-sm font-medium text-slate-900">{item.serialNumber}</span>
+                        <span className="font-mono text-sm font-medium text-slate-900">{item.serialNumber || 'Serial required at QA'}</span>
                         <span className="text-[10px] font-medium text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">
                           #{item.itemNumber}
                         </span>
@@ -2556,6 +2611,11 @@ export function ShopOrderDetailPage() {
                         <div className="flex items-center gap-1 text-[10px] font-medium text-teal-600 mt-0.5">
                           <Package className="w-3 h-3" />
                           <span>{binLocationOf(item)}</span>
+                        </div>
+                      )}
+                      {partsNotIncludedOf(item).length > 0 && (
+                        <div className="text-[10px] font-medium text-amber-700 mt-0.5">
+                          Not included: {partsNotIncludedOf(item).map(constituentLabel).join(', ')}
                         </div>
                       )}
                       {item.reportedIssue && (
@@ -2605,6 +2665,7 @@ export function ShopOrderDetailPage() {
                         onSave={v => saveBinLocation(item.id, v)}
                         occupiedBins={occupiedBins}
                         currentItemId={item.id}
+                        workOrderId={id}
                       />
                     )}
 
@@ -2753,6 +2814,7 @@ export function ShopOrderDetailPage() {
                         error message just asked for. */}
                     <UnitAttachments
                       shopItemId={item.id}
+                      refreshKey={attachmentRefreshKey}
                       serialNumber={item.serialNumber}
                       onCountChange={n => setAttachmentCounts(prev =>
                         prev[item.id] === n ? prev : { ...prev, [item.id]: n },
@@ -3553,7 +3615,7 @@ export function ShopOrderDetailPage() {
 
       <ShopChargeBreakdown preview={chargePreview} error={chargePreviewError} />
 
-      {/* Order charges (mileage / misc) — WO-level billing extras. Bills once,
+      {/* Whole-job work details — WO-level billing extras. Bills once,
           alongside the per-unit lines, when the WO closes and generates its one
           invoice (WO-direct billing — no mid-job sweep). Hidden for internal WOs. */}
       {!order.isInternal && (() => {
@@ -3561,9 +3623,60 @@ export function ShopOrderDetailPage() {
           <div className="bg-white rounded-lg border border-slate-200 p-4 mb-4 space-y-2">
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <p className="text-xs font-medium text-slate-600">Order charges (mileage / misc)</p>
+                <p className="text-sm font-semibold text-slate-900">Whole job</p>
                 {woExtrasBilled && (
                   <span className="text-[10px] font-medium text-slate-400">billed — locked</span>
+                )}
+              </div>
+              <UnitAttachments
+                shopItemId={items[0]?.id || ''}
+                serialNumber=""
+                job={{ workOrderId: order.id, units: items }}
+                capture={BENCH_CAPTURE.filter(option => !option.camera)}
+                disabled={!can('tickets:create') || items.length === 0}
+                onCaptured={() => setAttachmentRefreshKey(key => key + 1)}
+              />
+              <p className="text-xs text-slate-500">Labor entered here is charged once for the job, regardless of the number of units.</p>
+              {woWorkNotes && !woWorkDetailsOpen && <p className="text-xs text-slate-600 whitespace-pre-wrap">{woWorkNotes}</p>}
+              {!woWorkDetailsOpen && woLaborHours && (
+                <p className="text-xs text-slate-600">Labor: {woLaborHours} hrs × ${woLaborRate || '0'} = ${(Number(woLaborHours) * Number(woLaborRate)).toFixed(2)}</p>
+              )}
+              <button type="button"
+                onClick={() => {
+                  if (!woWorkDetailsOpen && !woLaborRate.trim() && contractRates.labor?.rate != null) {
+                    setWoLaborRate(String(contractRates.labor.rate))
+                  }
+                  setWoWorkDetailsOpen(v => !v)
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors">
+                <Pencil className="w-3 h-3" />
+                {woWorkDetailsOpen ? 'Hide Work Details' : woExtrasBilled || !can('shop_orders:edit') ? 'View Work Details' : 'Edit Work Details'}
+              </button>
+              {woWorkDetailsOpen && <fieldset disabled={woExtrasBilled || !can('shop_orders:edit') || woBillingSaving} className="space-y-3">
+              <label className="block text-xs font-medium text-slate-600">
+                Work performed — whole job
+                <textarea value={woWorkNotes} onChange={e => setWoWorkNotes(e.target.value)} rows={2}
+                  placeholder="Work performed across the job"
+                  className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm resize-none disabled:bg-slate-100" />
+              </label>
+              <div className="flex items-end gap-3 flex-wrap text-xs">
+                <label className="block font-medium text-slate-600">
+                  Total labor hours
+                  <input type="number" min="0" step="0.25" inputMode="decimal" value={woLaborHours}
+                    onChange={e => setWoLaborHours(e.target.value)} placeholder="e.g. 8"
+                    className="block mt-1 w-28 px-2 py-1.5 border border-slate-300 rounded disabled:bg-slate-100" />
+                </label>
+                <label className="block font-medium text-slate-600">
+                  Labor rate ($/hr)
+                  <input type="number" min="0" step="0.01" inputMode="decimal" value={woLaborRate}
+                    onChange={e => setWoLaborRate(e.target.value)} placeholder="0.00"
+                    className="block mt-1 w-28 px-2 py-1.5 border border-slate-300 rounded disabled:bg-slate-100" />
+                </label>
+                <span className="py-1.5 text-slate-600">Labor total: ${(Number(woLaborHours) * Number(woLaborRate) || 0).toFixed(2)}</span>
+                {contractRates.labor?.priceLevelName && contractRates.labor.rate != null && (
+                  <ContractPriceBadge priceLevelName={contractRates.labor.priceLevelName}
+                    listRate={contractRates.labor.listRate} contractRate={contractRates.labor.rate}
+                    currentRate={woLaborRate.trim() ? Number(woLaborRate) : contractRates.labor.rate} />
                 )}
               </div>
               <div className="flex items-center gap-2 flex-wrap text-xs">
@@ -3646,11 +3759,12 @@ export function ShopOrderDetailPage() {
                     className="flex items-center gap-1 px-3 py-1 text-[11px] font-medium text-white bg-emerald-700 rounded hover:bg-emerald-600 disabled:opacity-50"
                   >
                     {woBillingSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
-                    Save order charges
+                    Save work details
                   </button>
                   {woBillingMsg && <span className="text-[10px] text-emerald-700">{woBillingMsg}</span>}
                 </div>
               )}
+              </fieldset>}
             </div>
           </div>
         )
@@ -3727,7 +3841,7 @@ export function ShopOrderDetailPage() {
             <h3 className="text-base font-semibold text-red-900">Force Close Work Order</h3>
           </div>
           <p className="text-xs text-red-800">
-            This will mark ALL items as returned and close the work order regardless of current status. This action is logged.
+            This will mark remaining items as returned and close the work order. Condemned items keep their final status. This action is logged.
           </p>
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">Reason (required)</label>
@@ -3823,7 +3937,7 @@ export function ShopOrderDetailPage() {
           </div>
 
           <p className="text-xs text-emerald-800">
-            All completed items will be marked as returned. Customer acknowledges receipt of equipment.
+            Ready items will be marked as returned. Condemned items keep their final status. Customer acknowledges receipt of equipment.
           </p>
 
           {/* Tax Jurisdiction + CC Fee */}
@@ -3997,7 +4111,7 @@ export function ShopOrderDetailPage() {
             <button
               type="button"
               onClick={submitRelease}
-              disabled={!chargePreview || releasing || !pickupName || (releasePayMethod === 'card' && !releasePaymentDone)}
+              disabled={missingSerialCount > 0 || !chargePreview || releasing || !pickupName || !pickupSignature || (releasePayMethod === 'card' && !releasePaymentDone)}
               className="flex items-center gap-1.5 px-5 py-2.5 bg-emerald-700 text-white rounded-lg text-sm font-medium hover:bg-emerald-600 disabled:opacity-50"
             >
               {releasing ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileCheck className="w-4 h-4" />}
@@ -4026,6 +4140,10 @@ export function ShopOrderDetailPage() {
           seedData={seedDataForItem(qaEditorItem, childItems)}
           intakeConstituents={intakeConstituentsFor(qaEditorItem, childItems)}
           onConstituentCorrected={correctConstituentSerial}
+          onSerialCorrected={async serial => {
+            await correctConstituentSerial(qaEditorItem.id, serial)
+            setQaEditorItem(previous => previous ? { ...previous, serialNumber: serial } : previous)
+          }}
           existing={
             (itemInspections[qaEditorItem.id] || []).find(i => !i.lockedAt) || null
           }
@@ -4071,12 +4189,13 @@ function ContactReadout({ heading, name, phone, email, preferred, highlightWhen 
 
 // Quick bin-location picker for personal monitors. Presets (Bin 1–22) save on
 // select; "Other…" reveals a free-text box that commits on the Save button.
-function BinLocationControl({ value, saving, onSave, occupiedBins, currentItemId }: {
+function BinLocationControl({ value, saving, onSave, occupiedBins, currentItemId, workOrderId }: {
   value: string | null
   saving: boolean
   onSave: (v: string) => void
-  occupiedBins?: Map<string, { workOrderNumber: string; itemId: string }>
+  occupiedBins?: Map<string, { workOrderNumber: string; workOrderId?: string; itemId: string }>
   currentItemId?: string
+  workOrderId?: string
 }) {
   const isPreset = !!value && BIN_LABELS.includes(value)
   const [sel, setSel] = useState(value ? (isPreset ? value : 'other') : '')
@@ -4089,15 +4208,25 @@ function BinLocationControl({ value, saving, onSave, occupiedBins, currentItemId
     setOther(preset ? '' : value || '')
   }, [value])
 
+  const [sharedBin, setSharedBin] = useState<string | null>(null)
+  function saveBin(v: string) {
+    const hit = occupiedBins?.get(v)
+    if (v !== value && hit && hit.workOrderId === workOrderId && hit.itemId !== currentItemId) {
+      setSharedBin(v)
+      return
+    }
+    onSave(v)
+  }
   function handleSelect(v: string) {
     setSel(v)
-    if (v !== 'other') onSave(v) // presets — and the blank "Not set" — save immediately
+    if (v !== 'other') saveBin(v) // presets — and the blank "Not set" — save immediately
   }
 
   const otherDirty = sel === 'other' && !!other.trim() && other.trim() !== value
 
   return (
     <div className="rounded-lg border border-teal-200 bg-teal-50 p-3">
+      {sharedBin && <SharedBinConfirmation bin={sharedBin} onCancel={() => { setSharedBin(null); setSel(value && BIN_LABELS.includes(value) ? value : value ? 'other' : '') }} onConfirm={() => { onSave(sharedBin); setSharedBin(null) }} />}
       <label className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-teal-800 mb-1.5">
         <Package className="w-3.5 h-3.5" /> Bin Location
       </label>
@@ -4111,7 +4240,7 @@ function BinLocationControl({ value, saving, onSave, occupiedBins, currentItemId
           <option value="">Not set</option>
           {BIN_LABELS.map(b => {
             const hit = occupiedBins?.get(b)
-            const takenByOther = !!hit && hit.itemId !== currentItemId
+            const takenByOther = !!hit && hit.workOrderId !== workOrderId && hit.itemId !== currentItemId
             return (
               <option key={b} value={b} disabled={takenByOther}>
                 {takenByOther ? `${b} — in use (${hit!.workOrderNumber})` : b}
@@ -4135,7 +4264,7 @@ function BinLocationControl({ value, saving, onSave, occupiedBins, currentItemId
           <button
             type="button"
             disabled={saving || !otherDirty}
-            onClick={() => onSave(other)}
+            onClick={() => saveBin(other.trim())}
             className="flex items-center gap-1 px-3 py-1.5 rounded text-sm font-medium bg-teal-600 text-white disabled:opacity-40"
           >
             <Save className="w-3.5 h-3.5" /> Save

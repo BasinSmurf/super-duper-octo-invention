@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { requirePermission } from '../middleware/rbac.js';
 import { createAuditLog } from '../utils/auditLog.js';
@@ -171,6 +171,7 @@ shopTransfersRouter.post('/', async (req: Request, res: Response) => {
     select: {
       id: true,
       siteId: true,
+      status: true,
       transferItems: { where: { event: { receivedAt: null } }, select: { id: true } },
     },
   });
@@ -193,6 +194,7 @@ shopTransfersRouter.post('/', async (req: Request, res: Response) => {
   }
   if (selected.length === 0) throw new AppError(400, 'No transferable items selected');
 
+  if (selected.some(item => ['outside_service', 'warranty_out', 'returned'].includes(item.status))) throw new AppError(409, 'Only equipment physically at the shop can be transferred');
   // One shipment = one source site.
   const fromSites = new Set(selected.map(i => i.siteId));
   if (fromSites.size > 1) {

@@ -6,7 +6,7 @@
  * Received → In Work. Also used by managers force-claiming from the web UI.
  */
 
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { canTransitionShopItem } from './shopStateMachine.js';
 import { recomputeWOStatus } from '../routes/shopOrders.js';

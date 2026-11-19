@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { requireRole } from '../middleware/rbac.js';
 import { computeH2sAnalytics } from '../services/h2sAnalytics.js';

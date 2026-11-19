@@ -68,8 +68,9 @@ export const DIVISIONS: Division[] = [
     subhead: 'Rentals & on-site services',
     icon: Caravan,
     entries: [
-      { label: 'On Site Services', desc: 'On-site work (incl. manned trailer)', icon: Truck, workType: 'field_service', serviceType: 'on_site_services' },
+      { label: 'On Site Supervision', desc: 'On-site work (incl. manned trailer)', icon: Truck, workType: 'field_service', serviceType: 'on_site_services' },
       { label: 'Deploy', desc: 'Hitch up a dispatched rental and head out', icon: PackageCheck, workType: 'rental' },
+      { label: 'Swap', desc: 'Swap deployed equipment like-for-like on an open rental', icon: RotateCcw, redirectTo: '/tickets/swap' },
       // Shortcut straight to the manned-trailer daily log (today it lives under
       // On Site Services > Manned Trailer). Not net-new — just a faster door.
       { label: 'Daily Ticket', desc: 'Manned-trailer daily log (shortcut)', icon: ClipboardCheck, workType: 'field_service', serviceType: 'on_site_services', subtype: 'manned_trailer' },

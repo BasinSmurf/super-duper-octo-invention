@@ -1,23 +1,37 @@
+import { loadTicketAllocation, approveTicketAllocation } from '../services/ticketApprovalAllocation.js';
+import { pdfExportAttachments } from '../services/pdfExportAttachments.js';
+import { appendPdfAttachments } from '../services/appendPdfAttachments.js';
+import { ticketFields, validateTicketInput, editableTicket, assertDraftDeletion, assertBillingEligible, assertOfflineStatus, mutateTicketLine } from '../services/ticketWritePolicy.js';
+import { dispatchCallout } from '../services/dispatchCallout.js';
+import { allowedFields, enumValue, validDate } from '../services/writeValidation.js';
+import { TicketStatus as TicketStatusValues } from '../db.js';
 import { Router, Request, Response } from 'express';
-import { prisma } from '../index.js';
+import { inspectionBillingError } from '../services/inspectionBillingGuard.js';
+import { prisma } from '../db.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { requirePermission } from '../middleware/rbac.js';
+import { permissionDeniedMessage } from '../services/permissionMessages.js';
+import { roleHasCapability } from '../services/permissions.js';
+import { applyWorkPointVerification, isVerificationCurrent } from '../services/workPointVerification.js';
 import { createAuditLog } from '../utils/auditLog.js';
 import { assertCompanyActive, assertCompanyNotOnCreditHold } from '../utils/companyGuards.js';
 import { generateTicketNumber } from '../utils/ticketNumber.js';
 import { enrichCustomData } from '../utils/notesExtraction.js';
+import { preserveTicketOrigin } from '../utils/ticketOrigin.js';
 import { computeBillingGroupKey } from '../utils/billingGroupKey.js';
 import { flatOverridesFromPayload } from '../services/billingRefs.js';
 import { setBillingReadiness } from '../services/billingReadiness.js';
 import { selectBillingProfile } from '../services/billingProfileSelector.js';
+import { prepareTicketCustomerChange } from '../services/ticketCustomerChange.js';
 import { defaultDivisionForWork } from '../utils/qbClass.js';
-import { needsRental, DEPLOYED_PREBILLING_STATUSES, isBillingWardStatus } from '../services/deploymentGate.js';
+import { needsRental, RENTAL_REQUIRED_WHERE, DEPLOYED_PREBILLING_STATUSES, isBillingWardStatus } from '../services/deploymentGate.js';
 import { shouldRecordOnly, recordTicketAsRentalLog } from '../services/rentalTicketRecord.js';
 import { randomUUID } from 'crypto';
-import { canTransition, getAvailableTransitions } from '../services/ticketStateMachine.js';
+import { canTransition, getAvailableTransitions, transitionDeniedMessage } from '../services/ticketStateMachine.js';
 import { runAndCacheReviewSignal, ENGINE_VERSION } from '../services/ticketReviewRules.js';
 import { emitEvent } from '../services/eventBus.js';
 import { generateTicketPdf } from '../services/ticketPdfGenerator.js';
+import { combinedTicketPdf, ticketPdfInclude } from '../services/combinedTicketPdf.js';
 import { generateOccHealthPdf } from '../services/occHealthPdfGenerator.js';
 import { buildLocationDisplay } from '../utils/locationDisplay.js';
 import { pdfToBuffer } from '../utils/pdfToBuffer.js';
@@ -25,6 +39,38 @@ import { getFileStore, ticketKey } from '../services/fileStore.js';
 import type { TicketStatus, UserRole } from '../db.js';
 
 export const ticketsRouter = Router();
+
+ticketsRouter.post('/pdf-batch', async (req, res, next) => {
+  try {
+    const pdf = await combinedTicketPdf(prisma, req.body?.ticketIds);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'attachment; filename="billing-lineage-tickets.pdf"');
+    res.send(pdf);
+  } catch (error) { next(error); }
+});
+
+ticketsRouter.post('/dispatch-callout', requirePermission('tickets:create'), async (req, res, next) => {
+  try { res.status(201).json(await dispatchCallout(req.body, req.user!)); }
+  catch (err) { next(err); }
+});
+
+ticketsRouter.put('/:id/work-points/:workPointId/verification', requirePermission('tickets:complete'), async (req, res, next) => {
+  try {
+    const ticketId = req.params.id as string;
+    const workPointId = req.params.workPointId as string;
+    await prisma.$transaction(async tx => {
+      const ticket = await tx.serviceTicket.findUnique({ where: { id: ticketId }, include: { airSystemInspections: true } });
+      if (!ticket) throw new AppError(404, 'Ticket not found');
+      if (ticket.status === 'void') throw new AppError(400, 'Cannot verify on a void ticket');
+      if (ticket.assignedTechId !== req.user!.userId && ticket.createdById !== req.user!.userId && !roleHasCapability(req.user!.role, 'tickets:edit_all')) throw new AppError(403, 'You can only verify work points on your tickets');
+      if (ticket.workPointId !== workPointId && !ticket.airSystemInspections.some(record => record.workPointId === workPointId)) throw new AppError(400, 'Work point is not linked to this ticket');
+      const result = await applyWorkPointVerification(tx, workPointId, { verified: req.body?.verified, changedAt: new Date().toISOString() }, req.user!.userId);
+      await tx.airSystemInspection.updateMany({ where: { ticketId, workPointId }, data: { verified: result.verified, dateVerified: result.dateVerified } });
+      await tx.auditLog.create({ data: { userId: req.user!.userId, entityType: 'ServiceTicket', entityId: ticketId, action: 'update', changes: { workPointId, verified: result.verified, dateVerified: result.dateVerified?.toISOString() ?? null } } });
+    });
+    res.json({ success: true });
+  } catch (error) { next(error); }
+});
 
 function siteCustomerMismatchBlocksApproval(customData: unknown): boolean {
   const cd = (customData as Record<string, any> | null) || {};
@@ -38,7 +84,13 @@ function siteCustomerMismatchBlocksApproval(customData: unknown): boolean {
 // GET /api/tickets — list with filters
 ticketsRouter.get('/', async (req: Request, res: Response, next) => {
   try {
-    const { status, type, companyId, techId, fieldId, dateFrom, dateTo, search, excludeVoid, limit = '50', offset = '0' } = req.query;
+    const { status, type, companyId, techId, fieldId, dateFrom, dateTo, createdFrom, createdTo, search, excludeVoid, limit = '50', offset = '0' } = req.query;
+    enumValue(status, TicketStatusValues, 'status');
+    if (!/^\d+$/.test(String(limit)) || Number(limit) < 1 || Number(limit) > 500 || !/^\d+$/.test(String(offset))) throw new AppError(400, 'Invalid pagination');
+    if (dateFrom) validDate(dateFrom, 'dateFrom');
+    if (dateTo) validDate(dateTo, 'dateTo');
+    if (createdFrom) validDate(createdFrom, 'createdFrom');
+    if (createdTo) validDate(createdTo, 'createdTo');
     const where: any = {};
 
     // Role-based visibility
@@ -71,6 +123,8 @@ ticketsRouter.get('/', async (req: Request, res: Response, next) => {
         where.serviceDate.lt = dateToExclusive;
       }
     }
+
+    if (createdFrom || createdTo) where.createdAt = { ...(createdFrom ? { gte: new Date(createdFrom as string) } : {}), ...(createdTo ? { lt: new Date(createdTo as string) } : {}) };
 
     // Free-text search: match ticket number, location, company name,
     // assigned technician, or the user who created the ticket.
@@ -186,6 +240,7 @@ ticketsRouter.get(['/my-today', '/my-recent'], async (req: Request, res: Respons
         _count: { select: { lineItems: true } },
       },
       orderBy: [{ serviceDate: 'desc' }, { createdAt: 'desc' }],
+      take: 200,
     });
 
     res.json(tickets);
@@ -293,6 +348,7 @@ ticketsRouter.get('/dispatch-queue', requirePermission('dispatch:manage'), async
       pad: { select: { id: true, name: true } },
       well: { select: { id: true, wellName: true } },
       assignedTech: { select: { id: true, name: true } },
+      linkedRentalAgreement: { select: { id: true, agreementNumber: true } },
       dispatchedBy: { select: { id: true, name: true } },
       createdBy: { select: { id: true, name: true } },
       _count: { select: { lineItems: true } },
@@ -314,7 +370,7 @@ ticketsRouter.get('/dispatch-queue', requirePermission('dispatch:manage'), async
     const queueWhere = {
       AND: [
         { OR: [
-          { status: 'draft' as const },
+          { status: 'draft' as const, createdBy: { role: { in: ['dispatch', 'field_super', 'boss', 'platform_admin'] as UserRole[] } } },
           { customData: { path: ['needsLocation'], equals: true } },
         ] },
         searchFilter,
@@ -368,9 +424,8 @@ ticketsRouter.get('/dispatch-queue', requirePermission('dispatch:manage'), async
 ticketsRouter.get('/review-queue', async (req: Request, res: Response, next) => {
   try {
     const role = req.user!.role as UserRole;
-    const canReview =
-      role === 'field_super' || role === 'billing_ar' || role === 'boss' || role === 'platform_admin';
-    if (!canReview) throw new AppError(403, 'Insufficient permissions to view review queue');
+    const allowedRoles: UserRole[] = ['field_super', 'billing_ar', 'ar_supervisor', 'boss', 'platform_admin'];
+    if (!allowedRoles.includes(role)) throw new AppError(403, permissionDeniedMessage('view the review queue', allowedRoles));
 
     const { tech, companyId, verdict, from, to } = req.query;
 
@@ -480,7 +535,7 @@ ticketsRouter.get('/review-queue', async (req: Request, res: Response, next) => 
 });
 
 // GET /api/tickets/deployments-queue — feed for the Approvals → Deployments tab.
-// Rental/on-site jobs that were dispatched/worked WITHOUT a rental agreement
+// Rental-required jobs that were dispatched/worked WITHOUT a rental agreement
 // attached. They sit here (and are blocked from billing by the transition gate
 // below) until someone attaches a rental. Manned-rental work tickets never land
 // here — they're already linked to their rental.
@@ -488,22 +543,15 @@ ticketsRouter.get('/review-queue', async (req: Request, res: Response, next) => 
 ticketsRouter.get('/deployments-queue', async (req: Request, res: Response, next) => {
   try {
     const role = req.user!.role as UserRole;
-    const canView =
-      role === 'field_super' || role === 'dispatch' || role === 'billing_ar' ||
-      role === 'boss' || role === 'platform_admin';
-    if (!canView) throw new AppError(403, 'Insufficient permissions to view deployments queue');
+    const allowedRoles: UserRole[] = ['field_super', 'dispatch', 'billing_ar', 'ar_supervisor', 'boss', 'platform_admin'];
+    if (!allowedRoles.includes(role)) throw new AppError(403, permissionDeniedMessage('view the deployments queue', allowedRoles));
 
     const { tech, companyId } = req.query;
 
     const where: any = {
       linkedRentalAgreementId: null,
       status: { in: [...DEPLOYED_PREBILLING_STATUSES] },
-      // "Expected to ride on a rental" — keep routine field/training/shop work out.
-      OR: [
-        { ticketType: 'rental' },
-        { serviceSubtype: 'on_site_services' },
-        { division: 'D4' },
-      ],
+      ...RENTAL_REQUIRED_WHERE,
     };
     if (tech) where.assignedTechId = tech as string;
     if (companyId) where.companyId = companyId as string;
@@ -535,35 +583,38 @@ ticketsRouter.get('/deployments-queue', async (req: Request, res: Response, next
 });
 
 // GET /api/tickets/:id/pdf — download ticket as PDF
+ticketsRouter.get('/:id/pdf-attachments', async (req: Request, res: Response, next) => {
+  try {
+    const record = await prisma.serviceTicket.findUnique({ where: { id: req.params.id as string }, select: { id: true } });
+    if (!record) throw new AppError(404, 'Record not found');
+    const attachments = await pdfExportAttachments({ ticketId: record.id });
+    res.json({ count: attachments.length });
+  } catch (error) { next(error); }
+});
+
 ticketsRouter.get('/:id/pdf', async (req: Request, res: Response, next) => {
   try {
     const ticket = await prisma.serviceTicket.findUnique({
       where: { id: req.params.id as string },
-      include: {
-        company: true,
-        field: true,
-        pad: true,
-        well: true,
-        assignedTech: { select: { id: true, name: true, email: true } },
-        lineItems: {
-          include: {
-            product: { select: { id: true, partNumber: true, name: true } },
-          },
-          orderBy: { sortOrder: 'asc' },
-        },
-        fitTestRecords: true,
-      },
+      include: ticketPdfInclude,
     });
 
     if (!ticket) throw new AppError(404, 'Ticket not found');
+
+    const pdfDoc = await generateTicketPdf(ticket as any);
+    const combinedPdf = req.query.includeAttachments === 'true'
+      ? await appendPdfAttachments(await pdfToBuffer(pdfDoc), await pdfExportAttachments({ ticketId: ticket.id }))
+      : null;
 
     const fileName = `ticket-${ticket.ticketNumber || ticket.id}.pdf`;
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
 
-    const pdfDoc = generateTicketPdf(ticket as any);
-    pdfDoc.pipe(res);
-    pdfDoc.end();
+    if (combinedPdf) res.send(combinedPdf);
+    else {
+      pdfDoc.pipe(res);
+      pdfDoc.end();
+    }
   } catch (err) {
     next(err);
   }
@@ -591,13 +642,20 @@ ticketsRouter.get('/:id/occ-health-pdf', async (req: Request, res: Response, nex
       throw new AppError(400, 'Ticket has no occupational health records');
     }
 
+    const pdfDoc = await generateOccHealthPdf(ticket as any);
+    const combinedPdf = req.query.includeAttachments === 'true'
+      ? await appendPdfAttachments(await pdfToBuffer(pdfDoc), await pdfExportAttachments({ ticketId: ticket.id }))
+      : null;
+
     const fileName = `occ-health-${ticket.ticketNumber || ticket.id}.pdf`;
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
 
-    const pdfDoc = generateOccHealthPdf(ticket as any);
-    pdfDoc.pipe(res);
-    pdfDoc.end();
+    if (combinedPdf) res.send(combinedPdf);
+    else {
+      pdfDoc.pipe(res);
+      pdfDoc.end();
+    }
   } catch (err) {
     next(err);
   }
@@ -627,7 +685,7 @@ ticketsRouter.post('/:id/pdf/store', requirePermission('tickets:create'), async 
 
     if (!ticket) throw new AppError(404, 'Ticket not found');
 
-    const pdfDoc = generateTicketPdf(ticket as any);
+    const pdfDoc = await generateTicketPdf(ticket as any);
     const buffer = await pdfToBuffer(pdfDoc);
 
     const fileName = `ticket-${ticket.ticketNumber || ticket.id}.pdf`;
@@ -699,7 +757,8 @@ ticketsRouter.get('/:id', async (req: Request, res: Response, next) => {
         },
         attachments: { orderBy: { uploadedAt: 'desc' } },
         fitTestRecords: true,
-        airSystemInspections: true,
+        airSystemInspections: { include: { workPoint: true } },
+        gasDetectionRecords: true,
         ihTestRecords: true,
         trainingRosterRecords: true,
         signatureRequest: {
@@ -725,7 +784,17 @@ ticketsRouter.get('/:id', async (req: Request, res: Response, next) => {
       req.user!.role as UserRole,
     );
 
-    res.json({ ...ticket, availableTransitions: transitions });
+    const config = await prisma.workPointVerificationConfig.findUnique({ where: { id: 'default' } });
+    const expiryDays = config?.expiryDays ?? 0;
+    const workPoints = [ticket.workPoint, ...ticket.airSystemInspections.map(record => record.workPoint)].filter(point => point !== null);
+    const uniquePoints = [...new Map(workPoints.map(point => [point.id, point])).values()];
+    const sourceIds = [...new Set([ticket.id, ticket.offlineId].filter((id): id is string => !!id))];
+    const linkedItems = await prisma.shopWorkOrderItem.findMany({ where: { workOrder: { companyId: ticket.companyId }, OR: sourceIds.map(sourceId => ({
+      customData: { path: ['fieldInspectionRecord', 'sourceTicketOfflineId'], equals: sourceId },
+    })) }, select: { workOrder: { select: { id: true, workOrderNumber: true, status: true } } } });
+    const linkedShopOrders = [...new Map(linkedItems.map(item => [item.workOrder.id, item.workOrder])).values()];
+    res.json({ ...ticket, linkedShopOrders, availableTransitions: transitions, workPointVerificationExpiryDays: expiryDays,
+      verificationWorkPoints: uniquePoints.map(point => ({ ...point, verificationCurrent: isVerificationCurrent(point.verified, point.dateVerified, expiryDays) })) });
   } catch (err) {
     next(err);
   }
@@ -734,6 +803,8 @@ ticketsRouter.get('/:id', async (req: Request, res: Response, next) => {
 // POST /api/tickets — create a new ticket
 ticketsRouter.post('/', requirePermission('tickets:create'), async (req: Request, res: Response, next) => {
   try {
+    await validateTicketInput(req.body, true);
+    assertOfflineStatus(null, req.body.status || 'draft', req.user!.role);
     // Arrival + departure required on any non-draft submit (systemwide rule).
     const submittingStatus = req.body.status || 'draft';
     if (submittingStatus !== 'draft' && (!req.body.arrivalTime || !req.body.departureTime)) {
@@ -849,8 +920,12 @@ ticketsRouter.post('/', requirePermission('tickets:create'), async (req: Request
 // PUT /api/tickets/:id — update ticket fields
 ticketsRouter.put('/:id', async (req: Request, res: Response, next) => {
   try {
+    await editableTicket(req.params.id as string, req.user!);
+    allowedFields(req.body, [...ticketFields, 'billingReadiness', 'billingReadinessReasonCode']);
+    await validateTicketInput(req.body);
     const existing = await prisma.serviceTicket.findUnique({ where: { id: req.params.id as string } });
     if (!existing) throw new AppError(404, 'Ticket not found');
+    await validateTicketInput({ ...req.body, ticketType: req.body.ticketType ?? existing.ticketType, serviceSubtype: req.body.serviceSubtype ?? existing.serviceSubtype });
 
     // Enforce edit permissions based on role
     const role = req.user!.role as UserRole;
@@ -860,6 +935,8 @@ ticketsRouter.put('/:id', async (req: Request, res: Response, next) => {
     if (role === 'field_tech' && !['draft', 'in_progress'].includes(existing.status)) {
       throw new AppError(403, 'Can only edit draft or in-progress tickets');
     }
+
+    await prepareTicketCustomerChange(existing, req.body);
 
     // Only dispatch, field_super, platform_admin can reassign tickets
     if (req.body.assignedTechId && req.body.assignedTechId !== existing.assignedTechId) {
@@ -892,6 +969,10 @@ ticketsRouter.put('/:id', async (req: Request, res: Response, next) => {
       }
     }
 
+    if (updateData.customData !== undefined) {
+      updateData.customData = preserveTicketOrigin(updateData.customData, existing.customData);
+    }
+
     // Re-extract gas/cylinder data when notes change
     if (updateData.workDescription !== undefined) {
       const enriched = enrichCustomData(
@@ -919,7 +1000,7 @@ ticketsRouter.put('/:id', async (req: Request, res: Response, next) => {
     }
 
     let ticket = await prisma.serviceTicket.update({
-      where: { id: req.params.id as string },
+      where: { id: req.params.id as string, status: existing.status, updatedAt: existing.updatedAt },
       data: updateData,
     });
 
@@ -957,9 +1038,8 @@ ticketsRouter.put('/:id', async (req: Request, res: Response, next) => {
 ticketsRouter.post('/:id/site-customer-mismatch', async (req: Request, res: Response, next) => {
   try {
     const role = req.user!.role as UserRole;
-    const canReview =
-      role === 'field_super' || role === 'billing_ar' || role === 'boss' || role === 'platform_admin';
-    if (!canReview) throw new AppError(403, 'Insufficient permissions to resolve site/customer mismatch');
+    const allowedRoles: UserRole[] = ['field_super', 'billing_ar', 'ar_supervisor', 'boss', 'platform_admin'];
+    if (!allowedRoles.includes(role)) throw new AppError(403, permissionDeniedMessage('resolve the site/customer mismatch', allowedRoles));
 
     const action = String(req.body.action || '').trim();
     const reason = String(req.body.reason || '').trim();
@@ -1055,6 +1135,16 @@ ticketsRouter.post('/:id/site-customer-mismatch', async (req: Request, res: Resp
   }
 });
 
+// Approval-only preview: field entry never needs to choose billing destinations.
+ticketsRouter.get('/:id/approval-allocation', async (req, res, next) => {
+  try {
+    const context = await loadTicketAllocation(prisma, req.params.id as string);
+    if (!canTransition(context.ticket.status, 'billing_queue', req.user!.role as UserRole))
+      throw new AppError(403, 'Ticket approval is not permitted');
+    res.json(context.plan);
+  } catch (err) { next(err); }
+});
+
 // POST /api/tickets/:id/transition — change ticket status
 ticketsRouter.post('/:id/transition', async (req: Request, res: Response, next) => {
   try {
@@ -1064,6 +1154,13 @@ ticketsRouter.post('/:id/transition', async (req: Request, res: Response, next) 
     const ticket = await prisma.serviceTicket.findUnique({ where: { id: req.params.id as string } });
     if (!ticket) throw new AppError(404, 'Ticket not found');
 
+    if (targetStatus === 'billing_queue') {
+      const error = inspectionBillingError(ticket, await prisma.ticketLineItem.count({ where: { ticketId: ticket.id } }));
+      if (error) throw new AppError(400, error);
+    }
+
+    if (targetStatus === 'in_progress' && ticket.status === 'supervisor_review' && (typeof reason !== 'string' || !reason.trim())) throw new AppError(400, 'A rejection reason is required');
+
     const role = req.user!.role as UserRole;
 
     // Field tech can only transition their own tickets
@@ -1071,12 +1168,14 @@ ticketsRouter.post('/:id/transition', async (req: Request, res: Response, next) 
       throw new AppError(403, 'Can only transition your own tickets');
     }
 
+    if (['invoiced', 'closed'].includes(ticket.status) && targetStatus === 'billing_queue') await editableTicket(ticket.id, req.user!);
+
     if (!canTransition(ticket.status, targetStatus as TicketStatus, role)) {
-      throw new AppError(403, `Cannot transition from ${ticket.status} to ${targetStatus}`);
+      throw new AppError(403, transitionDeniedMessage(ticket.status, targetStatus as TicketStatus));
     }
 
     // ── Deployment-rental gate ──────────────────────────────────────────
-    // A rental/on-site job that was deployed without a rental can't move to
+    // A rental-required job that was deployed without a rental can't move to
     // billing until one is attached (Approvals → Deployments tab handles that).
     // Deploy / in-progress / complete stay allowed so work isn't blocked.
     if (isBillingWardStatus(targetStatus) && !ticket.linkedRentalAgreementId && needsRental(ticket)) {
@@ -1111,25 +1210,8 @@ ticketsRouter.post('/:id/transition', async (req: Request, res: Response, next) 
       }
     }
 
-    // Supervisor approval requires every labor-rate line (legacy 406 or
-    // new-scheme [DIV]00002) to carry a reason in notes.
-    if (targetStatus === 'billing_queue' && ticket.status === 'supervisor_review') {
-      if (siteCustomerMismatchBlocksApproval(ticket.customData)) {
-        throw new AppError(400, 'Resolve the customer/site mismatch before approval: assign the site or leave it with a reason.');
-      }
-      const unreasoned = await prisma.ticketLineItem.findMany({
-        where: {
-          ticketId: ticket.id,
-          OR: [{ partNumber: '406' }, { partNumber: { endsWith: '00002' } }],
-        },
-        select: { id: true, lineNumber: true, partNumber: true, notes: true },
-      });
-      const missing = unreasoned.filter(li =>
-        (li.partNumber === '406' || /^0[0-9]00002$/.test(li.partNumber ?? '')) && !li.notes?.trim(),
-      );
-      if (missing.length > 0) {
-        throw new AppError(400, `Reason required on labor line(s) ${missing.map(m => `#${m.lineNumber}`).join(', ')} before approval`);
-      }
+    if (targetStatus === 'billing_queue' && siteCustomerMismatchBlocksApproval(ticket.customData)) {
+      throw new AppError(400, 'Resolve the customer/site mismatch before approval: assign the site or leave it with a reason.');
     }
 
     const updateData: any = { status: targetStatus };
@@ -1141,7 +1223,7 @@ ticketsRouter.post('/:id/transition', async (req: Request, res: Response, next) 
     }
 
     // Approval transitions track who approved and when.
-    if (targetStatus === 'billing_queue' && ticket.status === 'supervisor_review') {
+    if (targetStatus === 'billing_queue') {
       updateData.reviewedById = req.user!.userId;
       updateData.reviewedAt = new Date();
       updateData.autoApproved = false;
@@ -1180,10 +1262,18 @@ ticketsRouter.post('/:id/transition', async (req: Request, res: Response, next) 
       };
     }
 
-    const updated = await prisma.serviceTicket.update({
-      where: { id: ticket.id },
-      data: updateData,
+    if (targetStatus === 'billing_queue') await assertBillingEligible(ticket);
+    const changed = await prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM service_tickets WHERE id = ${ticket.id} FOR UPDATE`;
+      if (targetStatus === 'billing_queue') {
+        const context = await loadTicketAllocation(tx, ticket.id);
+        updateData.billingApprovalAllocation = approveTicketAllocation(context.profiles, context.ticket,
+          req.body.approvalAllocations, req.body.approvalPlanVersion, req.user!.userId, req.body.splitBilling ?? false);
+      }
+      return tx.serviceTicket.updateMany({ where: { id: ticket.id, status: ticket.status }, data: updateData });
     });
+    if (changed.count !== 1) throw new AppError(409, 'Ticket changed; reload before transitioning');
+    const updated = (await prisma.serviceTicket.findUnique({ where: { id: ticket.id } }))!;
 
     // Side effect: when a ticket lands in supervisor_review, run the
     // deterministic rules engine and cache the signal on the row.
@@ -1243,6 +1333,7 @@ ticketsRouter.post('/bulk-transition', async (req: Request, res: Response, next)
       throw new AppError(400, 'ticketIds array required');
     }
     if (!targetStatus) throw new AppError(400, 'targetStatus required');
+    if (targetStatus === 'in_progress' && (typeof reason !== 'string' || !reason.trim())) throw new AppError(400, 'A rejection reason is required');
     if (ticketIds.length > 500) {
       throw new AppError(400, 'Bulk transition limited to 500 tickets per call');
     }
@@ -1270,6 +1361,11 @@ ticketsRouter.post('/bulk-transition', async (req: Request, res: Response, next)
         continue;
       }
 
+      if (targetStatus === 'billing_queue') {
+        const error = inspectionBillingError(ticket, await prisma.ticketLineItem.count({ where: { ticketId: ticket.id } }));
+        if (error) { results.push({ ticketId, success: false, error }); continue; }
+      }
+
       if (role === 'field_tech' && ticket.assignedTechId !== userId) {
         results.push({ ticketId, success: false, error: 'Can only transition your own tickets' });
         continue;
@@ -1279,13 +1375,12 @@ ticketsRouter.post('/bulk-transition', async (req: Request, res: Response, next)
         results.push({
           ticketId,
           success: false,
-          error: `Cannot transition from ${ticket.status} to ${targetStatus}`,
+          error: transitionDeniedMessage(ticket.status, targetStatus as TicketStatus),
         });
         continue;
       }
 
-      // Deployment-rental gate (same rule as the single transition): a rental/
-      // on-site job can't be bulk-approved into billing without a rental attached.
+      // Same rental requirement as single approval; standalone D4 services are exempt.
       if (isBillingWardStatus(targetStatus) && !ticket.linkedRentalAgreementId && needsRental(ticket)) {
         results.push({
           ticketId,
@@ -1337,7 +1432,7 @@ ticketsRouter.post('/bulk-transition', async (req: Request, res: Response, next)
       try {
         const updateData: any = { status: targetStatus };
 
-        if (targetStatus === 'billing_queue' && ticket.status === 'supervisor_review') {
+        if (targetStatus === 'billing_queue') {
           updateData.reviewedById = userId;
           updateData.reviewedAt = new Date();
           updateData.autoApproved = false;
@@ -1348,7 +1443,20 @@ ticketsRouter.post('/bulk-transition', async (req: Request, res: Response, next)
           updateData.rejectionReason = reason || null;
         }
 
-        await prisma.serviceTicket.update({ where: { id: ticketId }, data: updateData });
+        if (targetStatus === 'billing_queue') {
+          const full = await prisma.serviceTicket.findUnique({ where: { id: ticketId } });
+          await assertBillingEligible(full);
+        }
+        const changed = await prisma.$transaction(async tx => {
+          await tx.$queryRaw`SELECT id FROM service_tickets WHERE id = ${ticketId} FOR UPDATE`;
+          if (targetStatus === 'billing_queue') {
+            const context = await loadTicketAllocation(tx, ticketId);
+            updateData.billingApprovalAllocation = approveTicketAllocation(context.profiles, context.ticket,
+              undefined, undefined, userId);
+          }
+          return tx.serviceTicket.updateMany({ where: { id: ticketId, status: ticket.status }, data: updateData });
+        });
+        if (changed.count !== 1) throw new AppError(409, 'Ticket changed; reload before transitioning');
 
         await createAuditLog({
           userId,
@@ -1407,10 +1515,8 @@ ticketsRouter.post('/bulk-transition', async (req: Request, res: Response, next)
 ticketsRouter.post('/:id/attach-rental', async (req: Request, res: Response, next) => {
   try {
     const role = req.user!.role as UserRole;
-    const canAttach =
-      role === 'field_super' || role === 'dispatch' || role === 'billing_ar' ||
-      role === 'boss' || role === 'platform_admin';
-    if (!canAttach) throw new AppError(403, 'Insufficient permissions to attach a rental');
+    const allowedRoles: UserRole[] = ['field_super', 'dispatch', 'billing_ar', 'ar_supervisor', 'boss', 'platform_admin'];
+    if (!allowedRoles.includes(role)) throw new AppError(403, permissionDeniedMessage('attach a rental', allowedRoles));
 
     const { rentalAgreementId } = req.body as { rentalAgreementId?: string };
     if (!rentalAgreementId) throw new AppError(400, 'rentalAgreementId required');
@@ -1491,26 +1597,7 @@ ticketsRouter.get('/:id/line-items', async (req: Request, res: Response, next) =
 // POST /api/tickets/:id/line-items
 ticketsRouter.post('/:id/line-items', requirePermission('tickets:create'), async (req: Request, res: Response, next) => {
   try {
-    // Auto-assign line number
-    const lastItem = await prisma.ticketLineItem.findFirst({
-      where: { ticketId: req.params.id as string },
-      orderBy: { lineNumber: 'desc' },
-      select: { lineNumber: true },
-    });
-    const lineNumber = (lastItem?.lineNumber ?? 0) + 1;
-
-    const item = await prisma.ticketLineItem.create({
-      data: {
-        ...req.body,
-        ticketId: req.params.id as string,
-        lineNumber,
-        sortOrder: req.body.sortOrder ?? lineNumber,
-      },
-    });
-
-    // Recalculate ticket totals
-    await recalcTicketTotals(req.params.id as string);
-
+    const item = await mutateTicketLine(req.params.id as string, 'create', undefined, req.body, req.user!);
     res.status(201).json(item);
   } catch (err) {
     next(err);
@@ -1520,13 +1607,7 @@ ticketsRouter.post('/:id/line-items', requirePermission('tickets:create'), async
 // PUT /api/tickets/:ticketId/line-items/:id
 ticketsRouter.put('/:ticketId/line-items/:id', async (req: Request, res: Response, next) => {
   try {
-    const item = await prisma.ticketLineItem.update({
-      where: { id: req.params.id as string },
-      data: req.body,
-    });
-
-    await recalcTicketTotals(req.params.ticketId as string);
-
+    const item = await mutateTicketLine(req.params.ticketId as string, 'update', req.params.id as string, req.body, req.user!);
     res.json(item);
   } catch (err) {
     next(err);
@@ -1536,8 +1617,7 @@ ticketsRouter.put('/:ticketId/line-items/:id', async (req: Request, res: Respons
 // DELETE /api/tickets/:ticketId/line-items/:id
 ticketsRouter.delete('/:ticketId/line-items/:id', async (req: Request, res: Response, next) => {
   try {
-    await prisma.ticketLineItem.delete({ where: { id: req.params.id as string } });
-    await recalcTicketTotals(req.params.ticketId as string);
+    const item = await mutateTicketLine(req.params.ticketId as string, 'delete', req.params.id as string, req.body, req.user!);
     res.status(204).send();
   } catch (err) {
     next(err);
@@ -1566,32 +1646,36 @@ ticketsRouter.delete('/:id',
       });
       if (!ticket) throw new AppError(404, 'Ticket not found');
 
-      // Delete all children in dependency order
-      // Assembly parts link through lineItems, not directly to ticket
-      const lineItemIds = (await prisma.ticketLineItem.findMany({
-        where: { ticketId },
-        select: { id: true },
-      })).map(li => li.id);
-      if (lineItemIds.length > 0) {
-        await prisma.ticketAssemblyPartsUsed.deleteMany({
-          where: { ticketLineItemId: { in: lineItemIds } },
+      assertDraftDeletion(await editableTicket(ticketId, req.user!));
+      await prisma.$transaction(async tx => {
+        // Delete all children in dependency order
+        // Assembly parts link through lineItems, not directly to ticket
+        const lineItemIds = (await tx.ticketLineItem.findMany({
+          where: { ticketId },
+          select: { id: true },
+        })).map(li => li.id);
+        if (lineItemIds.length > 0) {
+          await tx.ticketAssemblyPartsUsed.deleteMany({
+            where: { ticketLineItemId: { in: lineItemIds } },
+          });
+        }
+        await tx.fitTestRecord.deleteMany({ where: { ticketId } });
+        await tx.ihTestRecord.deleteMany({ where: { ticketId } });
+        await tx.trainingRosterRecord.deleteMany({ where: { ticketId } });
+        await tx.airSystemInspection.deleteMany({ where: { ticketId } });
+        await tx.ticketAttachment.deleteMany({ where: { ticketId } });
+        await tx.ticketLineItem.deleteMany({ where: { ticketId } });
+
+        // Clear any invoice line items referencing this ticket
+        await tx.invoiceLineItem.updateMany({
+          where: { sourceTicketId: ticketId },
+          data: { sourceTicketId: null, sourceTicketNumber: null },
         });
-      }
-      await prisma.fitTestRecord.deleteMany({ where: { ticketId } });
-      await prisma.ihTestRecord.deleteMany({ where: { ticketId } });
-      await prisma.trainingRosterRecord.deleteMany({ where: { ticketId } });
-      await prisma.airSystemInspection.deleteMany({ where: { ticketId } });
-      await prisma.ticketAttachment.deleteMany({ where: { ticketId } });
-      await prisma.ticketLineItem.deleteMany({ where: { ticketId } });
 
-      // Clear any invoice line items referencing this ticket
-      await prisma.invoiceLineItem.updateMany({
-        where: { sourceTicketId: ticketId },
-        data: { sourceTicketId: null, sourceTicketNumber: null },
+        // Delete the ticket itself
+        await tx.serviceTicket.delete({ where: { id: ticketId, status: 'draft' } });
+
       });
-
-      // Delete the ticket itself
-      await prisma.serviceTicket.delete({ where: { id: ticketId } });
 
       console.log(`[DELETE] ${req.user!.role} hard-deleted ticket ${ticket.ticketNumber || ticketId}`);
 
@@ -1677,6 +1761,8 @@ ticketsRouter.post('/:id/void',
           })
         : [];
 
+      const fullTicket = await prisma.serviceTicket.findUnique({ where: { id: ticketId } });
+      if (fullTicket?.qbInvoiceTxnId || fullTicket?.qbInvoiceListId) throw new AppError(409, 'Correct the QuickBooks invoice before voiding this ticket');
       const retracted: Array<{ invoiceNumber: string }> = [];
       const locked: Array<{ invoiceNumber: string; status: string; qbNumber: string | null }> = [];
 
@@ -1700,12 +1786,7 @@ ticketsRouter.post('/:id/void',
           }
 
           if (hitQb || qbwcInFlight) {
-            locked.push({
-              invoiceNumber: inv.invoiceNumber,
-              status: inv.status,
-              qbNumber: inv.qbInvoiceNumber || inv.qbSalesOrderNumber || null,
-            });
-            continue;
+            throw new AppError(409, `Invoice ${inv.invoiceNumber} is locked in accounting; correct the invoice before voiding its ticket`);
           }
 
           // Retract: void the invoice, append the reason, skip any un-sent QBWC
@@ -1933,20 +2014,3 @@ ticketsRouter.patch('/:id/dev-override-status', async (req: Request, res: Respon
 
   res.json(updated);
 });
-
-// Recalculate ticket subtotal/total from line items
-async function recalcTicketTotals(ticketId: string) {
-  const items = await prisma.ticketLineItem.findMany({
-    where: { ticketId },
-    select: { total: true },
-  });
-
-  const subtotal = items.reduce((sum, item) => {
-    return sum + (item.total ? Number(item.total) : 0);
-  }, 0);
-
-  await prisma.serviceTicket.update({
-    where: { id: ticketId },
-    data: { subtotal, total: subtotal }, // tax added later by QB
-  });
-}

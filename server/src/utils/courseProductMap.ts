@@ -9,8 +9,9 @@
  * Actual prices come from the Product table (imported from QB CSV).
  */
 
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { findCourse } from '../services/courseCatalog.js';
+import { AppError } from '../middleware/errorHandler.js';
 
 // Static fallback map: courseType slug → QB part number
 const COURSE_TO_PART: Record<string, string> = {
@@ -28,23 +29,8 @@ const COURSE_TO_PART: Record<string, string> = {
   other:                    'Misc',
 };
 
-// Fallback prices if product not found in DB (should rarely happen after CSV import)
-const FALLBACK_PRICES: Record<string, number> = {
-  h2s_clear:                175,
-  pec_safeland:             199,
-  first_aid_cpr:            125,
-  safety_meeting:           0,
-  man_down_rescue:          200,
-  fex_safety_1hr:           150,
-  h2s_pec_combo:            250,
-  h2s_awareness_1hr:        125,
-  confined_space_4hr:       500,
-  defensive_driving_4hr:    200,
-  bloodborne_pathogens_1hr: 100,
-  other:                    0,
-};
-
 export interface CourseProductInfo {
+  billingBasis?: 'per_student' | 'per_class';
   productId: string | null;
   partNumber: string;
   name: string;
@@ -55,11 +41,13 @@ export interface CourseProductInfo {
 
 /**
  * Look up the Product for a given course type.
- * Returns product info with pricing from the DB, falling back to hardcoded defaults.
+ * Billing requires a configured product and price. A missing price is not a
+ * free class; explicit zero prices remain valid.
  */
 export async function getProductForCourse(courseType: string): Promise<CourseProductInfo> {
   const course = await findCourse(courseType);
-  const partNumber = course?.qbPartNumber || COURSE_TO_PART[courseType] || 'Misc';
+  const partNumber = course?.qbPartNumber || COURSE_TO_PART[courseType];
+  if (!partNumber) throw new AppError(400, `No billing product is mapped for course "${courseType}". Configure the course before generating invoices.`);
 
   // Try to find in DB
   const product = await prisma.product.findFirst({
@@ -74,30 +62,24 @@ export async function getProductForCourse(courseType: string): Promise<CoursePro
     },
   });
 
-  if (product) {
-    const price = product.defaultSellPrice
-      ? parseFloat(product.defaultSellPrice.toString())
-      : (FALLBACK_PRICES[courseType] ?? 0);
+  if (!product) throw new AppError(400, `Billing product "${partNumber}" for course "${courseType}" was not found. Configure the course before generating invoices.`);
+  if (product.defaultSellPrice == null) throw new AppError(400, `No price is configured for course "${courseType}" (product ${partNumber}). Set its price before generating invoices; a free course needs an explicit zero price.`);
+  const price = Number(product.defaultSellPrice.toString());
+  if (!Number.isFinite(price) || price < 0) throw new AppError(400, `Invalid price for course "${courseType}" (product ${partNumber}). Configure a non-negative price before generating invoices.`);
 
-    return {
-      productId: product.id,
-      partNumber: product.partNumber,
-      name: product.name,
-      price,
-      qbItemFullName: product.qbItemFullName,
-      qbItemListId: product.qbItemListId,
-    };
-  }
-
-  // Product not in DB — return fallback
   return {
-    productId: null,
-    partNumber,
-    name: course?.name ?? courseType.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
-    price: FALLBACK_PRICES[courseType] ?? 0,
-    qbItemFullName: null,
-    qbItemListId: null,
+    billingBasis: trainingBillingBasis(course?.code || courseType),
+    productId: product.id,
+    partNumber: product.partNumber,
+    name: product.name,
+    price,
+    qbItemFullName: product.qbItemFullName,
+    qbItemListId: product.qbItemListId,
   };
+}
+
+export function trainingBillingBasis(course: string): 'per_student' | 'per_class' {
+  return course.trim().toLowerCase().replace(/\s+/g, '_') === 'safety_meeting' ? 'per_class' : 'per_student';
 }
 
 /**

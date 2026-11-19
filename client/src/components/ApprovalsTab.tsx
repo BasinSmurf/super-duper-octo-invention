@@ -1,3 +1,5 @@
+import type { BillingApprovalPlan } from '@/components/BillingApprovalSplitDialog'
+import { BulkApprovalExceptions, type ApprovalException } from '@/components/BulkApprovalExceptions'
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '@/lib/api'
@@ -94,6 +96,7 @@ export function ApprovalsTab() {
   const [summary, setSummary] = useState<ReviewQueueSummary | null>(null)
   const [loading, setLoading] = useState(true)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
+  const [approvalExceptions, setApprovalExceptions] = useState<ApprovalException[]>([])
 
   const [verdictFilter, setVerdictFilter] = useState<VerdictFilter>('all')
   const [techFilter, setTechFilter] = useState<string>('')
@@ -214,34 +217,24 @@ export function ApprovalsTab() {
   // ─── Bulk actions ──────────────────────────────────────────
 
   async function handleBulkApprove() {
-    if (selected.size === 0) return
+    if (!selected.size || actionLoading) return
     const ticketIds = Array.from(selected)
-
     setActionLoading('approve')
     try {
-      const result = await api.post<{
-        results: Array<{ ticketId: string; success: boolean; error?: string }>
-        succeeded: number
-        failed: number
-      }>('/tickets/bulk-transition', {
-        ticketIds,
-        targetStatus: 'billing_queue',
-      })
-
-      if (result) {
-        if (result.failed > 0) {
-          const firstError = result.results.find(r => !r.success)
-          alert(
-            `Approved ${result.succeeded}/${ticketIds.length}. ${result.failed} failed.\n\nFirst error: ${firstError?.error || 'unknown'}`,
-          )
+      const result = await api.post<{ results: { ticketId: string; success: boolean; error?: string }[] }>('/tickets/bulk-transition', { ticketIds, targetStatus: 'billing_queue' })
+      const exceptions: ApprovalException[] = []
+      for (const item of result.results) {
+        if (item.success) setSelected(previous => { const next = new Set(previous); next.delete(item.ticketId); return next })
+        else {
+          let plan: BillingApprovalPlan | undefined
+          try { plan = await api.get<BillingApprovalPlan>(`/tickets/${item.ticketId}/approval-allocation`) } catch { /* Explain the original failure in the single review. */ }
+          exceptions.push({ ticketId: item.ticketId, ticketNumber: tickets.find(t => t.id === item.ticketId)?.ticketNumber || item.ticketId, error: item.error || 'Approval needs review', plan })
         }
-        setSelected(new Set())
-        await load()
       }
-    } catch (err: any) {
-      alert(`Failed to bulk approve: ${err?.message || 'unknown error'}`)
-    }
-    setActionLoading(null)
+      setApprovalExceptions(exceptions)
+      await load()
+    } catch (err) { alert(err instanceof Error ? err.message : 'Bulk approval failed') }
+    finally { setActionLoading(null) }
   }
 
   async function handleBulkReject() {
@@ -350,6 +343,13 @@ export function ApprovalsTab() {
 
   return (
     <div>
+      {approvalExceptions.length > 0 && <BulkApprovalExceptions exceptions={approvalExceptions}
+        onClose={() => { setApprovalExceptions([]); void load() }}
+        onApproved={ticketId => {
+          setApprovalExceptions(previous => previous.filter(item => item.ticketId !== ticketId))
+          setSelected(previous => { const next = new Set(previous); next.delete(ticketId); return next })
+          void load()
+        }} />}
       {/* Warmup notice — dismissible, localStorage-backed */}
       {!warmupDismissed && (
         <div className="mb-4 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 flex items-start gap-3">
@@ -686,6 +686,7 @@ export function ApprovalsTab() {
                                     Ticket customer is <span className="font-semibold">{siteMismatch?.selectedCustomerName || t.company.name}</span>;
                                     site currently belongs to <span className="font-semibold">{siteMismatch?.currentOperatorName || 'another customer'}</span>.
                                   </p>
+                                  <p className="mb-2 text-xs text-amber-800">Assign Site also resolves pending mismatches on other tickets for this site.</p>
                                   <div className="grid gap-2 sm:grid-cols-[1fr_auto_auto]">
                                     <input
                                       type="text"

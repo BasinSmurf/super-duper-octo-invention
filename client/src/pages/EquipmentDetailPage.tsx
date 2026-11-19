@@ -6,6 +6,9 @@ import { cn } from '@/lib/cn'
 import { hasPermission } from '@/lib/permissions'
 import { formatCalendarDateNumeric, calendarDateKey, localDateKey } from '@/lib/dates'
 import { CustomerSearch } from '@/components/CustomerSearch'
+import { EquipmentProductPicker } from '@/components/EquipmentProductPicker'
+import { ScbaAssemblyFields, type ScbaAssemblyDraft } from '@/components/ScbaAssemblyFields'
+import { ScbaAssemblyEditor } from '@/components/ScbaAssemblyEditor'
 import {
   ArrowLeft, Wrench, Layers, Pencil, X, Check, Loader2, Trash2,
   Search, Plus, Package, ChevronRight, ChevronDown, Calendar, MapPin,
@@ -26,6 +29,8 @@ interface NovaraScheduleState {
 interface EquipmentDetail {
   id: string
   serialNumber: string
+  customData?: { scba?: { durationMinutes: 5 | 30; posiCheckDate: string | null } }
+  childEquipment?: Array<{ serialNumber: string; lastCalibrationDate: string | null; customData?: { scbaComponent?: string } | null }>
   ownership: string
   status: string
   productId: string
@@ -132,6 +137,14 @@ function formatDate(d: string | null): string {
 
 const toDateInput = calendarDateKey
 
+function scbaDraft(equipment: EquipmentDetail): ScbaAssemblyDraft {
+  const regulator = equipment.childEquipment?.find(c => c.customData?.scbaComponent === 'regulator')
+  const tank = equipment.childEquipment?.find(c => c.customData?.scbaComponent === 'tank')
+  return { durationMinutes: equipment.customData?.scba?.durationMinutes || 5, caseId: equipment.serialNumber,
+    regulatorSerial: regulator?.serialNumber || '', tankSerial: tank?.serialNumber || '',
+    posiCheckDate: equipment.customData?.scba?.posiCheckDate || '', hydroDate: toDateInput(tank?.lastCalibrationDate || null) }
+}
+
 export function EquipmentDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -168,6 +181,10 @@ export function EquipmentDetailPage() {
         ownership: equipment.ownership,
         status: equipment.status,
         conditionNotes: equipment.conditionNotes || '',
+        product: equipment.product,
+        productId: equipment.productId,
+        scbaMode: equipment.customData?.scba?.durationMinutes ? String(equipment.customData.scba.durationMinutes) : 'catalog',
+        scba: scbaDraft(equipment),
       })
     } else if (section === 'dates') {
       setDraft({
@@ -204,6 +221,7 @@ export function EquipmentDetailPage() {
         payload.ownership = draft.ownership
         payload.status = draft.status
         payload.conditionNotes = draft.conditionNotes || null
+        payload.productId = draft.productId
       } else if (editingSection === 'dates') {
         for (const f of ['calibrationDueDate', 'lastCalibrationDate', 'bumpTestDueDate', 'purchaseDate', 'warrantyExpiry']) {
           payload[f] = draft[f] ? new Date(draft[f]).toISOString() : null
@@ -214,7 +232,9 @@ export function EquipmentDetailPage() {
         payload.currentWellId = draft.currentWellId || null
         payload.currentFacilityId = draft.currentFacilityId || null
       }
-      await api.put(`/equipment/${id}`, payload)
+      if (editingSection === 'info' && draft.scbaMode !== 'catalog') {
+        await api.put(`/equipment/${id}/scba`, { ...payload, ...draft.scba, durationMinutes: Number(draft.scbaMode) })
+      } else await api.put(`/equipment/${id}`, payload)
       setEditingSection(null)
       await loadEquipment()
     } catch (err: any) {
@@ -328,17 +348,28 @@ export function EquipmentDetailPage() {
         >
           {editingSection === 'info' ? (
             <div className="grid grid-cols-2 gap-4">
-              <Field label="Serial Number">
+              {draft.scbaMode === 'catalog' && <Field label="Serial Number">
                 <input
                   type="text"
                   value={draft.serialNumber || ''}
-                  onChange={e => setDraft(d => ({ ...d, serialNumber: e.target.value }))}
+                  onChange={e => setDraft(d => ({ ...d, serialNumber: e.target.value, scba: { ...d.scba, caseId: e.target.value } }))}
                   className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none font-mono"
                 />
-              </Field>
+              </Field>}
               <Field label="Product">
-                <p className="text-sm text-slate-700 py-2">{equipment.product.partNumber} — {equipment.product.name}</p>
+                <select aria-label="Product type" value={draft.scbaMode} onChange={e => setDraft(d => ({ ...d, scbaMode: e.target.value }))}
+                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg mb-2">
+                  <option value="catalog">Catalog product</option>
+                  <option value="5">SCBA 5 min Pack — Assembly</option>
+                  <option value="30">SCBA 30 min Pack — Assembly</option>
+                </select>
+                {draft.scbaMode === 'catalog' && <EquipmentProductPicker value={draft.product}
+                  onChange={product => setDraft(d => ({ ...d, product, productId: product.id,
+                    scbaMode: product.partNumber === 'SP-SCBA-5-PACK' ? '5' : product.partNumber === 'SP-SCBA-30-PACK' ? '30' : 'catalog' }))} />}
               </Field>
+              {draft.scbaMode !== 'catalog' && <div className="col-span-2">
+                <ScbaAssemblyFields value={draft.scba} onChange={scba => setDraft(d => ({ ...d, scba, serialNumber: scba.caseId }))} disabled={saving} />
+              </div>}
               {isMonitor(equipment.product.category) && (
                 <Field label="Safe Core Serial">
                   <input
@@ -381,7 +412,7 @@ export function EquipmentDetailPage() {
             </div>
           ) : (
             <div className="grid grid-cols-2 gap-3">
-              <InfoRow label="Serial Number" value={equipment.serialNumber} mono />
+              <InfoRow label={equipment.customData?.scba ? 'Case ID' : 'Serial Number'} value={equipment.serialNumber} mono />
               <InfoRow label="Part Number" value={equipment.product.partNumber} mono />
               <InfoRow label="Product" value={equipment.product.name} />
               <InfoRow label="Category" value={equipment.product.category.replace(/_/g, ' ')} />
@@ -400,6 +431,7 @@ export function EquipmentDetailPage() {
         </SectionCard>
 
         {/* Section 2: Dates */}
+        {equipment.customData?.scba && <ScbaAssemblyEditor equipmentId={equipment.id} initial={scbaDraft(equipment)} canEdit={canEdit} onSaved={loadEquipment} />}
         <SectionCard
           title="Dates"
           icon={<Calendar className="w-4 h-4" />}
@@ -412,7 +444,7 @@ export function EquipmentDetailPage() {
         >
           {(() => {
             const cylinder = isCylinder(equipment.product)
-            const dueLabel = cylinder ? 'Hydro/UE Due' : 'Calibration Due'
+            const dueLabel = equipment.customData?.scba ? 'Posi-check Due' : cylinder ? 'Hydro/UE Due' : 'Calibration Due'
             const lastLabel = cylinder ? 'Last Hydro/UE' : 'Last Calibration'
             return editingSection === 'dates' ? (
               <div className="grid grid-cols-2 gap-4">
@@ -483,7 +515,7 @@ export function EquipmentDetailPage() {
 
         {/* Section 4: Assembly Contents */}
         {equipment.product.isAssembly && (
-          <AssemblySection equipmentId={equipment.id} onRefresh={loadEquipment} canEdit={canEdit} />
+          <AssemblySection key={equipment.childEquipment?.map(c => c.serialNumber).join('|')} equipmentId={equipment.id} onRefresh={loadEquipment} canEdit={canEdit} />
         )}
 
         {/* Section 5: Service History */}

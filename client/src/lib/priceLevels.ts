@@ -264,27 +264,6 @@ export async function priceLineByProductId(
 }
 
 /**
- * The stamp we persist on a priced line (TicketLineItem.customData.priceLevel /
- * the shop item's billing chunk). Small on purpose: enough for a screen or a
- * dispute to answer "where did this number come from", nothing a calculation
- * would ever be tempted to read back.
- */
-export interface PriceLevelStamp {
-  name: string
-  listRate: number | null
-  contractRate: number
-}
-
-export function stampFor(pricing: LinePricing): PriceLevelStamp | null {
-  if (!pricing.priceLevelName || pricing.rate == null) return null
-  return {
-    name: pricing.priceLevelName,
-    listRate: pricing.listRate,
-    contractRate: pricing.rate,
-  }
-}
-
-/**
  * The minimum a line has to look like to be re-priced.
  *
  * Structural rather than an import of `LineItem`, so this module stays free of
@@ -335,8 +314,14 @@ export async function repriceLines<T extends PriceableLine>(
       line.listRate ?? line.rate ?? null,
     )
 
-    const wasOverridden = line.contractRate != null && line.rate != null
-      && Math.abs(line.rate - line.contractRate) > 0.005
+    // "Typed over" means the rate differs from the price this line was last
+    // given — its contract rate, or list when no contract applied. Checking
+    // the contract rate alone missed every customer without a price level, so
+    // a hand-edited rate snapped back to list each time the billing step
+    // remounted (stepping back to an earlier screen and returning).
+    const pricedAt = line.contractRate ?? line.listRate ?? null
+    const wasOverridden = pricedAt != null && line.rate != null
+      && Math.abs(line.rate - pricedAt) > 0.005
     const nextContract = pricing.priceLevelName ? pricing.rate : null
     const nextRate = wasOverridden ? (line.rate ?? null) : pricing.rate
 

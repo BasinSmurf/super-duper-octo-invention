@@ -54,18 +54,19 @@ function snapshotFor(
 
 describe('toBlueLionChecklist — the mapping', () => {
   it('maps true/false/null onto pass/fail/unanswered', () => {
-    const required = getRequiredShopKeys(FEX);
-    const snap = snapshotFor(FEX, { [required[0]]: true, [required[1]]: false });
+    // Exercise all three states without assuming the catalog has three required checks.
+    const snap = snapshotFor(FEX, { fex_shell_ok: true, all_components_clean: false });
     const mapped = toBlueLionChecklist(snap);
 
     expect(mapped.status).toBe('ok');
     if (mapped.status !== 'ok') return;
 
     const byKey = new Map(mapped.checklist.map((c) => [c.key, c.result]));
-    expect(byKey.get(required[0])).toBe('pass');
-    expect(byKey.get(required[1])).toBe('fail');
+    expect(byKey.get('fex_shell_ok')).toBe('pass');
+    expect(byKey.get('all_components_clean')).toBe('fail');
     // Never ticked at all — a real outcome, not a silent 'fail'.
-    expect(byKey.get(required[2])).toBe('unanswered');
+    expect(byKey.get('fex_pin_seal')).toBe('unanswered');
+    expect(mapped.checklist.find(c => c.key === 'fex_pin_seal')?.required).toBe(false);
   });
 
   it('never emits a boolean where BlueLion wants a string', () => {

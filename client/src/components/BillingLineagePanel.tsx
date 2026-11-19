@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { ArrowUpRight, Loader2, AlertTriangle, RotateCw } from 'lucide-react'
 import { api, ApiError } from '@/lib/api'
+import { LineageDownloadButton, type LineageTicket } from '@/components/LineageDownloadButton'
 import { BillingProvenancePill, formatDateShort, type BillingObservationLite } from '@/components/BillingProvenancePill'
 import { BillingReadinessEditor, type BillingReadiness } from '@/components/BillingReadinessEditor'
 
@@ -36,6 +37,8 @@ interface Submission {
 }
 
 interface LineageResponse {
+  tickets: LineageTicket[]
+  relatedShopOrders?: { id: string; workOrderNumber: string; status: string }[]
   resolvedVia: string
   docRefs: DocRef[]
   lines: DocLine[]
@@ -154,6 +157,10 @@ export function BillingLineagePanel({ identifier, readiness }: Props) {
         />
       )}
 
+      {!!data.relatedShopOrders?.length && <div className="space-y-1 text-xs"><span className="font-medium">Inspection → shop work</span>
+        {data.relatedShopOrders.map(order => <Link key={order.id} to={`/shop/${order.id}`} className="block text-blue-700 underline">{order.workOrderNumber} · {order.status.replace(/_/g, ' ')}</Link>)}
+      </div>}
+      <LineageDownloadButton key={identifier} tickets={data.tickets ?? data.lines} />
       {data.docRefs.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           {data.docRefs.map((d) =>

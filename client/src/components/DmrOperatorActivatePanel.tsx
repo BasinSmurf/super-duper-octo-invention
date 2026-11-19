@@ -1,8 +1,8 @@
+import { DmrAmbiguityChoices } from '@/components/DmrAmbiguityChoices'
 import { useEffect, useRef, useState } from 'react'
 import { api, ApiError } from '@/lib/api'
 import {
   Factory, Search, Loader2, Check, ChevronDown, ChevronUp, Zap, Building2, ArrowRight, AlertTriangle,
-  Link2, PlusCircle,
 } from 'lucide-react'
 
 interface DmrOperator { operatorName: string; unactivatedCount: number }
@@ -321,35 +321,7 @@ export function DmrOperatorActivatePanel() {
                   return (
                     <div key={a.dmrWellId} className="bg-white border border-amber-100 rounded-lg p-2.5">
                       <p className="text-xs font-medium text-slate-800">{a.wellName || '(unnamed)'} <span className="text-slate-400 font-mono">{a.apiNumber}</span></p>
-                      <div className="mt-1.5 space-y-1">
-                        {a.candidates.map(c => {
-                          const isChosen = chosen?.action === 'link' && chosen.wellId === c.id
-                          return (
-                            <button key={c.id} onClick={() => pickResolution(a.dmrWellId, { action: 'link', wellId: c.id })}
-                              className={`w-full flex items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs border ${
-                                isChosen ? 'border-blue-400 bg-blue-50' : 'border-slate-200 hover:border-slate-300'
-                              }`}>
-                              <span className="min-w-0 truncate">
-                                <span className="font-medium text-slate-800">{c.wellName}</span>
-                                {c.exact && <span className="ml-1 text-green-600 font-medium">exact name match</span>}
-                                <span className="text-slate-400"> · {c.padName || c.fieldName || 'unattached'} · {c.operatorName || 'no operator'}</span>
-                              </span>
-                              <span className={`inline-flex items-center gap-1 shrink-0 ${isChosen ? 'text-blue-600' : 'text-slate-400'}`}>
-                                <Link2 className="w-3 h-3" /> Same well
-                              </span>
-                            </button>
-                          )
-                        })}
-                        <button onClick={() => pickResolution(a.dmrWellId, { action: 'create' })}
-                          className={`w-full flex items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs border ${
-                            chosen?.action === 'create' ? 'border-blue-400 bg-blue-50' : 'border-slate-200 hover:border-slate-300'
-                          }`}>
-                          <span className="text-slate-600">None of these — different well</span>
-                          <span className={`inline-flex items-center gap-1 shrink-0 ${chosen?.action === 'create' ? 'text-blue-600' : 'text-slate-400'}`}>
-                            <PlusCircle className="w-3 h-3" /> Create new
-                          </span>
-                        </button>
-                      </div>
+                      <DmrAmbiguityChoices candidates={a.candidates} chosen={chosen} onChange={resolution => pickResolution(a.dmrWellId, resolution)} />
                     </div>
                   )
                 })}

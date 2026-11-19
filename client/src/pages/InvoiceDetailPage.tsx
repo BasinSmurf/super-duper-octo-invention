@@ -1,4 +1,7 @@
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { rentalSweepLines } from '@/lib/rentalSweepLines'
+import { InvoiceCustomerAttribution } from '@/components/InvoiceCustomerAttribution'
+import { EnverusWarnings } from '@/components/EnverusWarnings'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/cn'
@@ -68,15 +71,20 @@ interface TaxRate {
 }
 
 interface InvoiceDetail {
+  billingProfileError?: string | null
   id: string
+  qbExportError?: string | null
   invoiceNumber: string
   status: string
   sourceType: string
   companyId: string
   companyName: string
+  qbCustomerOverride?: string | null
   poNumber: string | null
   afeNumber: string | null
   costCenter: string | null
+  buyerSiteUuid?: string | null
+  buyerDepartment?: string | null
   invoiceDate: string
   dueDate: string | null
   periodStart: string | null
@@ -109,6 +117,7 @@ interface InvoiceDetail {
   createdAt: string
   updatedAt: string
   company?: {
+    taxExempt?: boolean
     id: string
     name: string
     billingProfiles?: Array<{
@@ -123,6 +132,12 @@ interface InvoiceDetail {
       defaultAfeNumber: string | null
       defaultCostCenter: string | null
       defaultPoNumber: string | null
+      requiresPo?: boolean
+      requiresAfe?: boolean
+      requiresCostCenter?: boolean
+      requiresBuyerSite?: boolean
+      defaultBuyerDepartment?: string | null
+      requiresBuyerDepartment?: boolean
       defaultServiceApprover: string | null
       defaultPriceBookNumber: string | null
       enverusReceiptMode: string | null
@@ -152,7 +167,7 @@ const STATUS_CONFIG: Record<string, { label: string; color: string; bgColor: str
   approved: { label: 'Approved', color: 'text-blue-700', bgColor: 'bg-blue-100', icon: CheckCircle2 },
   awaiting_signature: { label: 'Awaiting Signature', color: 'text-yellow-700', bgColor: 'bg-yellow-100', icon: FileText },
   queued: { label: 'QB Queued', color: 'text-amber-700', bgColor: 'bg-amber-100', icon: Clock },
-  so_created: { label: 'Sales Order Created', color: 'text-purple-700', bgColor: 'bg-purple-100', icon: Send },
+  so_created: { label: 'QB Accepted · Sales Order', color: 'text-purple-700', bgColor: 'bg-purple-100', icon: Send },
   invoiced: { label: 'Invoiced', color: 'text-green-700', bgColor: 'bg-green-100', icon: DollarSign },
   sent: { label: 'Sent', color: 'text-emerald-700', bgColor: 'bg-emerald-100', icon: Send },
   paid: { label: 'Paid', color: 'text-emerald-800', bgColor: 'bg-emerald-200', icon: CheckCircle2 },
@@ -179,6 +194,12 @@ export function InvoiceDetailPage() {
   const [editing, setEditing] = useState(false)
   const [editLines, setEditLines] = useState<EditableLineItem[]>([])
   const [saving, setSaving] = useState(false)
+  const [pdfGenerating, setPdfGenerating] = useState(false)
+  const [pdfDownload, setPdfDownload] = useState<{ url: string; fileName: string; invoiceId: string } | null>(null)
+  const [pdfError, setPdfError] = useState('')
+  const pdfRequest = useRef<AbortController | null>(null)
+  useEffect(() => () => { pdfRequest.current?.abort() }, [id])
+  useEffect(() => () => { if (pdfDownload) URL.revokeObjectURL(pdfDownload.url) }, [pdfDownload])
   const [taxRates, setTaxRates] = useState<TaxRate[]>([])
   const [updatingTax, setUpdatingTax] = useState(false)
   const [queueErrors, setQueueErrors] = useState<{ customer?: string; unmappedLines: string[] } | null>(null)
@@ -290,14 +311,42 @@ export function InvoiceDetailPage() {
 
   async function handleReject() {
     if (!invoice) return
-    const reason = prompt('Rejection reason (optional):')
+    // Draft → the server voids it and kicks its tickets back to Approvals.
+    const isDraft = invoice.status === 'draft'
+    const reason = prompt(isDraft
+      ? 'Reject this draft: it will be voided and its tickets sent back to the Approvals dashboard.\n\nNote for the reviewer (required):'
+      : 'Send this invoice back to draft for editing. Its tickets stay on the draft.\n\nReason (optional):')
     if (reason === null) return
+    if (isDraft && !reason.trim()) {
+      alert('A note for the reviewer is required.')
+      return
+    }
     setActionLoading(true)
     try {
-      await api.patch(`/invoices/${invoice.id}/reject`, { reason })
+      const result = await api.patch<{ warnings?: string[] }>(`/invoices/${invoice.id}/reject`, { reason })
+      if (result?.warnings?.length) alert(result.warnings.join('\n'))
       await loadInvoice()
     } catch (err: any) {
       alert(err?.message || 'Failed to reject')
+    }
+    setActionLoading(false)
+  }
+
+  // Take one ticket off this draft and send it back to Approvals with a note.
+  async function handleKickBackTicket(ticketId: string, ticketNumber: string) {
+    if (!invoice) return
+    const reason = prompt(`Kick ${ticketNumber} back to the Approvals dashboard. Its lines come off this draft; the other tickets stay.\n\nNote for the reviewer (required):`)
+    if (reason === null) return
+    if (!reason.trim()) {
+      alert('A note for the reviewer is required.')
+      return
+    }
+    setActionLoading(true)
+    try {
+      await api.patch(`/invoices/${invoice.id}/kick-back-ticket`, { ticketId, reason })
+      await loadInvoice()
+    } catch (err: any) {
+      alert(err?.message || 'Failed to kick back ticket')
     }
     setActionLoading(false)
   }
@@ -362,6 +411,7 @@ export function InvoiceDetailPage() {
     try {
       await api.put(`/invoices/${invoice.id}/line-items`, {
         lineItems: editLines.map(li => ({
+          id: li.id,
           description: li.description,
           productId: li.productId,
           partNumber: li.partNumber,
@@ -388,24 +438,37 @@ export function InvoiceDetailPage() {
   }
 
   async function handleDownloadPdf() {
-    if (!invoice) return
+    if (!invoice || pdfGenerating) return
+    setPdfGenerating(true)
+    setPdfError('')
+    setPdfDownload(null)
+    const controller = new AbortController()
+    pdfRequest.current = controller
     try {
       const token = localStorage.getItem('sundog_token')
       const res = await fetch(`/api/invoices/${invoice.id}/pdf`, {
+        signal: controller.signal,
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       })
       if (!res.ok) throw new Error('PDF generation failed')
       const blob = await res.blob()
+      if (controller.signal.aborted) return
+      if (!blob.size || !blob.type.includes('application/pdf')) throw new Error('The server did not return a PDF')
       const url = URL.createObjectURL(blob)
+      const fileName = `invoice-${invoice.invoiceNumber}.pdf`
+      setPdfDownload({ url, fileName, invoiceId: invoice.id })
       const a = document.createElement('a')
       a.href = url
-      a.download = `invoice-${invoice.invoiceNumber}.pdf`
+      a.download = fileName
       document.body.appendChild(a)
       a.click()
       document.body.removeChild(a)
-      URL.revokeObjectURL(url)
+      // Keep the URL alive for the browser download and the visible retry link.
+      // The effect above releases it when replaced or when this page unmounts.
     } catch (err: any) {
-      alert(err?.message || 'Failed to generate PDF')
+      if (!controller.signal.aborted) setPdfError(err?.message || 'Failed to generate PDF')
+    } finally {
+      setPdfGenerating(false)
     }
   }
 
@@ -439,9 +502,11 @@ export function InvoiceDetailPage() {
     )
   }
 
-  const status = STATUS_CONFIG[invoice.status] || { label: invoice.status, color: 'text-slate-600', bgColor: 'bg-slate-100', icon: FileText }
+  const localNoCharge = invoice.status === 'invoiced' && !invoice.qbSalesOrderTxnId && !invoice.qbInvoiceTxnId && Number(invoice.total) === 0 && invoice.lineItems.length > 0 && invoice.lineItems.every(line => Number(line.amount) === 0)
+  const status = invoice.qbExportError ? { label: 'QB rejected — review error', color: 'text-red-700', bgColor: 'bg-red-100', icon: AlertTriangle } : localNoCharge ? { label: 'Recorded locally · $0 · no QB push required', color: 'text-slate-700', bgColor: 'bg-slate-100', icon: CheckCircle2 } : STATUS_CONFIG[invoice.status] || { label: invoice.status, color: 'text-slate-600', bgColor: 'bg-slate-100', icon: FileText }
   const StatusIcon = status.icon
-  const lineItems = invoice.lineItems.sort((a, b) => a.sortOrder - b.sortOrder)
+  const orderedLines = [...invoice.lineItems].sort((a, b) => a.sortOrder - b.sortOrder)
+  const lineItems = invoice.sourceType === 'rental_agreement' ? rentalSweepLines(orderedLines) : orderedLines
   // A line is informational (rendered in the notes area) ONLY when it's a
   // genuine auto-generated note — no product, no part number, zero quantity
   // (e.g. training / fit-test attendee lists). Real item & labor lines ALWAYS
@@ -481,6 +546,7 @@ export function InvoiceDetailPage() {
           </span>
         </div>
 
+        <InvoiceCustomerAttribution customer={invoice.companyName} billedTo={invoice.qbCustomerOverride} />
         {/* Modified warning */}
         {invoice.sourceModifiedAfterSync && (
           <div className="flex items-center gap-2 mb-3 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-700">
@@ -506,7 +572,7 @@ export function InvoiceDetailPage() {
           </div>
           <div>
             <p className="text-xs text-slate-400 mb-0.5">Invoice Date</p>
-            <p className="font-medium text-slate-900">{formatCalendarDate(invoice.invoiceDate)}</p>
+            <p className="font-medium text-slate-900">{formatCalendarDate(invoice.periodEnd || invoice.invoiceDate)}</p>
           </div>
           <div>
             <p className="text-xs text-slate-400 mb-0.5">Total</p>
@@ -668,7 +734,7 @@ export function InvoiceDetailPage() {
 
         {editing ? (
           <div className="p-4">
-            <InvoiceLineEditor lineItems={editLines} onChange={setEditLines} />
+            <InvoiceLineEditor companyId={invoice.companyId} lineItems={editLines} onChange={setEditLines} taxExempt={invoice.company?.taxExempt} />
           </div>
         ) : lineItems.length === 0 ? (
           <div className="text-center py-8 text-slate-400 text-sm">
@@ -855,6 +921,7 @@ export function InvoiceDetailPage() {
       )}
 
       {/* Enverus Submission Panel */}
+      {invoice.billingProfileError && <p role="alert" className="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">{invoice.billingProfileError}</p>}
       {enverusProfile && invoice.status !== 'draft' && invoice.status !== 'void' && (
         <EnverusPanel
           invoiceId={invoice.id}
@@ -883,6 +950,33 @@ export function InvoiceDetailPage() {
         />
       )}
 
+      {/* Tickets on a stacked draft — kick one back without rejecting the whole stack */}
+      {invoice.status === 'draft' && (() => {
+        const tickets = [...new Map(invoice.lineItems
+          .filter(li => li.sourceTicketId)
+          .map(li => [li.sourceTicketId!, li.sourceTicketNumber || li.sourceTicketId!])).entries()]
+        return tickets.length > 1 ? (
+          <div className="bg-white rounded-lg border border-slate-200 p-4">
+            <p className="text-sm font-medium text-slate-700 mb-2">Tickets on this draft</p>
+            <div className="flex items-center gap-2 flex-wrap">
+              {tickets.map(([id, number]) => (
+                <span key={id} className="inline-flex items-center gap-1.5 pl-2 pr-1 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs">
+                  <button onClick={() => navigate(`/tickets/${id}`)} className="font-mono text-blue-700 hover:underline" title="Open ticket">{number}</button>
+                  <button
+                    onClick={() => handleKickBackTicket(id, number)}
+                    disabled={actionLoading}
+                    className="px-1.5 py-0.5 text-orange-700 bg-orange-50 rounded hover:bg-orange-100 disabled:opacity-50 font-medium"
+                    title={`Take ${number} off this draft and send it back to the Approvals dashboard with a note`}
+                  >
+                    Kick Back
+                  </button>
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : null
+      })()}
+
       {/* Action Buttons */}
       <div className="bg-white rounded-lg border border-slate-200 p-4 flex items-center gap-3 flex-wrap">
         {invoice.status === 'draft' && (
@@ -898,9 +992,10 @@ export function InvoiceDetailPage() {
             <button
               onClick={handleReject}
               disabled={actionLoading}
-              className="flex items-center gap-1.5 px-4 py-2 border border-slate-300 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+              className="flex items-center gap-1.5 px-4 py-2 text-orange-700 bg-orange-50 border border-orange-200 rounded-lg text-sm font-medium hover:bg-orange-100 disabled:opacity-50"
+              title="Void this draft and send its tickets back to the Approvals dashboard with a note"
             >
-              Reject
+              Reject to Approvals
             </button>
           </>
         )}
@@ -931,12 +1026,17 @@ export function InvoiceDetailPage() {
               onClick={handleReject}
               disabled={actionLoading}
               className="flex items-center gap-1.5 px-4 py-2 border border-slate-300 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
-              title="Un-approve: send back to draft for editing (frees the source tickets back to the Ready queue)"
+              title="Un-approve: back to draft for editing. Its tickets stay on the draft."
             >
               <Undo2 className="w-4 h-4" />
-              Return to Draft
+              Back to Draft
             </button>
           </>
+        )}
+        {invoice.qbExportError && (
+          <div role="alert" className="w-full rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+            <strong>QuickBooks export failed.</strong> {invoice.qbExportError}
+          </div>
         )}
         {invoice.status === 'queued' && (
           <button
@@ -965,12 +1065,15 @@ export function InvoiceDetailPage() {
         {invoice.status !== 'draft' && invoice.status !== 'void' && (
           <button
             onClick={handleDownloadPdf}
+            disabled={pdfGenerating}
             className="flex items-center gap-1.5 px-4 py-2 border border-slate-300 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-50"
           >
             <Download className="w-4 h-4" />
-            Generate PDF
+            {pdfGenerating ? 'Generating PDF...' : 'Generate PDF'}
           </button>
         )}
+        {pdfDownload?.invoiceId === invoice.id && <p role="status" className="text-sm text-green-700">PDF ready. <a href={pdfDownload.url} download={pdfDownload.fileName} className="underline">Download {pdfDownload.fileName}</a></p>}
+        {pdfError && <p role="alert" className="text-sm text-red-700">{pdfError}</p>}
         {can('invoices:cancel') && invoice.status !== 'void' && (
           <button
             onClick={() => setVoidOpen(true)}
@@ -1001,7 +1104,7 @@ export function InvoiceDetailPage() {
         open={voidOpen}
         mode="void"
         title={`Void invoice ${invoice.invoiceNumber}`}
-        message="Voids this invoice. If it hasn't reached QuickBooks, its source tickets are released back to the billing queue."
+        message="Voids this invoice. If it hasn't reached QuickBooks, source tickets return to the billing queue once no other live invoice bills them."
         confirmLabel="Void invoice"
         showOverride
         overrideLabel="Override: void even if paid (reconcile the payment in QuickBooks manually)."
@@ -1127,6 +1230,7 @@ interface EnverusStatus {
     action: string | null
     retryCount?: number | null
     errorMessage?: string | null
+    responsePayload?: string | null
     createdAt: string
   }>
 }
@@ -1164,7 +1268,36 @@ function EnverusPanel({ invoiceId, profile, invoice, onSubmitted }: EnverusPanel
   const [afeNumber, setAfeNumber] = useState(invoice.afeNumber || profile.defaultAfeNumber || '')
   const [costCenter, setCostCenter] = useState(invoice.costCenter || profile.defaultCostCenter || '')
   const [poNumber, setPoNumber] = useState(invoice.poNumber || profile.defaultPoNumber || '')
-  const [contractNumber, setContractNumber] = useState(profile.defaultPriceBookNumber || '')
+  // Buyer subcompany (Enverus site) + remit-to department: from the invoice (location-
+  // sourced at creation), else the profile. The site rides on the receipt; the
+  // department is saved on the invoice for picking it when invoicing in OpenInvoice.
+  const [buyerSiteUuid, setBuyerSiteUuid] = useState(invoice.buyerSiteUuid || profile.buyerSiteUuid || '')
+  const [buyerDepartment, setBuyerDepartment] = useState(invoice.buyerDepartment || profile.defaultBuyerDepartment || '')
+  const [buyerSites, setBuyerSites] = useState<{ siteUuid: string; siteName: string; departments: string[] }[] | null>(null)
+  const [sitesLoading, setSitesLoading] = useState(false)
+  const loadBuyerSites = useCallback(async () => {
+    if (!buyerDuns) return
+    setSitesLoading(true)
+    try {
+      const res = await api.get<{ data: { customerDuns: string; sites: { siteUuid: string; siteName: string; departments?: string[] }[] }[] }>('/enverus/master-data/buyer-sites')
+      const buyer = res.data.find(b => b.customerDuns === buyerDuns)
+      setBuyerSites((buyer?.sites || []).map(site => ({ ...site, departments: site.departments || [] })))
+    } catch (err: any) {
+      alert(`Failed to fetch subcompanies: ${err?.message || 'Unknown error'}`)
+    }
+    setSitesLoading(false)
+  }, [buyerDuns])
+  const currentSite = buyerSites?.find(site => site.siteUuid === buyerSiteUuid)
+  const departmentOptions = currentSite ? currentSite.departments : [...new Set((buyerSites || []).flatMap(site => site.departments))].sort()
+  // Required by this customer's billing profile — submit stays blocked until filled.
+  const missingRequired = [
+    profile.requiresPo && !poNumber.trim() && 'PO number',
+    profile.requiresAfe && !afeNumber.trim() && 'AFE',
+    profile.requiresCostCenter && !costCenter.trim() && 'cost center',
+    profile.requiresBuyerSite && !buyerSiteUuid.trim() && 'subcompany',
+    profile.requiresBuyerDepartment && !buyerDepartment.trim() && 'department',
+  ].filter((v): v is string => !!v)
+  const [priceBookNumber, setPriceBookNumber] = useState(profile.defaultPriceBookNumber || '')
 
   // COP "Activity Code" (→ line.major) and "Functional Area" (→ line.minor).
   // Standard Enverus line fields. Auto-fill from the profile defaults, editable/
@@ -1286,8 +1419,12 @@ function EnverusPanel({ invoiceId, profile, invoice, onSubmitted }: EnverusPanel
   useEffect(() => { void loadStatus({ silent: true }) }, [loadStatus])
 
   async function handleSubmit() {
+    if (missingRequired.length) {
+      alert(`This customer requires ${missingRequired.join(', ')}`)
+      return
+    }
     if (useOT) {
-      // Open Ticket: service approver optional, contract recommended
+      // Open Ticket: price book is independent of purchase order.
       setSubmitting(true)
       setSubmitResult(null)
       try {
@@ -1295,9 +1432,13 @@ function EnverusPanel({ invoiceId, profile, invoice, onSubmitted }: EnverusPanel
           `/enverus/field-tickets/submit/${invoiceId}?immediate=true`,
           {
             serviceApprover: orderedByName.trim() || undefined,
-            contractNumber: contractNumber.trim() || undefined,
+            priceBookNumber: priceBookNumber.trim() || undefined,
             afeNumber: afeNumber.trim() || undefined,
             costCenter: costCenter.trim() || undefined,
+            // OT shows the PO only when the profile requires one.
+            poNumber: (profile.requiresPo && poNumber.trim()) || undefined,
+            buyerSiteUuid: buyerSiteUuid.trim() || undefined,
+            buyerDepartment: buyerDepartment.trim() || undefined,
             // Send the explicit string (even "") so clearing a prefilled value
             // actually clears it — the builder only falls back to the profile
             // default when the key is absent.
@@ -1331,8 +1472,12 @@ function EnverusPanel({ invoiceId, profile, invoice, onSubmitted }: EnverusPanel
             afeNumber: afeNumber.trim() || undefined,
             costCenter: costCenter.trim() || undefined,
             poNumber: poNumber.trim() || undefined,
+            buyerSiteUuid: buyerSiteUuid.trim() || undefined,
+            buyerDepartment: buyerDepartment.trim() || undefined,
+            major: major.trim(),
+            minor: minor.trim(),
             receiptType,
-            contractNumber: contractNumber.trim() || undefined,
+            priceBookNumber: priceBookNumber.trim() || undefined,
             additionalDataFields: additionalFields.filter(f => f.value.trim()).map(f => ({
               ...f, value: f.value.trim(),
             })) || undefined,
@@ -1478,25 +1623,22 @@ function EnverusPanel({ invoiceId, profile, invoice, onSubmitted }: EnverusPanel
           onSelect={setOrderedByName}
         />
 
-        {/* Contract / Price Book — prominent for OT, bottom for OI */}
-        {useOT && (
-          <div>
-            <label className="block text-xs font-medium text-slate-500 mb-1">
-              Contract / Price Book <span className="text-amber-500">*</span>
-            </label>
-            <input
-              type="text"
-              value={contractNumber}
-              onChange={e => setContractNumber(e.target.value)}
-              placeholder="Price book name or contract number"
-              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500"
-            />
-          </div>
-        )}
+        {/* The receipt API maps the selected price book to contract.number. */}
+        <div>
+          <label className="block text-xs font-medium text-slate-500 mb-1">Price Book</label>
+          <input
+            type="text"
+            value={priceBookNumber}
+            onChange={e => setPriceBookNumber(e.target.value)}
+            placeholder="Price book number"
+            className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500"
+          />
+        </div>
 
         {/* AFE — fetch from Enverus */}
         <FetchCombo
           label={afeLabel}
+          required={!!profile.requiresAfe}
           value={afeNumber} onChange={setAfeNumber}
           placeholder="AFE or 10-digit API number"
           items={afeList.items} open={afeList.open} loading={afeList.loading}
@@ -1508,6 +1650,7 @@ function EnverusPanel({ invoiceId, profile, invoice, onSubmitted }: EnverusPanel
         {/* Cost Center — fetch from Enverus */}
         <FetchCombo
           label={costCenterLabel}
+          required={!!profile.requiresCostCenter}
           value={costCenter} onChange={setCostCenter}
           placeholder="Cost center"
           items={ccList.items} open={ccList.open} loading={ccList.loading}
@@ -1519,7 +1662,7 @@ function EnverusPanel({ invoiceId, profile, invoice, onSubmitted }: EnverusPanel
         {/* Activity Code (major) + Functional Area (minor) — COP OT line fields.
             Only used on certain invoices; leave blank otherwise. Standard Enverus
             line fields, NOT additional data fields. */}
-        {useOT && (
+        {(useOT || major || minor) && (
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">{majorLabel}</label>
@@ -1544,10 +1687,11 @@ function EnverusPanel({ invoiceId, profile, invoice, onSubmitted }: EnverusPanel
           </div>
         )}
 
-        {/* PO Number — OI only (OT doesn't use header PO) */}
-        {!useOT && (
+        {/* PO Number — OI, or OT when the profile requires one */}
+        {(!useOT || !!profile.requiresPo) && (
           <FetchCombo
             label="Purchase Order"
+            required={!!profile.requiresPo}
             value={poNumber} onChange={setPoNumber}
             placeholder="PO number"
             items={poList.items} open={poList.open} loading={poList.loading}
@@ -1557,19 +1701,56 @@ function EnverusPanel({ invoiceId, profile, invoice, onSubmitted }: EnverusPanel
           />
         )}
 
-        {/* Contract / Pricebook — OI only (shown at bottom) */}
-        {!useOT && (
+        {/* Subcompany (Enverus buyer site) + remit-to department */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
-            <label className="block text-xs font-medium text-slate-500 mb-1">Contract / Pricebook</label>
+            <label className="block text-xs font-medium text-slate-500 mb-1">
+              Subcompany {profile.requiresBuyerSite && <span className="text-red-400">*</span>}
+            </label>
+            <div className="flex gap-2">
+              {buyerSites ? (
+                <select
+                  value={buyerSiteUuid}
+                  onChange={e => setBuyerSiteUuid(e.target.value)}
+                  className="flex-1 min-w-0 px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500"
+                >
+                  <option value="">— none —</option>
+                  {buyerSiteUuid && !currentSite && <option value={buyerSiteUuid}>{buyerSiteUuid}</option>}
+                  {buyerSites.map(site => <option key={site.siteUuid} value={site.siteUuid}>{site.siteName}</option>)}
+                </select>
+              ) : (
+                <div className="flex-1 min-w-0 px-3 py-2 text-sm border border-slate-200 rounded-lg bg-slate-50 text-slate-500 truncate">
+                  {buyerSiteUuid ? 'Set — fetch to see the name' : 'None'}
+                </div>
+              )}
+              <button
+                onClick={loadBuyerSites}
+                disabled={sitesLoading || !buyerDuns}
+                className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap"
+              >
+                {sitesLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                Fetch
+              </button>
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">
+              Department {profile.requiresBuyerDepartment && <span className="text-red-400">*</span>}
+            </label>
             <input
               type="text"
-              value={contractNumber}
-              onChange={e => setContractNumber(e.target.value)}
-              placeholder="Contract or pricebook name"
+              list="enverus-departments"
+              value={buyerDepartment}
+              onChange={e => setBuyerDepartment(e.target.value)}
+              placeholder="e.g. Killdeer Field Office"
               className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500"
             />
+            <datalist id="enverus-departments">
+              {departmentOptions.map(name => <option key={name} value={name} />)}
+            </datalist>
+            <p className="mt-1 text-[10px] text-slate-400">Saved on the invoice — pick it in OpenInvoice when invoicing (the receipt has no department field).</p>
           </div>
-        )}
+        </div>
 
         {/* Additional Data Fields (buyer-specific, e.g. COP Safety) */}
         {additionalFields.length > 0 && (
@@ -1679,6 +1860,7 @@ function EnverusPanel({ invoiceId, profile, invoice, onSubmitted }: EnverusPanel
             {statusError && (
               <p className="text-[11px] text-amber-600">{statusError}</p>
             )}
+            <EnverusWarnings sources={[status?.enverusLiveData, status?.queueHistory?.[0]?.responsePayload]} />
 
             {(status?.queueHistory?.length ?? 0) > 0 && (
               <div>
@@ -1694,10 +1876,10 @@ function EnverusPanel({ invoiceId, profile, invoice, onSubmitted }: EnverusPanel
                       <div key={q.id} className="text-[11px] flex items-start justify-between gap-2 border-b border-slate-200 pb-1 last:border-0">
                         <span className="text-slate-600">
                           <span className="font-medium">{q.action || 'submit'}</span>
-                          {' · '}{q.status}
+                          {' · '}{q.status === 'superseded' ? 'recovered' : q.status}
                           {q.retryCount ? ` · ${q.retryCount} retr${q.retryCount === 1 ? 'y' : 'ies'}` : ''}
                           {q.errorMessage && (
-                            <span className="block text-red-600 break-words">
+                            <span className={q.status === 'superseded' ? 'block text-slate-500 break-words' : 'block text-red-600 break-words'}>
                               {q.errorMessage}
                             </span>
                           )}
@@ -1718,7 +1900,7 @@ function EnverusPanel({ invoiceId, profile, invoice, onSubmitted }: EnverusPanel
         <div className="flex items-center gap-3 pt-2">
           <button
             onClick={handleSubmit}
-            disabled={submitting}
+            disabled={submitting || missingRequired.length > 0}
             className="flex items-center gap-1.5 px-4 py-2 bg-teal-700 text-white rounded-lg text-sm font-medium hover:bg-teal-600 disabled:opacity-50"
           >
             {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
@@ -1726,6 +1908,9 @@ function EnverusPanel({ invoiceId, profile, invoice, onSubmitted }: EnverusPanel
           </button>
           {!useOT && !orderedByName.trim() && (
             <span className="text-xs text-amber-600">Requisitioner required</span>
+          )}
+          {missingRequired.length > 0 && (
+            <span className="text-xs text-amber-600">Required for this customer: {missingRequired.join(', ')}</span>
           )}
         </div>
       </div>

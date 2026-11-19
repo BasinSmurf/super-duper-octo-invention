@@ -38,6 +38,8 @@ interface EditableWell {
   latitude: string | null
   longitude: string | null
   currentOperator: { id: string; name: string } | null
+  facilityCode?: string | null
+  costCenter?: string | null
 }
 
 const WELL_TYPE_OPTIONS = [
@@ -106,6 +108,8 @@ export function EditWellModal({ well, onSaved, onClose }: {
   const [ewLine, setEwLine] = useState(well.ewLine || '')
   const [latitude, setLatitude] = useState(well.latitude || '')
   const [longitude, setLongitude] = useState(well.longitude || '')
+  const [facilityCode, setFacilityCode] = useState(well.facilityCode || '')
+  const [costCenter, setCostCenter] = useState(well.costCenter || '')
 
   const [operatorId, setOperatorId] = useState(well.currentOperator?.id || '')
   const [operatorName, setOperatorName] = useState(well.currentOperator?.name || '')
@@ -152,6 +156,8 @@ export function EditWellModal({ well, onSaved, onClose }: {
       latitude: toStrOrNull(latitude),
       longitude: toStrOrNull(longitude),
       currentOperatorId: operatorId || null,
+      facilityCode: toStrOrNull(facilityCode),
+      costCenter: toStrOrNull(costCenter),
     }
     try {
       const updated = await api.put(`/locations/wells/${well.id}`, payload)
@@ -271,6 +277,15 @@ export function EditWellModal({ well, onSaved, onClose }: {
               </div>
               <Field label="Latitude"><input value={latitude} onChange={e => setLatitude(e.target.value)} className={inputCls} /></Field>
               <Field label="Longitude"><input value={longitude} onChange={e => setLongitude(e.target.value)} className={inputCls} /></Field>
+            </div>
+          </div>
+
+          {/* Billing codes — the buyer's charge-to codes for work at this well */}
+          <div>
+            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Billing Codes</h3>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Facility Code"><input value={facilityCode} onChange={e => setFacilityCode(e.target.value)} placeholder="e.g. FC17708" className={inputCls} /></Field>
+              <Field label="Cost Code"><input value={costCenter} onChange={e => setCostCenter(e.target.value)} placeholder="e.g. US00098792" className={inputCls} /></Field>
             </div>
           </div>
 

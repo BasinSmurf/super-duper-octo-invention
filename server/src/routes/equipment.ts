@@ -1,11 +1,12 @@
 import { Router, Request, Response } from 'express';
 import { Prisma } from '../db.js';
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { requirePermission } from '../middleware/rbac.js';
 import { createAuditLog } from '../utils/auditLog.js';
 import { sendZpl } from '../services/printing.js';
 import { equipmentLabelZpl, generateEquipmentBadgePdf } from '../services/equipmentLabel.js';
+import { parseScbaAssembly, saveScbaAssembly } from '../services/scbaAssembly.js';
 
 export const equipmentRouter = Router();
 
@@ -122,6 +123,26 @@ equipmentRouter.get('/search-available', async (req: Request, res: Response, nex
 // PARAMETERIZED ROUTES — /:id and below
 // ============================================================
 
+equipmentRouter.post('/scba', requirePermission('inventory:manage'), async (req: Request, res: Response, next) => {
+  try {
+    const input = parseScbaAssembly(req.body);
+    const equipment = await prisma.$transaction(tx => saveScbaAssembly(tx, req.body));
+    await createAuditLog({ userId: req.user!.userId, entityType: 'serialized_equipment', entityId: equipment.id,
+      action: 'create', changes: { scba: input }, ipAddress: req.ip });
+    res.status(201).json(equipment);
+  } catch (err) { next(err); }
+});
+
+equipmentRouter.put('/:id/scba', requirePermission('inventory:manage'), async (req: Request, res: Response, next) => {
+  try {
+    const input = parseScbaAssembly(req.body);
+    const equipment = await prisma.$transaction(tx => saveScbaAssembly(tx, req.body, req.params.id as string));
+    await createAuditLog({ userId: req.user!.userId, entityType: 'serialized_equipment', entityId: equipment.id,
+      action: 'update', changes: { scba: input }, ipAddress: req.ip });
+    res.json(equipment);
+  } catch (err) { next(err); }
+});
+
 // GET /api/equipment/:id
 equipmentRouter.get('/:id', async (req: Request, res: Response, next) => {
   try {
@@ -129,6 +150,7 @@ equipmentRouter.get('/:id', async (req: Request, res: Response, next) => {
       where: { id: req.params.id as string },
       include: {
         product: true,
+        childEquipment: { include: { product: true } },
         currentPad: true,
         currentWell: true,
         currentFacility: true,
@@ -491,14 +513,29 @@ equipmentRouter.put('/:id', requirePermission('inventory:manage'), async (req: R
     const existing = await prisma.serializedEquipment.findUnique({ where: { id: req.params.id as string } });
     if (!existing) throw new AppError(404, 'Equipment not found');
 
+    const data = { ...req.body };
+    if (data.productId && data.productId !== existing.productId) {
+      const product = await prisma.product.findUnique({ where: { id: data.productId } });
+      if (!product || !product.isActive || (!product.isSerialized && !product.isAssembly)) {
+        throw new AppError(400, 'Choose an active serialized product or assembly');
+      }
+      if (!product.isAssembly && await prisma.serializedEquipment.count({ where: { parentEquipmentId: existing.id } })) {
+        throw new AppError(400, 'Remove assembly contents before changing to a non-assembly product');
+      }
+      // SCBA-specific details no longer describe a unit changed to another catalog type.
+      const customData = existing.customData && typeof existing.customData === 'object' && !Array.isArray(existing.customData)
+        ? { ...existing.customData } : {};
+      delete customData.scba;
+      data.customData = customData;
+    }
     const equipment = await prisma.serializedEquipment.update({
       where: { id: req.params.id as string },
-      data: req.body,
+      data,
     });
 
     // Track all editable fields that changed
     const trackFields = [
-      'serialNumber', 'safeCoreSerial', 'ownership', 'status', 'currentCustomerId', 'currentPadId',
+      'serialNumber', 'productId', 'safeCoreSerial', 'ownership', 'status', 'currentCustomerId', 'currentPadId',
       'currentWellId', 'currentFacilityId', 'calibrationDueDate', 'lastCalibrationDate',
       'bumpTestDueDate', 'purchaseDate', 'warrantyExpiry', 'conditionNotes',
     ];

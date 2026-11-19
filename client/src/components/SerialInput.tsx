@@ -66,7 +66,7 @@ export function SerialInput({
         videoRef.current.srcObject = stream
         videoRef.current.play()
       }
-    } catch (err) {
+    } catch {
       setOcrError('Camera access denied')
       setPhase('idle')
     }

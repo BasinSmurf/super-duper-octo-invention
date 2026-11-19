@@ -1,14 +1,20 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/cn'
-import { Wind, Plus, X } from 'lucide-react'
+import { verificationCurrent } from './WorkPointVerification'
+import { Wind, Plus, X, Pencil } from 'lucide-react'
 
 export interface LocationWorkPointInfo {
   id: string
   name: string
-  type: string
+  workPointType?: string
+  type?: string
   isActive: boolean
   customData: any
+  verified?: boolean
+  dateVerified?: string | null
+  reelSerialNumber?: string | null
+  standSerialNumber?: string | null
 }
 
 interface Props {
@@ -34,29 +40,53 @@ export function LocationWorkPointEditor({ workPoints, canManage, padId, wellId, 
   const [type, setType] = useState('air_system_location')
   const [serials, setSerials] = useState('')
   const [notes, setNotes] = useState('')
+  const [reelSerial, setReelSerial] = useState('')
+  const [standSerial, setStandSerial] = useState('')
+  const [editing, setEditing] = useState<LocationWorkPointInfo | null>(null)
+  const [cylinders, setCylinders] = useState<any[]>([])
+  const [expiryDays, setExpiryDays] = useState<number | null>(null)
+  useEffect(() => {
+    api.get<{ expiryDays: number }>('/locations/work-point-verification-settings').then(data => setExpiryDays(data.expiryDays)).catch(() => {})
+  }, [])
+
+  function open(point: LocationWorkPointInfo | null) {
+    setEditing(point)
+    setName(point?.name || '')
+    setType(point?.workPointType || point?.type || 'air_system_location')
+    setSerials('')
+    setNotes(point?.customData?.notes || '')
+    setReelSerial(point?.reelSerialNumber || '')
+    setStandSerial(point?.standSerialNumber || '')
+    setCylinders((point?.customData?.cylinders || point?.customData?.bottles || []).map((c: any) => ({ ...c })))
+    setAdding(true)
+  }
 
   async function save() {
     const trimmed = name.trim()
     if (!trimmed) return
     setSaving(true)
     try {
-      const cylinders = serials
+      const addedCylinders = serials
         .split(/\r?\n|,/)
         .map(s => s.trim())
         .filter(Boolean)
         .map(serialNumber => ({ serialNumber, isActive: true }))
-      await api.post('/locations/work-points', {
+      const payload = {
         name: trimmed,
-        type,
-        padId: padId || undefined,
-        wellId: wellId || undefined,
-        isActive: true,
+        workPointType: type,
+        reelSerialNumber: reelSerial.trim() || null,
+        standSerialNumber: standSerial.trim() || null,
+        ...(!editing ? { padId: padId || undefined, wellId: wellId || undefined, isActive: true } : {}),
         customData: {
-          ...(cylinders.length ? { cylinders } : {}),
-          ...(notes.trim() ? { notes: notes.trim() } : {}),
-          source: 'manual',
+          ...(editing?.customData || {}),
+          cylinders: [...cylinders, ...addedCylinders],
+          ...(editing?.customData?.bottles ? { bottles: [...cylinders, ...addedCylinders] } : {}),
+          notes: notes.trim(),
+          source: editing?.customData?.source || 'manual',
         },
-      })
+      }
+      if (editing) await api.put(`/locations/work-points/${editing.id}`, payload)
+      else await api.post('/locations/work-points', payload)
       setAdding(false)
       setName('')
       setType('air_system_location')
@@ -64,7 +94,7 @@ export function LocationWorkPointEditor({ workPoints, canManage, padId, wellId, 
       setNotes('')
       onChanged()
     } catch (err: any) {
-      alert(err?.message || 'Failed to add work point')
+      alert(err?.message || 'Failed to save work point')
     } finally {
       setSaving(false)
     }
@@ -93,7 +123,7 @@ export function LocationWorkPointEditor({ workPoints, canManage, padId, wellId, 
         {canManage && !adding && (
           <button
             type="button"
-            onClick={() => setAdding(true)}
+            onClick={() => open(null)}
             className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1"
           >
             <Plus className="w-3.5 h-3.5" /> Add
@@ -101,8 +131,9 @@ export function LocationWorkPointEditor({ workPoints, canManage, padId, wellId, 
         )}
       </div>
 
-      {adding && (
-        <div className="px-4 py-3 border-b border-gray-100 bg-blue-50/40 space-y-3">
+      {adding && canManage && (
+        <fieldset disabled={saving} className="px-4 py-3 border-b border-gray-100 bg-blue-50/40 space-y-3">
+          <p className="text-sm font-medium">{editing ? 'Edit Work Point' : 'Add Work Point'}</p>
           <div className="grid gap-2 sm:grid-cols-[1fr_11rem]">
             <input
               value={name}
@@ -121,6 +152,24 @@ export function LocationWorkPointEditor({ workPoints, canManage, padId, wellId, 
               ))}
             </select>
           </div>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="text-xs text-gray-600">Reel serial
+              <input value={reelSerial} onChange={e => setReelSerial(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm" />
+            </label>
+            <label className="text-xs text-gray-600">Stand serial
+              <input value={standSerial} onChange={e => setStandSerial(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm" />
+            </label>
+          </div>
+          {cylinders.map((c, i) => <div key={i} className="grid grid-cols-[1fr_1fr_auto] items-end gap-2">
+            <label className="text-xs text-gray-600">Cylinder serial
+              <input aria-label={`Cylinder ${i + 1} serial`} value={c.serialNumber || ''} onChange={e => setCylinders(cylinders.map((item, index) => index === i ? { ...item, serialNumber: e.target.value } : item))} className="w-full border rounded-lg px-3 py-2 text-sm" />
+            </label>
+            <label className="text-xs text-gray-600">Hydro date
+              <input aria-label={`Cylinder ${i + 1} hydro date`} type="date" value={c.hydroDate?.slice(0, 10) || ''} onChange={e => setCylinders(cylinders.map((item, index) => index === i ? { ...item, hydroDate: e.target.value || null } : item))} className="w-full border rounded-lg px-3 py-2 text-sm" />
+            </label>
+            <button type="button" aria-label={`Remove cylinder ${i + 1}`} onClick={() => setCylinders(cylinders.filter((_, index) => index !== i))} className="p-2 text-red-600"><X className="w-4 h-4" /></button>
+          </div>)}
+          <button type="button" onClick={() => setCylinders([...cylinders, { serialNumber: '', hydroDate: null, isActive: true }])} className="text-xs text-blue-600">+ Add cylinder with hydro date</button>
           <textarea
             value={serials}
             onChange={e => setSerials(e.target.value)}
@@ -151,7 +200,7 @@ export function LocationWorkPointEditor({ workPoints, canManage, padId, wellId, 
               Save Work Point
             </button>
           </div>
-        </div>
+        </fieldset>
       )}
 
       <div className="divide-y divide-gray-100">
@@ -161,18 +210,21 @@ export function LocationWorkPointEditor({ workPoints, canManage, padId, wellId, 
           workPoints.map(wp => {
             const cd = wp.customData as any
             const cylinders = cd?.cylinders || cd?.bottles || []
-            const label = WORK_POINT_TYPES.find(t => t.value === wp.type)?.label || wp.type
+            const label = WORK_POINT_TYPES.find(t => t.value === (wp.workPointType || wp.type))?.label || wp.workPointType || wp.type
             return (
               <div key={wp.id} className="px-4 py-3">
                 <div className="flex items-start gap-2">
                   <Wind className="w-4 h-4 text-blue-500 flex-shrink-0 mt-0.5" />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-gray-800">{wp.name}</span>
+                      <span className={cn('text-sm font-medium text-gray-800', expiryDays !== null && verificationCurrent(wp.verified, wp.dateVerified, expiryDays) && 'border-2 border-green-500 rounded px-2')}>{wp.name}</span>
                       <span className="text-xs text-gray-400">{label}</span>
                     </div>
                     {cd?.notes && <p className="text-xs text-gray-500 mt-0.5">{cd.notes}</p>}
                   </div>
+                  {canManage && (
+                    <button type="button" onClick={() => open(wp)} disabled={saving} className="p-1 text-gray-400 hover:text-blue-600" title="Edit work point" aria-label={`Edit ${wp.name}`}><Pencil className="w-4 h-4" /></button>
+                  )}
                   {canManage && (
                     <button
                       type="button"

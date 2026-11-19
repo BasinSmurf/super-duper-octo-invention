@@ -20,6 +20,8 @@ export interface BillingProfileSeed {
   id: string
   requiresPo?: boolean
   requiresAfe?: boolean
+  /** 'location' = the AFE comes from the well/pad at billing, so the field isn't asked for it. */
+  afeNumberSource?: 'fixed' | 'location'
   defaultPoNumber?: string | null
   defaultAfeNumber?: string | null
   defaultCostCenter?: string | null
@@ -216,6 +218,9 @@ export interface OfflineEquipment {
 // ---- Writable data (created/edited on device, synced up to server) ----
 
 export interface OfflineTicket {
+  createdById?: string | null
+  createdBy?: { id: string; name: string } | null
+  assignedTech?: { id: string; name: string } | null
   id: string
   offlineId?: string | null
   ticketNumber?: string | null
@@ -343,6 +348,8 @@ export interface OfflineEquipmentInspectionAttachment {
  * server can reject a mangled transfer while the original still exists.
  */
 export interface OfflineAttachment {
+  workOrderId?: string
+  linkedShopItemIds?: string[]
   id: string
   // Exactly one parent, mirroring the server's CHECK constraint.
   shopItemId?: string | null
@@ -374,6 +381,11 @@ export interface OfflineDraft {
 }
 
 export interface WizardDraftData {
+  dispatchNotificationDivision?: 'D3' | 'D4' | ''
+  dispatchTechId?: string
+  dispatchCalloutFee?: string
+  isCallOut?: boolean
+  deploymentAt?: string | null
   // Step 0: Work type
   workType: string // '' | 'field_service' | 'fit_test' | 'ih_testing' | 'training' | 'repair' | 'rental'
 
@@ -385,6 +397,7 @@ export interface WizardDraftData {
       id: string
       name: string
       fieldId: string
+      pendingReview?: boolean
       currentOperatorId?: string | null
       currentOperatorName?: string | null
     } | null
@@ -448,6 +461,9 @@ export interface WizardDraftData {
 
   // Fit test records (only used when workType === 'fit_test')
   fitTestRecords: FitTestDraftRecord[]
+  inspectionRecords?: OfflineEquipmentInspection[]
+  fieldInspectionSubmittedIds?: string[]
+  occDailyCalFiles?: Array<{ id: string; fileName: string; mimeType: string; dataUrl: string }>
   // #10 Occ Health setup: which services this visit covers + on-site mileage
   occServices?: ('fit_test' | 'audiometric')[]
   occOnSite?: boolean
@@ -481,6 +497,7 @@ export interface WizardDraftData {
   ihSubtypes?: IhTestType[]
   // Training roster records (only used when workType === 'training')
   trainingRosterRecords: TrainingRosterDraftRecord[]
+  originalTrainingRosterIds?: string[]
   trainingCourseName?: string
   trainingCourseOther?: string
   trainingTrainerName?: string
@@ -493,6 +510,8 @@ export interface WizardDraftData {
 
   // Field service: rig present on-site (independent of the main location)
   rigPresent?: boolean
+  presentRigNumber?: string | null
+  /** Legacy drafts only, from the old rig picker. */
   presentRigId?: string | null
   presentRigName?: string | null
 
@@ -593,6 +612,9 @@ export interface AirSystemDraftRecord {
   ticketId?: string
   workPointId?: string | null    // Links to the WorkPoint being inspected
   workPointName: string          // Display name (e.g. "Tank Battery #1")
+  verified?: boolean
+  dateVerified?: string | null
+  verificationUpdate?: { verified: boolean; changedAt: string }
   airSystemType: string          // e.g. "Tank Battery", "Oil Tank Battery", "Compressor"
 
   // Serial tracking
@@ -756,7 +778,20 @@ export interface RentalGasMonitorSpec { id: string; productId: string; productNa
 export interface RentalOtherSpec { id: string; label: string; qty: number; productId?: string | null; rate?: number | null }
 export type RentalBomType = 'standard' | 'manned' | 'unmanned' | 'other' | 'rig' | 'drilling'
 
+export interface ManualRentalEquipment {
+  status?: 'deployed' | 'returned'
+  returnedAt?: string
+  lastSwapDate?: string
+  returnInspectionId?: string
+  id: string
+  serial: string
+  type: string
+  testDate: string
+  deployedAt: string
+}
+
 export interface RentalComposition {
+  manualEquipment?: ManualRentalEquipment[]
   trailer: { manned: boolean; rate?: number | null } | null
   gasMonitors: RentalGasMonitorSpec[]
   other: RentalOtherSpec[]
@@ -816,7 +851,15 @@ export interface RentalPic {
   addedBy?: string   // user name/id who added the entry
 }
 
+export interface RentalBillingPolicy {
+  pauses: { startDate: string; endDate: string }[]
+  ticketRates: { manned: number; unmanned: number } | null
+  rateChanges?: { effectiveDate: string; manned: number; unmanned: number }[];
+}
+
 export interface OfflineRentalAgreement {
+  visitEquipment?: ManualRentalEquipment[]
+  billingPolicy?: RentalBillingPolicy
   id: string
   offlineId?: string | null
   agreementNumber?: string | null
@@ -862,10 +905,15 @@ export interface OfflineRentalAgreement {
 }
 
 export interface OfflineRentalAgreementItem {
+  manualEntry?: boolean
+  testDate?: string
   id: string
   rentalAgreementId: string
   productId: string
   productName?: string         // denormalized for display
+  // Deploy-time only: the package line this row was seeded from. Counts toward
+  // that line in the package check regardless of the product's catalog category.
+  equipmentCategory?: string
   serializedEquipmentId: string
   serialNumber?: string        // denormalized for display
   rate: number | null
@@ -1041,6 +1089,10 @@ export interface OfflineShopWorkOrderItem {
 
 export interface OfflineEquipmentInspection {
   id: string
+  /** Wizard billing selection; sent separately as ticket lines, never ledger columns. */
+  fieldBillingServices?: {
+    productId: string; partNumber: string; name: string; quantity: number; rate: number; unitOfMeasure?: string
+  }[]
   // Parent — exactly one populated (CHECK constraint enforced server-side)
   shopItemId: string | null
   ticketId: string | null
@@ -1147,6 +1199,8 @@ export interface MutationQueueEntry {
   createdAt: string
   status: 'pending' | 'uploading' | 'done' | 'error'
   retryCount: number
+  // Local outbox IDs which must be acknowledged before sending this mutation.
+  dependsOn?: number[]
   errorMessage?: string | null
 }
 

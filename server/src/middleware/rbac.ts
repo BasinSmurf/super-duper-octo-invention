@@ -1,7 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
-import { roleHasCapability, getEffectiveMatrix } from '../services/permissions.js';
+import { roleHasCapability, getEffectiveMatrix, CAPABILITY_CATALOG } from '../services/permissions.js';
+import { permissionDeniedMessage } from '../services/permissionMessages.js';
 
-type Role = 'field_tech' | 'dispatch' | 'field_super' | 'billing_ar' | 'trainer' | 'train_admin' | 'boss' | 'platform_admin' | 'customer';
+type Role = 'field_tech' | 'dispatch' | 'field_super' | 'billing_ar' | 'ar_supervisor' | 'trainer' | 'train_admin' | 'boss' | 'platform_admin' | 'customer';
 
 export function requireRole(...roles: Role[]) {
   return (req: Request, res: Response, next: NextFunction): void => {
@@ -11,7 +12,7 @@ export function requireRole(...roles: Role[]) {
     }
 
     if (!roles.includes(req.user.role as Role)) {
-      res.status(403).json({ error: 'Insufficient permissions' });
+      res.status(403).json({ error: permissionDeniedMessage('perform this action', roles) });
       return;
     }
 
@@ -34,7 +35,12 @@ export function requirePermission(permission: string) {
     }
 
     if (!roleHasCapability(req.user.role, permission)) {
-      res.status(403).json({ error: 'Insufficient permissions' });
+      const label = CAPABILITY_CATALOG.find(cap => cap.key === permission)?.label;
+      const action = !label ? 'perform this action'
+        : /^(create|edit|approve|manage|view|request|import|void|delete|cancel|close|force-close|reassign|complete|send|force)\b/i.test(label)
+          ? label : `access ${label.charAt(0).toLowerCase() + label.slice(1)}`;
+      const roles = [...getEffectiveMatrix()[permission], 'platform_admin'];
+      res.status(403).json({ error: permissionDeniedMessage(action, roles) });
       return;
     }
 

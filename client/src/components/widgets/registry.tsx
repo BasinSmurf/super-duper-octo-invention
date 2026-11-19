@@ -1,16 +1,17 @@
 import { InternalShopValueWidget } from './InternalShopValueWidget'
+import { QbSyncQueueWidget, TicketVolumeWidget } from './PipelineWidgets'
 /**
  * Widget registry: maps WidgetType → React component + default title.
  *
  * Each widget is a tiny presentational component that fetches its own data.
  * They're deliberately small — focused views, one responsibility each.
- * Most call existing endpoints; widgets without a data source yet render
- * an "Empty" placeholder so the grid layout still works.
+ * Each registered widget has a data source or provides an action.
  */
 
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
+  Loader2,
   ClipboardList,
   AlertTriangle,
   Wind,
@@ -205,15 +206,13 @@ function UnassignedTicketsWidget() {
   return (
     <ul className="divide-y divide-slate-100">
       {rows.slice(0, 8).map((t) => (
-        <li
-          key={t.id}
-          onClick={() => navigate(`/dispatch?ticket=${t.id}`)}
-          className="py-2 px-2 -mx-2 hover:bg-slate-50 rounded cursor-pointer"
-        >
+        <li key={t.id}>
+          <button type="button" onClick={() => navigate(`/dispatch?ticket=${encodeURIComponent(t.id)}`)} className="w-full text-left py-2 px-2 -mx-2 hover:bg-slate-50 rounded">
           <div className="text-sm font-medium text-slate-800 truncate">
             {t.ticketNumber || t.id.slice(0, 8)} · {t.company?.name || '—'}
           </div>
           <div className="text-xs text-slate-500 truncate">{t.locationDisplay || ''}</div>
+          </button>
         </li>
       ))}
     </ul>
@@ -276,9 +275,11 @@ function CoverageStatusWidget() {
 }
 
 function TeamActivityWidget() {
-  return (
-    <EmptyNote message="Team activity rollup coming soon — will show today's tickets per tech." />
-  )
+  const { data, loading, error } = useFetch<{ date: string; rows: { id: string; name: string; total: number; working: number; review: number; done: number }[] }>('/dashboard/team-activity')
+  if (loading) return <Loader2 className="h-5 w-5 animate-spin" />
+  if (error) return <EmptyNote message="Team activity could not load." />
+  if (!data?.rows.length) return <EmptyNote message="No team tickets for today's service date." />
+  return <div className="space-y-2 text-xs"><p className="text-slate-500">{data.date} · by service date</p>{data.rows.map(row => <div key={row.id} className="flex justify-between gap-3 border-b pb-2"><span className="font-medium">{row.name}</span><span>{row.working} working · {row.review} review · {row.done} done</span></div>)}</div>
 }
 
 function PendingLocationRequestsWidget() {
@@ -420,10 +421,6 @@ function EnverusStatusWidget() {
   )
 }
 
-function QbSyncQueueWidget() {
-  return <EmptyNote message="QuickBooks sync queue widget — TBD." />
-}
-
 function RevenueSummaryWidget() {
   type Resp = { monthToDate?: { total: number } }
   const { data, loading, error } = useFetch<Resp>('/dashboard/billing-summary')
@@ -439,10 +436,6 @@ function RevenueSummaryWidget() {
       />
     </div>
   )
-}
-
-function TicketVolumeWidget() {
-  return <EmptyNote message="Ticket volume trend chart — TBD." />
 }
 
 const ACTIVITY_PERIODS = [
@@ -482,7 +475,7 @@ function ActivitySummaryWidget() {
       ) : (
         <div onClick={() => navigate('/tickets')} className="cursor-pointer">
           <MetricRow icon={ClipboardList} label="Tickets closed" value={data?.ticketsClosed ?? 0} />
-          <MetricRow icon={DollarSign} label="Dollars billed" value={`$${(data?.dollarsBilled ?? 0).toLocaleString()}`} />
+          <MetricRow icon={DollarSign} label="QB accepted · invoice date" value={`$${(data?.dollarsBilled ?? 0).toLocaleString()}`} />
         </div>
       )}
     </div>

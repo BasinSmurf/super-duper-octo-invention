@@ -19,8 +19,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// companyGuards reaches for the live prisma client via ../index.js, which boots
-// the Express app on import. The guard's own behavior isn't under test here.
+// The guard's database behavior isn't under test in this transit fixture.
 vi.mock('../utils/companyGuards.js', () => ({
   assertCompanyActive: vi.fn(async () => {}),
 }));
@@ -42,6 +41,7 @@ function fakeTx(sites: SiteRow[]) {
   const transferCreates: any[] = [];
 
   const tx = {
+    $executeRaw: vi.fn(async () => 1),
     site: {
       findUnique: vi.fn(async ({ where }: any) => {
         const found = where.id
@@ -62,6 +62,7 @@ function fakeTx(sites: SiteRow[]) {
       }),
     },
     shopWorkOrderItem: {
+      findFirst: vi.fn(async () => null),
       create: vi.fn(async ({ data }: any) => ({ id: `item-${data.itemNumber}` })),
     },
     shopItemStatusLog: { create: vi.fn(async () => ({})) },

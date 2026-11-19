@@ -5,7 +5,7 @@
 //   - disqualify any profile whose non-empty scope EXCLUDES the ticket's value
 //   - score the rest (+2 ticketType match, +1 division match)
 //   - tiebreak by narrower scope, then most recent effectiveFrom
-//   - fall back to an unscoped default, then the first active profile
+//   - fall back only to an eligible unscoped default
 // This preserves the legacy `companyProfiles[0]` behavior for customers whose
 // profiles carry no scope.
 
@@ -20,6 +20,7 @@ export interface SelectableProfile {
 
 export interface ProfileSelectContext {
   ticketType?: string | null;
+  serviceSubtype?: string | null;
   division?: string | null;
   serviceDate?: Date | null;
 }
@@ -58,17 +59,18 @@ export function selectBillingProfile<T extends SelectableProfile>(
   for (const p of eligible) {
     const types = asTokens(p.appliesToTicketTypes);
     const divisions = asTokens(p.appliesToDivisions);
-    if (!inScope(types, ctx.ticketType)) continue;
+    const subtypeMatch = ctx.serviceSubtype === 'ih_sampling' && types.includes('ih_sampling');
+    if (!subtypeMatch && !inScope(types, ctx.ticketType)) continue;
     if (!inScope(divisions, ctx.division)) continue;
 
-    const score = (types.length > 0 ? 2 : 0) + (divisions.length > 0 ? 1 : 0);
+    const score = (subtypeMatch ? 4 : types.length > 0 ? 2 : 0) + (divisions.length > 0 ? 1 : 0);
     const specificity = types.length + divisions.length;
     const from = p.effectiveFrom ? new Date(p.effectiveFrom).getTime() : 0;
 
     if (
       score > bestScore ||
-      (score === bestScore && specificity > bestSpecificity) ||
-      (score === bestScore && specificity === bestSpecificity && from > bestFrom)
+      (score === bestScore && specificity < bestSpecificity) ||
+      (score === bestScore && specificity === bestSpecificity && (from > bestFrom || (from === bestFrom && p.id.localeCompare(best?.id || '') < 0)))
     ) {
       best = p;
       bestScore = score;
@@ -77,6 +79,6 @@ export function selectBillingProfile<T extends SelectableProfile>(
     }
   }
 
-  // No scoped match → first eligible (matches legacy companyProfiles[0]).
-  return best ?? eligible[0];
+  // No matching or unscoped profile → no destination.
+  return best;
 }

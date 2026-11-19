@@ -36,4 +36,11 @@ resources. No services, migrations, data syncs, or deployments were run for this
 
 Start genericization by making customer identity and integration configuration
 explicit, then separating reusable behavior from customer-specific defaults.
+
+## Application updates
+
+The application was synchronized with Claudius on November 18, 2026. See
+[UPSTREAM-SYNC.md](UPSTREAM-SYNC.md) for scope, provenance, validation, and the
+customer/operational configuration deliberately excluded from that update.
+The original baseline above and its manifest remain unchanged.
 The existing README and runbooks remain source-application references until updated.

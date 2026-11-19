@@ -8,6 +8,8 @@ interface User {
   role: string
   companyId?: string | null
   homeSiteId?: string | null
+  helpTipsStartedAt?: string | null
+  helpTipsEnabled?: boolean | null
   hasPin?: boolean
 }
 
@@ -28,6 +30,7 @@ interface AuthContextType {
   logout: () => void
   /** Flip the cached user to hasPin=true after they set a PIN (dismisses the nag). */
   markPinSet: () => void
+  setHelpTips: (enabled: boolean | null) => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextType | null>(null)
@@ -96,6 +99,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null)
   }
 
+  async function setHelpTips(enabled: boolean | null) {
+    const help = await api.put<{ helpTipsStartedAt: string | null; helpTipsEnabled: boolean | null }>('/auth/me/help-tips', { enabled })
+    setUser(prev => {
+      if (!prev) return prev
+      const next = { ...prev, ...help }
+      localStorage.setItem('sundog_user', JSON.stringify(next))
+      return next
+    })
+  }
+
   function markPinSet() {
     setUser((prev) => {
       if (!prev) return prev
@@ -106,7 +119,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, config, loading, login, loginWithPin, loginWithGoogle, logout, markPinSet }}>
+    <AuthContext.Provider value={{ user, config, loading, login, loginWithPin, loginWithGoogle, logout, markPinSet, setHelpTips }}>
       {children}
     </AuthContext.Provider>
   )

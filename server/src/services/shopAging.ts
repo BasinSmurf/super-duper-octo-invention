@@ -29,7 +29,7 @@
  * 30-day-old unit sitting right at the line.
  */
 
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import type { ShopItemStatus } from '../db.js';
 import { HOLD_STATUSES, resolveHoldReason, type ResolvedHoldReason } from './shopHoldReason.js';
 

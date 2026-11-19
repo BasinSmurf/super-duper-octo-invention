@@ -18,7 +18,7 @@
  *      writes an alias so layer 1 catches it silently next time.
  */
 
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { normalizeName, coreName } from './companyMerge.js';
 
 export interface EmployerMatch {

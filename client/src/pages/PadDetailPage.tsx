@@ -6,6 +6,7 @@ import { cn } from '@/lib/cn'
 import { hasPermission } from '@/lib/permissions'
 import { AddWellModal } from '@/components/AddWellModal'
 import { LocationWorkPointEditor } from '@/components/LocationWorkPointEditor'
+import { InlineCodeField } from '@/components/InlineCodeField'
 import {
   ArrowLeft,
   Building2,
@@ -81,6 +82,7 @@ interface PadDetail {
   directions: string | null
   accessNotes: string | null
   facilityCode: string | null
+  costCenter: string | null
   customData: any
   createdAt: string
   updatedAt: string
@@ -404,7 +406,18 @@ export function PadDetailPage() {
               </>
             )}
           </div>
-          {!strLabel && !pad.county && !hasGps && !pad.directions && !pad.accessNotes && !pad.facilityCode && (
+          {/* Cost code (Enverus Cost Object) — stamped onto new invoices for work here */}
+          <InlineCodeField
+            label="Cost Code"
+            value={pad.costCenter}
+            placeholder="Cost code (e.g. US00098792)"
+            canEdit={canManage}
+            onSave={async value => {
+              await api.put(`/locations/pads/${pad.id}`, { costCenter: value })
+              setPad({ ...pad, costCenter: value })
+            }}
+          />
+          {!strLabel && !pad.county && !hasGps && !pad.directions && !pad.accessNotes && !pad.facilityCode && !pad.costCenter && (
             <p className="text-gray-400 italic">No location details on file.</p>
           )}
           {azureLocationId && (
@@ -552,7 +565,7 @@ export function PadDetailPage() {
           padId={pad.id}
           padName={pad.name}
           operatorId={pad.currentOperator?.id}
-          onCreated={(_well) => {
+          onCreated={() => {
             setShowAddWell(false)
             loadPad()  // Refresh to show new well
           }}

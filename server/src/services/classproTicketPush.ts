@@ -16,7 +16,8 @@
  * the trainer/dispatch flow (dispatch, sign-in QR, close-out) is unchanged.
  */
 
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
+import { Prisma } from '../generated/prisma/client.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { generateTicketNumber } from '../utils/ticketNumber.js';
 import { matchEmployer } from './employerMatch.js';
@@ -29,7 +30,11 @@ export interface PushResult {
 }
 
 export async function pushSessionToTicket(sessionId: string, userId: string | null): Promise<PushResult> {
-  const session = await prisma.cpScheduledSession.findUnique({
+  return prisma.$transaction(async tx => {
+  // Read the idempotency pointer only after locking the scheduled session.
+  // Two browser views must not both copy the roster into separate tickets.
+  await tx.$queryRaw(Prisma.sql`SELECT id FROM cp_scheduled_sessions WHERE id = ${sessionId} FOR UPDATE`);
+  const session = await tx.cpScheduledSession.findUnique({
     where: { id: sessionId },
     include: {
       course: { select: { id: true, name: true, cardsOnSite: true } },
@@ -45,7 +50,7 @@ export async function pushSessionToTicket(sessionId: string, userId: string | nu
   // Idempotent re-push: the ticket already exists → hand it back. A voided
   // ticket counts as dead — the class gets a fresh one.
   if (session.ticketId) {
-    const existing = await prisma.serviceTicket.findFirst({
+    const existing = await tx.serviceTicket.findFirst({
       where: { id: session.ticketId, status: { not: 'void' } },
       select: { id: true, ticketNumber: true, _count: { select: { trainingRosterRecords: true } } },
     });
@@ -105,11 +110,12 @@ export async function pushSessionToTicket(sessionId: string, userId: string | nu
 
   const ticketNumber = await generateTicketNumber('training');
 
-  const ticket = await prisma.$transaction(async (tx) => {
-    const t = await tx.serviceTicket.create({
+  const ticket = await tx.serviceTicket.create({
       data: {
         ticketNumber,
         ticketType: 'training',
+        serviceSubtype: 'safety_training',
+        division: 'D1',
         status: 'draft',
         sourceType: 'classpro_session',
         companyId,
@@ -135,17 +141,15 @@ export async function pushSessionToTicket(sessionId: string, userId: string | nu
 
     await tx.cpScheduledSession.update({
       where: { id: session.id },
-      data: { status: 'pushed', ticketId: t.id },
+      data: { status: 'pushed', ticketId: ticket.id },
     });
-
-    return t;
-  });
 
   console.log(
     `[classpro→ticket] Session ${session.id} (${session.course.name} ${session.date.toISOString().slice(0, 10)}) pushed to ${ticket.ticketNumber} with ${rosterRows.length} pre-registered student(s)`,
   );
 
   return { created: true, ticketId: ticket.id, ticketNumber: ticket.ticketNumber, rosterCount: rosterRows.length };
+  });
 }
 
 /**

@@ -2,13 +2,15 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { v4 as uuidv4 } from 'uuid'
 import { db } from '@/lib/db'
-import { api } from '@/lib/api'
+import { api, ApiError } from '@/lib/api'
 import { cn } from '@/lib/cn'
 import { getActiveSiteId } from '@/lib/site'
 import { CustomerSearch } from '@/components/CustomerSearch'
+import { useSync } from '@/contexts/SyncContext'
 import {
   ShopUnitEntry,
   buildShopItemPayload,
+  partLabel,
   isMonitor,
   CATEGORIES,
   SERVICE_TYPES,
@@ -51,6 +53,7 @@ function isContactValid(c: ContactPerson): boolean {
 
 export function ShopIntakePage() {
   const navigate = useNavigate()
+  const { enabled: offlineEnabled } = useSync()
   const [step, setStep] = useState<Step>('customer')
 
   // Basin Safety's well-known company record (for internal work)
@@ -61,7 +64,7 @@ export function ShopIntakePage() {
   const [isInternal, setIsInternal] = useState(false)
   const [poNumber, setPoNumber] = useState('')
   const [afeNumber, setAfeNumber] = useState('')
-  // Tier 1 reservation billing — adds the 5% fee + Pale Horse QB customer when
+  // Tier 1 reservation billing — routes the QB customer to Pale Horse when
   // this WO is invoiced. Shop work has no pad, so it's a per-WO checkbox.
   const [tier1, setTier1] = useState(false)
   const [intakeNotes, setIntakeNotes] = useState('')
@@ -76,11 +79,14 @@ export function ShopIntakePage() {
 
   // Step 2: Items (Equipment)
   const [items, setItems] = useState<IntakeItem[]>([])
-  const [occupiedBins, setOccupiedBins] = useState<Map<string, { workOrderNumber: string; itemId: string }>>(new Map())
+  const [occupiedBins, setOccupiedBins] = useState<Map<string, { workOrderNumber: string; workOrderId?: string; itemId: string }>>(new Map())
+
+  const hasDeferredSerials = items.some(item => !item.serialNumber.trim())
+  const validItemCount = items.length > 0 && (!hasDeferredSerials || (items.length > 10 && items.length <= 1000))
 
   useEffect(() => {
-    api.get<{ data: Array<{ bin: string; workOrderNumber: string; itemId: string }> }>('/shop-orders/occupied-bins')
-      .then(res => setOccupiedBins(new Map(res.data.map(d => [d.bin, { workOrderNumber: d.workOrderNumber, itemId: d.itemId }]))))
+    api.get<{ data: Array<{ bin: string; workOrderNumber: string; workOrderId?: string; itemId: string }> }>('/shop-orders/occupied-bins')
+      .then(res => setOccupiedBins(new Map(res.data.map(d => [d.bin, { workOrderNumber: d.workOrderNumber, workOrderId: d.workOrderId, itemId: d.itemId }]))))
       .catch(() => setOccupiedBins(new Map()))
   }, [])
 
@@ -100,7 +106,7 @@ export function ShopIntakePage() {
       case 'customer':
         return !!customer && isContactValid(dropOffContact) && isContactValid(effectivePickupContact)
       case 'items':
-        return items.length > 0
+        return validItemCount
       case 'review':
         return true
       default:
@@ -119,7 +125,7 @@ export function ShopIntakePage() {
   }
 
   async function handleSubmit() {
-    if (!customer || items.length === 0) return
+    if (!customer || !validItemCount) return
     setSubmitting(true)
     setSubmitError('')
 
@@ -153,6 +159,7 @@ export function ShopIntakePage() {
         tier1: isInternal ? false : tier1,
         primaryCategory: primaryCategory || null,
         priority,
+        massIntake: hasDeferredSerials,
         dropOffContact: dropOffPayload,
         pickupContact: pickupPayload,
         items: items.map(buildShopItemPayload),
@@ -169,66 +176,72 @@ export function ShopIntakePage() {
           setPrintPromptWo(result)
           return
         }
-      } catch {
-        // API failed — save offline
+      } catch (err) {
+        // A server rejection is not an offline save. Keep the entered form
+        // and show the reason instead of creating an unsaveable Pending order.
+        if (err instanceof ApiError) throw err
+        if (!offlineEnabled) throw new Error('Work order was not saved. Check your connection and try again. Your equipment list is still here.')
+        // No HTTP response: retain the existing offline fallback.
       }
 
       // Offline fallback: save to Dexie + mutation queue
       const woId = uuidv4()
       const now = new Date().toISOString()
 
-      await db.shopWorkOrders.put({
-        id: woId,
-        workOrderNumber: 'Pending...',
-        status: 'intake',
-        companyId: customer.id,
-        companyName: customer.name,
-        isInternal,
-        poNumber: poNumber || null,
-        afeNumber: afeNumber || null,
-        tier1: isInternal ? false : tier1,
-        intakeDate: now,
-        intakeNotes: intakeNotes || null,
-        intakeById: null,
-        intakeByName: undefined,
-        // Basin Site this WO was received at — the active-site switcher; the
-        // server falls back to the founding site when this is blank.
-        intakeSiteId: getActiveSiteId() ?? '',
-        sourceLocationId: null,
-        returnLocationId: null,
-        promisedDate: null,
-        priority,
-        completedDate: null,
-        returnedDate: null,
-        totalItems: items.length,
-        completedItems: 0,
-        primaryCategory: primaryCategory || null,
-        notes: null,
-        dropOffContactName: dropOffPayload.name,
-        dropOffContactPhone: dropOffPayload.phone,
-        dropOffContactEmail: dropOffPayload.email,
-        dropOffContactPreferred: dropOffPayload.preferred,
-        pickupContactName: pickupPayload.name,
-        pickupContactPhone: pickupPayload.phone,
-        pickupContactEmail: pickupPayload.email,
-        pickupContactPreferred: pickupPayload.preferred,
-        pickupSignedByName: null,
-        pickupSignature: null,
-        pickupSignedAt: null,
-        pickupNotes: null,
-        createdAt: now,
-        updatedAt: now,
-        _offlineStatus: 'pending',
-      })
+      await db.transaction('rw', [db.shopWorkOrders, db.mutationQueue], async () => {
+        await db.shopWorkOrders.put({
+          id: woId,
+          workOrderNumber: 'Pending...',
+          status: 'intake',
+          companyId: customer.id,
+          companyName: customer.name,
+          isInternal,
+          poNumber: poNumber || null,
+          afeNumber: afeNumber || null,
+          tier1: isInternal ? false : tier1,
+          intakeDate: now,
+          intakeNotes: intakeNotes || null,
+          intakeById: null,
+          intakeByName: undefined,
+          // Basin Site this WO was received at — the active-site switcher; the
+          // server falls back to the founding site when this is blank.
+          intakeSiteId: getActiveSiteId() ?? '',
+          sourceLocationId: null,
+          returnLocationId: null,
+          promisedDate: null,
+          priority,
+          completedDate: null,
+          returnedDate: null,
+          totalItems: items.length,
+          completedItems: 0,
+          primaryCategory: primaryCategory || null,
+          notes: null,
+          dropOffContactName: dropOffPayload.name,
+          dropOffContactPhone: dropOffPayload.phone,
+          dropOffContactEmail: dropOffPayload.email,
+          dropOffContactPreferred: dropOffPayload.preferred,
+          pickupContactName: pickupPayload.name,
+          pickupContactPhone: pickupPayload.phone,
+          pickupContactEmail: pickupPayload.email,
+          pickupContactPreferred: pickupPayload.preferred,
+          pickupSignedByName: null,
+          pickupSignature: null,
+          pickupSignedAt: null,
+          pickupNotes: null,
+          createdAt: now,
+          updatedAt: now,
+          _offlineStatus: 'pending',
+        })
 
-      await db.mutationQueue.add({
-        table: 'shopWorkOrders',
-        action: 'create',
-        entityId: woId,
-        payload: { ...payload, id: woId },
-        createdAt: now,
-        status: 'pending',
-        retryCount: 0,
+        await db.mutationQueue.add({
+          table: 'shopWorkOrders',
+          action: 'create',
+          entityId: woId,
+          payload: { ...payload, id: woId },
+          createdAt: now,
+          status: 'pending',
+          retryCount: 0,
+        })
       })
 
       navigate(`/shop/${woId}`)
@@ -356,7 +369,7 @@ export function ShopIntakePage() {
             </div>
           </div>
 
-          {/* Tier 1 reservation billing — customer-facing surcharge, so only for
+          {/* Tier 1 reservation billing — customer routing, so only for
               billable (non-internal) work. */}
           {!isInternal && (
             <label className="flex items-start gap-2 cursor-pointer">
@@ -368,7 +381,7 @@ export function ShopIntakePage() {
               />
               <span className="text-sm text-slate-700">
                 Tier 1 reservation
-                <span className="block text-xs text-slate-500">Adds the 5% reservation fee and bills through Pale Horse.</span>
+                <span className="block text-xs text-slate-500">Bills through Pale Horse without adding a surcharge.</span>
               </span>
             </label>
           )}
@@ -447,6 +460,7 @@ export function ShopIntakePage() {
           items={items}
           onChange={setItems}
           defaultCategory={primaryCategory}
+          allowMassIntake
           occupiedBins={occupiedBins}
         />
       )}
@@ -526,7 +540,7 @@ export function ShopIntakePage() {
                 <div key={item.id} className="py-1 border-b border-slate-50 last:border-0">
                   <div className="flex items-center gap-2 text-xs">
                     <span className="text-slate-400 w-6">{idx + 1}</span>
-                    <span className="font-mono font-medium text-slate-900 flex-1">{item.serialNumber}</span>
+                    <span className="font-mono font-medium text-slate-900 flex-1">{item.serialNumber || 'Serial required at QA'}</span>
                     <span className="text-slate-500">{SERVICE_TYPES.find(s => s.value === item.serviceType)?.label}</span>
                   </div>
                   {/* FEX review */}
@@ -566,7 +580,8 @@ export function ShopIntakePage() {
                         item.scbaRegulatorSerial && `Reg: ${item.scbaRegulatorSerial}`,
                         item.scbaMaskSerial && `Mask: ${item.scbaMaskSerial}`,
                         item.scbaHarnessSerial && `Harness: ${item.scbaHarnessSerial}`,
-                        ...item.scbaBottleSerials.map((bs, _i) => `Bottle: ${bs}`),
+                        ...item.scbaBottleSerials.map(bs => `Bottle: ${bs}`),
+                        (item.scbaNotIncluded?.length ?? 0) > 0 && `Not included: ${item.scbaNotIncluded!.map(partLabel).join(', ')}`,
                       ].filter(Boolean).join(' · ')}
                     </div>
                   )}
@@ -606,7 +621,7 @@ export function ShopIntakePage() {
           <button
             type="button"
             onClick={handleSubmit}
-            disabled={submitting || items.length === 0}
+            disabled={submitting || !validItemCount}
             className="flex items-center gap-2 px-6 py-3 bg-emerald-700 text-white rounded-lg font-medium text-sm hover:bg-emerald-600 transition-colors disabled:opacity-40"
           >
             {submitting ? (

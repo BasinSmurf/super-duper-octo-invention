@@ -15,7 +15,7 @@
  */
 
 import { Router, Request, Response, NextFunction } from 'express';
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { Prisma } from '../db.js';
 import { requirePermission } from '../middleware/rbac.js';
 import { AppError } from '../middleware/errorHandler.js';

@@ -8,11 +8,13 @@ import { getRequiredShopKeys } from './inspectionChecklist.js';
  * are the interesting input and everything else is noise.
  */
 function fakePrisma(
-  inspections: Array<{ data?: unknown; outcome?: string; serviceActions?: string[] }>,
+  inspections: Array<{ data?: unknown; outcome?: string; serviceActions?: string[]; updatedAt?: Date }>,
   batches: Array<{
     checklistResults?: Record<string, boolean>;
     checklistOverrides?: Record<string, boolean> | null;
     serviceActions?: string[];
+    outcome?: string;
+    updatedAt?: Date;
   }> = [],
 ) {
   return {
@@ -22,12 +24,15 @@ function fakePrisma(
           data: i.data ?? null,
           outcome: i.outcome ?? 'pass',
           serviceActions: i.serviceActions ?? [],
+          updatedAt: i.updatedAt ?? new Date(0),
         })),
       ),
     },
     shopQaUnitResult: {
       findMany: vi.fn().mockResolvedValue(
         batches.map((b) => ({
+          outcome: b.outcome ?? 'pass',
+          updatedAt: b.updatedAt ?? new Date(0),
           checklistOverrides: b.checklistOverrides ?? null,
           qaEvent: {
             checklistResults: b.checklistResults ?? {},
@@ -56,6 +61,40 @@ function fullChecklist(category: 'fire_extinguisher' | 'scba' | 'gas_detection')
 const FEX_UNIT = { id: 'unit-1', equipmentCategory: 'fire_extinguisher', parentItemId: null };
 
 describe('evaluateItemQa', () => {
+  it('invalidates an earlier passing inspection after a later failure', async () => {
+    const verdict = await evaluateItemQa(fakePrisma([
+      { outcome: 'pass', data: fullChecklist('fire_extinguisher'), updatedAt: new Date(1000) },
+      { outcome: 'fail', data: fullChecklist('fire_extinguisher'), updatedAt: new Date(2000) },
+    ]), FEX_UNIT);
+    expect(verdict.satisfied).toBe(false);
+  });
+  it('accepts a passing retest after the failed inspection', async () => {
+    const verdict = await evaluateItemQa(fakePrisma([
+      { outcome: 'fail', data: fullChecklist('fire_extinguisher'), updatedAt: new Date(1000) },
+      { outcome: 'pass', data: fullChecklist('fire_extinguisher'), updatedAt: new Date(2000) },
+    ]), FEX_UNIT);
+    expect(verdict.satisfied).toBe(true);
+  });
+  it('does not let an old passing batch bypass a newer individual failure', async () => {
+    const verdict = await evaluateItemQa(fakePrisma([
+      { outcome: 'fail', data: fullChecklist('fire_extinguisher'), updatedAt: new Date(2000) },
+    ], [{ checklistResults: completeFexKeys(), updatedAt: new Date(1000) }]), FEX_UNIT);
+    expect(verdict.satisfied).toBe(false);
+  });
+  it('does not let an old individual pass bypass a newer failed batch', async () => {
+    const verdict = await evaluateItemQa(fakePrisma([
+      { outcome: 'pass', data: fullChecklist('fire_extinguisher'), updatedAt: new Date(1000) },
+    ], [{ outcome: 'fail', checklistResults: completeFexKeys(), updatedAt: new Date(2000) }]), FEX_UNIT);
+    expect(verdict.satisfied).toBe(false);
+  });
+  it.each(['fail', 'requires_parts'])('blocks %s even when every checklist answer passes', async (outcome) => {
+    const verdict = await evaluateItemQa(
+      fakePrisma([{ outcome, data: fullChecklist('fire_extinguisher') }]), FEX_UNIT,
+    );
+    expect(verdict.satisfied).toBe(false);
+    expect(verdict.reason).toMatch(/outcome/i);
+  });
+
   it('refuses a unit with no inspection at all', async () => {
     const verdict = await evaluateItemQa(fakePrisma([]), FEX_UNIT);
     expect(verdict.satisfied).toBe(false);

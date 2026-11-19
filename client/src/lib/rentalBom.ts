@@ -52,6 +52,11 @@ export interface RentalBomItem {
 export interface RentalBom {
   id: string
   bomType: RentalBomType
+  // A customer can hold several packages of one type — the variants their MSA
+  // prices separately ("w/ gas detection" vs "no monitors"). name tells them
+  // apart; isDefault is the one dispatch preselects for the type.
+  name?: string | null
+  isDefault?: boolean
   manned: boolean
   includedTechs: number
   notes: string | null
@@ -130,23 +135,41 @@ export function productRateFor(p: RentalBomProduct | null | undefined, rateType:
   return toRate(unitRate) ?? toRate(p.defaultSellPrice)
 }
 
-/**
- * Which BOM applies to a rental: drilling/rig packages stay tied to the rig
- * toggle; ordinary trailer packages split on the existing manned flag. Legacy
- * Standard/Drilling rows remain valid fallbacks during rollout.
- */
-export function resolveBom(boms: RentalBom[], drilling: boolean, manned = true): RentalBom | null {
-  if (drilling) {
-    return boms.find(b => b.bomType === 'rig')
-      ?? boms.find(b => b.bomType === 'drilling')
-      ?? null
-  }
-  const preferred: RentalBomType = manned ? 'manned' : 'unmanned'
-  return boms.find(b => b.bomType === preferred)
-    ?? boms.find(b => b.bomType === 'standard' && b.manned === manned)
-    ?? boms.find(b => b.bomType === 'standard')
-    ?? null
+/** "Unmanned · w/ gas detection" — how a package is named on pickers. */
+export function bomDisplayName(bom: RentalBom): string {
+  const type = BOM_TYPE_LABELS[bom.bomType]
+  const name = bom.name?.trim() || bom.packageProduct?.name
+  return name ? `${type} · ${name}` : `${type} package`
 }
+
+/** Default first, then by name — the order every picker lists variants in. */
+function byDefaultThenName(a: RentalBom, b: RentalBom): number {
+  if (!!a.isDefault !== !!b.isDefault) return a.isDefault ? -1 : 1
+  return (a.name || '').localeCompare(b.name || '')
+}
+
+/**
+ * Every package variant that fits a rental: drilling/rig packages stay tied to
+ * the rig toggle; ordinary trailer packages split on the manned flag. Legacy
+ * Standard/Drilling rows remain fallbacks during rollout. The first group with
+ * anything in it wins, default variant first — so [0] is what dispatch
+ * preselects and the rest are what the dispatcher can switch to.
+ */
+export function packageVariants(boms: RentalBom[], drilling: boolean, manned = true): RentalBom[] {
+  const groups: ((b: RentalBom) => boolean)[] = drilling
+    ? [b => b.bomType === 'rig', b => b.bomType === 'drilling']
+    : [
+        b => b.bomType === (manned ? 'manned' : 'unmanned'),
+        b => b.bomType === 'standard' && b.manned === manned,
+        b => b.bomType === 'standard',
+      ]
+  for (const match of groups) {
+    const hit = boms.filter(match)
+    if (hit.length) return hit.sort(byDefaultThenName)
+  }
+  return []
+}
+
 
 /**
  * Flatten a BOM into the baseline snapshot stored on a rental's composition —
@@ -191,7 +214,9 @@ export function bomPackageLine(bom: RentalBom | null, rateType: RentalRateType):
   // says what this customer actually pays.
   const negotiated = toRate(bom.packageRate)
   return {
-    label: bom.packageProduct?.name || `${BOM_TYPE_LABELS[bom.bomType]} Package`,
+    // The QB item's own name: it's what prints on the invoice and what AR
+    // reconciles against the price level, so the line reads the same in both.
+    label: bom.packageProduct?.name || (bom.name?.trim() ? `${BOM_TYPE_LABELS[bom.bomType]} Package — ${bom.name.trim()}` : `${BOM_TYPE_LABELS[bom.bomType]} Package`),
     bomType: bom.bomType,
     productId: bom.packageProductId ?? null,
     productName: bom.packageProduct?.name ?? null,
@@ -295,4 +320,53 @@ export function diffDeployedAgainstBaseline(
   }
 
   return rows
+}
+
+export interface RentalBomExtraLine {
+  id: string
+  label: string
+  equipmentCategory: string
+  productId: string | null
+  qty: number
+  rate: number | null
+}
+
+/**
+ * What switching a running rental to another package writes into its next
+ * composition window: the new roster, the new package line, and the extras
+ * re-diffed against the NEW baseline. Re-diffing is the point — moving from
+ * "no monitors" to "w/ 2 monitors" must stop billing those two monitors as
+ * overages, or the job pays for them twice.
+ *
+ * `deployedCategories` = what's on site now (returned gear excluded), already
+ * netted of anything carried on its own priced line (see netAlreadyLined).
+ * Overages price off the bound product the same way deploy does; anything
+ * unbound arrives unrated and the invoice guard refuses to bill it blind.
+ */
+export function switchPackageComposition(
+  bom: RentalBom,
+  rateType: RentalRateType,
+  deployedCategories: (string | null | undefined)[],
+): {
+  bom: ReturnType<typeof bomBaselineItems>
+  bomType: RentalBomType
+  bomPackage: RentalBomPackageLine | null
+  bomExtras: RentalBomExtraLine[]
+} {
+  const baseline = bomBaselineItems(bom)
+  const productsById = new Map(bom.items.filter(i => i.product).map(i => [i.product!.id, i.product!]))
+  const bomExtras = diffDeployedAgainstBaseline(baseline, deployedCategories)
+    .filter(r => r.over > 0)
+    .map(r => {
+      const prod = r.productId ? productsById.get(r.productId) : undefined
+      return {
+        id: `bomx-${r.equipmentCategory}`,
+        label: `${prod?.name || r.label} (over baseline)`,
+        equipmentCategory: r.equipmentCategory,
+        productId: r.productId,
+        qty: r.over,
+        rate: productRateFor(prod, rateType),
+      }
+    })
+  return { bom: baseline, bomType: bom.bomType, bomPackage: bomPackageLine(bom, rateType), bomExtras }
 }

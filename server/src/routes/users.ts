@@ -1,11 +1,12 @@
 import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
-import { prisma } from '../index.js';
+import { prisma } from '../db.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { requirePermission } from '../middleware/rbac.js';
 import { syncWorkspaceUsers, isGoogleGroupsConfigured } from '../services/googleGroups.js';
+import { getReportSubscriptions, saveReportPreference } from '../services/reportSubscriptions.js';
 
-const VALID_ROLES = ['platform_admin', 'boss', 'field_super', 'billing_ar', 'dispatch', 'field_tech', 'trainer', 'train_admin'] as const;
+const VALID_ROLES = ['platform_admin', 'boss', 'field_super', 'billing_ar', 'ar_supervisor', 'dispatch', 'field_tech', 'trainer', 'train_admin'] as const;
 type ValidRole = typeof VALID_ROLES[number];
 
 export const usersRouter = Router();
@@ -28,6 +29,14 @@ usersRouter.get('/active', async (_req: Request, res: Response, next) => {
 
 // All remaining user management routes require the users:manage capability
 usersRouter.use(requirePermission('users:manage'));
+
+usersRouter.get('/:id/reports', async (req, res) => {
+  res.json(await getReportSubscriptions(prisma, req.params.id as string));
+});
+usersRouter.put('/:id/reports/:type', async (req, res) => {
+  await saveReportPreference(prisma, req.params.id as string, req.user!.userId, req.params.type, req.body?.cadence);
+  res.json(await getReportSubscriptions(prisma, req.params.id as string));
+});
 
 // GET /api/users — list all users
 usersRouter.get('/', async (_req: Request, res: Response, next) => {

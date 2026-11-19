@@ -1,3 +1,4 @@
+import { assertBillingEligible } from './ticketWritePolicy.js';
 /**
  * approvalAutoProcessor.ts
  *
@@ -108,9 +109,10 @@ async function processTick(): Promise<void> {
       }
 
       try {
+        await assertBillingEligible(ticket);
         // Transition to billing_queue
-        await prisma.serviceTicket.update({
-          where: { id: ticket.id },
+        const changed = await prisma.serviceTicket.updateMany({
+          where: { id: ticket.id, status: 'supervisor_review' },
           data: {
             status: 'billing_queue',
             reviewedAt: new Date(),
@@ -118,6 +120,8 @@ async function processTick(): Promise<void> {
             // reviewedById stays null — no human operator on auto approvals
           },
         });
+
+        if (changed.count !== 1) { skipped++; continue; }
 
         // Audit log entry. userId is omitted since the system is acting,
         // and we tag the change set so it's filterable.

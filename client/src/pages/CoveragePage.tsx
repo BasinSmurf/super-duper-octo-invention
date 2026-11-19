@@ -101,6 +101,7 @@ export function CoveragePage() {
   const [data, setData] = useState<CoverageData | null>(null)
   const [detail, setDetail] = useState<RouteDetail | null>(null)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [months, setMonths] = useState<number | 'auto'>('auto')
   const [expandedRoute, setExpandedRoute] = useState<string | null>(null)
@@ -116,13 +117,14 @@ export function CoveragePage() {
 
   async function loadData() {
     setLoading(true)
+    setLoadError(null)
     setDetail(null)
     setExpandedRoute(null)
     try {
       const result = await api.get<CoverageData>(`/coverage/routes?months=${months === 'auto' ? 'auto' : months}`)
       if (result) setData(result)
     } catch {
-      // offline
+      setLoadError('Coverage could not be loaded. Please retry.')
     }
     setLoading(false)
   }
@@ -281,6 +283,11 @@ export function CoveragePage() {
       {loading ? (
         <div className="flex items-center justify-center py-12">
           <Loader2 className="w-6 h-6 text-slate-400 animate-spin" />
+        </div>
+      ) : loadError ? (
+        <div role="alert" className="text-center py-12 text-red-700">
+          <p>{loadError}</p>
+          <button type="button" onClick={loadData} className="mt-3 underline">Retry</button>
         </div>
       ) : !data || data.totals.routes === 0 ? (
         <div className="text-center py-12 text-slate-400">

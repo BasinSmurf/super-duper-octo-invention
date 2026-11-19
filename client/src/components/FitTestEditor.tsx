@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { v4 as uuidv4 } from 'uuid'
 import { cn } from '@/lib/cn'
 import { SignaturePad } from '@/components/SignaturePad'
 import type { FitTestDraftRecord } from '@/lib/db-types'
@@ -125,11 +126,9 @@ export const ADVERSE_REACTIONS = [
   { key: 'claustrophobia', label: 'Claustrophobia' },
 ]
 
-let nextTempId = 1
-
 function createBlankRecord(defaultEmployer: string, services: ('fit_test' | 'audiometric')[] = ['fit_test']): FitTestDraftRecord {
   return {
-    id: `ft_${nextTempId++}`,
+    id: uuidv4(),
     includesFitTest: services.includes('fit_test'),
     includesAudiometric: services.includes('audiometric'),
     audiometricResult: null,
@@ -175,7 +174,7 @@ export function FitTestEditor({ records, onChange, defaultEmployer = '', service
     const last = records[records.length - 1]
     const rec: FitTestDraftRecord = {
       ...last,
-      id: `ft_${nextTempId++}`,
+      id: uuidv4(),
       employeeName: '',
       employeeId: '',
       jobTitle: '',
@@ -490,7 +489,7 @@ export function FitTestEditor({ records, onChange, defaultEmployer = '', service
                                 updateRecord(rec.id, {
                                   resultFiles: [
                                     ...(records.find(r => r.id === rec.id)?.resultFiles || []),
-                                    { id: `rf_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, fileName: file.name, mimeType: file.type || 'application/octet-stream', dataUrl: String(reader.result) },
+                                    { id: uuidv4(), fileName: file.name, mimeType: file.type || 'application/octet-stream', dataUrl: String(reader.result) },
                                   ],
                                 })
                               }

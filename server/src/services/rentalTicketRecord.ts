@@ -36,6 +36,7 @@ export interface RentalRecordTicketShape {
   workDescription: string | null;
   customData: unknown;
   serviceDate: Date;
+  arrivalTime?: Date | null;
   linkedRentalAgreementId: string | null;
   /** Attribution fallbacks for the daily-log row when there's no human actor
    *  (the background auto-approval job). RentalDailyLog.loggedById is NOT NULL. */
@@ -106,7 +107,7 @@ export async function recordTicketAsRentalLog(
   const now = new Date();
   const entry = {
     id: randomUUID(),
-    time: `${String(now.getUTCHours()).padStart(2, '0')}:${String(now.getUTCMinutes()).padStart(2, '0')}`,
+    time: ticket.arrivalTime ? ticket.arrivalTime.toISOString().slice(11, 16) : '',
     type: 'note' as const,
     text: `Service ticket ${ticket.ticketNumber} — ${ticket.workDescription?.trim() || 'work logged'}${actor?.name ? ` (${actor.name})` : ''}`,
     createdAt: now.toISOString(),

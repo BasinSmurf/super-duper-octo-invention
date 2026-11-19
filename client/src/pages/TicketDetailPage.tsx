@@ -1,10 +1,14 @@
-import { useState, useEffect } from 'react'
+import { TicketAttachment } from '@/components/TicketAttachment'
+import { BillingApprovalSplitDialog, type BillingApprovalPlan } from '@/components/BillingApprovalSplitDialog'
+import { PdfExportButton } from '@/components/PdfExportButton'
+import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/contexts/AuthContext'
+import { useSync } from '@/contexts/SyncContext'
 import { usePermissions } from '@/contexts/PermissionsContext'
 import { ConfirmDestructiveDialog } from '@/components/ConfirmDestructiveDialog'
 import { db } from '@/lib/db'
-import { api } from '@/lib/api'
+import { api, ApiError } from '@/lib/api'
 import { cn } from '@/lib/cn'
 import { DISCLOSURE_CONDITIONS, ADVERSE_REACTIONS } from '@/components/FitTestEditor'
 import { getAvailableTransitions, canEditTicket, TRANSITION_LABELS } from '@/lib/ticketStateMachine'
@@ -13,6 +17,7 @@ import type { Stripe } from '@stripe/stripe-js'
 import { getStripe } from '@/lib/stripe'
 import { formatCalendarDateLong, formatCalendarDateNumeric } from '@/lib/dates'
 import { PaymentForm } from '@/components/PaymentForm'
+import { TicketWorkPointVerification, type TicketVerificationPoint } from '@/components/TicketWorkPointVerification'
 import { BillingLineagePanel } from '@/components/BillingLineagePanel'
 import type { BillingReadiness } from '@/components/BillingReadinessEditor'
 import {
@@ -32,7 +37,6 @@ import {
   Loader2,
   Pencil,
   Copy,
-  FileDown,
   FlaskConical,
   GraduationCap,
   Ban,
@@ -41,6 +45,16 @@ import {
 
 // ---- Types for the API response ----
 interface TicketDetail {
+  rejectionReason?: string | null
+  linkedShopOrders?: { id: string; workOrderNumber: string; status: string }[]
+  billingApprovalAllocation?: {
+    approvedAt: string
+    groups: { id: string; label: string }[]
+    rows: { key: string; description: string; unitOfMeasure: string }[]
+    allocations: { key: string; parts: { profileId: string; quantity: number }[] }[]
+  } | null
+  verificationWorkPoints?: TicketVerificationPoint[]
+  workPointVerificationExpiryDays?: number
   id: string
   ticketNumber: string | null
   ticketType: string
@@ -302,6 +316,8 @@ export function TicketDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { user } = useAuth()
+  const { syncState } = useSync()
+  const ticketLoadRequest = useRef(0)
   const { can } = usePermissions()
   const [voidOpen, setVoidOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
@@ -342,6 +358,7 @@ export function TicketDetailPage() {
   const [expandedFitTest, setExpandedFitTest] = useState<string | null>(null)
   const [transitioning, setTransitioning] = useState(false)
   const [transitionError, setTransitionError] = useState('')
+  const [approvalPlan, setApprovalPlan] = useState<BillingApprovalPlan | null>(null)
   // #13 QR self-sign-in (training classes)
   const [signinQr, setSigninQr] = useState<{ url: string; qrDataUrl: string } | null>(null)
   const [signinQrLoading, setSigninQrLoading] = useState(false)
@@ -354,9 +371,11 @@ export function TicketDetailPage() {
   useEffect(() => {
     if (!id) return
     loadTicket(id)
-  }, [id])
+    return () => { ticketLoadRequest.current++ }
+  }, [id, syncState.lastSyncedAt])
 
   async function loadTicket(ticketId: string) {
+    const request = ++ticketLoadRequest.current
     setLoading(true)
     setError('')
 
@@ -454,9 +473,27 @@ export function TicketDetailPage() {
       }
     } catch { /* offline not available */ }
 
+    if (request !== ticketLoadRequest.current) return
+    // Until the outbox is acknowledged, the server can still contain the old
+    // draft. Show the newly saved local work with its existing Queued badge.
+    if (offline?._offlineStatus === 'pending' || offline?._offlineStatus === 'error') {
+      const queued = await db.mutationQueue.filter(m => m.status !== 'done' && (
+        m.entityId === ticketId || m.payload.ticketId === ticketId
+      )).count()
+      if (request !== ticketLoadRequest.current) return
+      if (queued > 0) {
+        setTicket(offline)
+        setLoading(false)
+        return
+      }
+      // A rejected mutation may have been discarded deliberately. Its stale
+      // local flag must not hide the authoritative server status forever.
+    }
+
     // Try API for richer data
     try {
       const data = await api.get<TicketDetail>(`/tickets/${ticketId}`)
+      if (request !== ticketLoadRequest.current) return
       if (data && data.id) {
         setTicket(data)
         setLoading(false)
@@ -466,6 +503,7 @@ export function TicketDetailPage() {
       // API failed — use offline
     }
 
+    if (request !== ticketLoadRequest.current) return
     if (offline) {
       setTicket(offline)
     } else {
@@ -490,6 +528,31 @@ export function TicketDetailPage() {
     setTransitionError('')
 
     const previousStatus = ticket.status
+    const rejecting = targetStatus === 'in_progress' && previousStatus === 'supervisor_review'
+    let reason: string | undefined
+    if (rejecting) {
+      if (!navigator.onLine) { setTransitionError('Connect to the server to return a ticket for correction.'); setTransitioning(false); return }
+      const answer = window.prompt('Reason for returning this ticket to the technician:')
+      if (answer === null) { setTransitioning(false); return }
+      reason = answer.trim()
+      if (!reason) { setTransitionError('A rejection reason is required'); setTransitioning(false); return }
+    }
+    const canQueueTransition = !rejecting && ['draft', 'in_progress', 'completed', 'supervisor_review'].includes(targetStatus)
+    if (!navigator.onLine && !canQueueTransition) {
+      setTransitionError('Connect to the server to approve or bill this ticket.')
+      setTransitioning(false)
+      return
+    }
+
+    if (targetStatus === 'billing_queue') {
+      try {
+        const plan = await api.get<BillingApprovalPlan>(`/tickets/${id}/approval-allocation`)
+        if (plan && plan.groups.length > 1) { setApprovalPlan(plan); setTransitioning(false); return }
+      } catch (err) {
+        setTransitionError(err instanceof Error ? err.message : 'Could not load approval allocation')
+        setTransitioning(false); return
+      }
+    }
 
     // Optimistic local update
     setTicket(prev => prev ? { ...prev, status: targetStatus } : prev)
@@ -527,7 +590,7 @@ export function TicketDetailPage() {
 
     try {
       // Try the real API transition endpoint first
-      await api.post(`/tickets/${id}/transition`, { targetStatus })
+      await api.post(`/tickets/${id}/transition`, { targetStatus, reason })
       // If transitioning to in_progress, navigate to edit so the tech can work the ticket
       if (targetStatus === 'in_progress') {
         navigate(`/tickets/${id}/edit`)
@@ -535,7 +598,13 @@ export function TicketDetailPage() {
       }
       // Reload full ticket data after transition
       loadTicket(id)
-    } catch {
+    } catch (err) {
+      if (!canQueueTransition || (err instanceof ApiError && err.status >= 400 && err.status < 500)) {
+        setTicket(prev => prev ? { ...prev, status: previousStatus } : prev)
+        try { await db.tickets.update(id, { status: previousStatus }) } catch { /* not cached */ }
+        setTransitionError(err instanceof Error ? err.message : 'Could not change ticket status')
+        return
+      }
       // API unavailable — queue the status update for offline sync
       try {
         await db.mutationQueue.add({
@@ -554,7 +623,7 @@ export function TicketDetailPage() {
           navigate(`/tickets/${id}/edit`)
           return
         }
-      } catch (queueErr) {
+      } catch {
         // Revert optimistic update
         setTicket(prev => prev ? { ...prev, status: previousStatus } : prev)
         try { await db.tickets.update(id, { status: previousStatus }) } catch { /* */ }
@@ -585,8 +654,13 @@ export function TicketDetailPage() {
   }
 
   const statusCfg = STATUS_CONFIG[ticket.status] || { label: ticket.status, color: 'bg-slate-100 text-slate-600' }
-  const typeLabel = TICKET_TYPE_LABELS[ticket.ticketType] || ticket.ticketType
-  const subtypeLabel = ticket.serviceSubtype ? SUBTYPE_LABELS[ticket.serviceSubtype] || ticket.serviceSubtype : null
+  const typeLabel = ({ rental_deploy: 'Deploy', rental_swap: 'Swap', rental_return: 'Return' } as Record<string, string>)[String(ticket.customData?.workType)] || TICKET_TYPE_LABELS[ticket.ticketType] || ticket.ticketType
+  const combinedServices = Array.isArray(ticket.customData?.d3CombinedServices)
+    ? ticket.customData.d3CombinedServices.filter((s: unknown): s is 'air' | 'ih' | 'gas' => s === 'air' || s === 'ih' || s === 'gas')
+    : []
+  const subtypeLabel = combinedServices.length
+    ? combinedServices.map((s: 'air' | 'ih' | 'gas') => ({ air: 'Air System', ih: 'IH Testing', gas: 'Gas Detection' })[s]).join(' + ')
+    : ticket.serviceSubtype ? SUBTYPE_LABELS[ticket.serviceSubtype] || ticket.serviceSubtype : null
   const isFitTest = ticket.serviceSubtype === 'fit_test'
   const wellIds = ticket.customData?.wellIds as string[] | undefined
 
@@ -751,57 +825,32 @@ export function TicketDetailPage() {
       <div className="flex gap-2 mb-4 justify-end">
         {/* Occ Health Report — full per-person fit test + audiometric detail */}
         {isFitTest && (ticket.fitTestRecords?.length ?? 0) > 0 && (
-          <button
-            onClick={async () => {
-              try {
-                const token = localStorage.getItem('sundog_token')
-                const res = await fetch(`/api/tickets/${ticket.id}/occ-health-pdf`, {
-                  headers: token ? { Authorization: `Bearer ${token}` } : {},
-                })
-                if (!res.ok) throw new Error('Occ Health report export failed')
-                const blob = await res.blob()
-                const url = URL.createObjectURL(blob)
-                const a = document.createElement('a')
-                a.href = url
-                a.download = `occ-health-${ticket.ticketNumber || ticket.id}.pdf`
-                a.click()
-                URL.revokeObjectURL(url)
-              } catch (e: any) {
-                alert(e.message || 'Occ Health report export failed')
-              }
-            }}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 transition-colors"
-          >
-            <FileDown className="w-3.5 h-3.5" />
-            Occ Health Report
-          </button>
+          <PdfExportButton url={`/api/tickets/${ticket.id}/occ-health-pdf`} fileName={`occ-health-${ticket.ticketNumber || ticket.id}.pdf`} label="Occ Health Report" />
         )}
-        <button
-          onClick={async () => {
-            try {
-              const token = localStorage.getItem('sundog_token')
-              const res = await fetch(`/api/tickets/${ticket.id}/pdf`, {
-                headers: token ? { Authorization: `Bearer ${token}` } : {},
-              })
-              if (!res.ok) throw new Error('PDF export failed')
-              const blob = await res.blob()
-              const url = URL.createObjectURL(blob)
-              const a = document.createElement('a')
-              a.href = url
-              a.download = `ticket-${ticket.ticketNumber || ticket.id}.pdf`
-              a.click()
-              URL.revokeObjectURL(url)
-            } catch (e: any) {
-              alert(e.message || 'PDF export failed')
-            }
-          }}
-          className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 transition-colors"
-        >
-          <FileDown className="w-3.5 h-3.5" />
-          Export PDF
-        </button>
+        <PdfExportButton url={`/api/tickets/${ticket.id}/pdf`} fileName={`ticket-${ticket.ticketNumber || ticket.id}.pdf`} label="Export PDF" />
       </div>
 
+      {approvalPlan && <BillingApprovalSplitDialog key={approvalPlan.version} plan={approvalPlan}
+        onCancel={() => setApprovalPlan(null)}
+        onRefresh={async () => { const next = await api.get<BillingApprovalPlan>(`/tickets/${id}/approval-allocation`); if (next) setApprovalPlan(next) }}
+        onConfirm={async (allocations, splitEnabled) => {
+          await api.post(`/tickets/${id}/transition`, { targetStatus: 'billing_queue',
+            splitBilling: splitEnabled, approvalAllocations: splitEnabled ? allocations : undefined, approvalPlanVersion: approvalPlan.version })
+          setApprovalPlan(null)
+          await loadTicket(id!)
+        }} />}
+      {ticket.billingApprovalAllocation && ['billing_queue', 'invoiced', 'closed'].includes(ticket.status) && (
+        <section className="rounded-lg border bg-white p-4">
+          <h2 className="font-semibold">Approved billing allocation</h2>
+          <div className="mt-2 space-y-2 text-sm">{ticket.billingApprovalAllocation.allocations.map(allocation => {
+            const record = ticket.billingApprovalAllocation!
+            const row = record.rows.find(value => value.key === allocation.key)
+            return <div key={allocation.key}><span className="font-medium">{row?.description || allocation.key}: </span>
+              {allocation.parts.map(part => `${record.groups.find(group => group.id === part.profileId)?.label || part.profileId}: ${part.quantity} ${row?.unitOfMeasure || ''}`).join(' · ')}
+            </div>
+          })}</div>
+        </section>
+      )}
       {transitionError && (
         <div className="mb-4 px-3 py-2 rounded-lg bg-red-50 text-red-700 text-sm">
           {transitionError}
@@ -874,6 +923,8 @@ export function TicketDetailPage() {
       )}
 
       <div className="space-y-4">
+        <TicketWorkPointVerification ticketId={ticket.id} points={ticket.verificationWorkPoints || []} expiryDays={ticket.workPointVerificationExpiryDays ?? 0}
+          canVerify={can('tickets:complete') && ticket.status !== 'void' && (isOwnTicket || can('tickets:edit_all'))} onSaved={() => loadTicket(ticket.id)} />
 
         {/* ---- Customer & Location ---- */}
         <section className="bg-white rounded-lg border border-slate-200 p-4">
@@ -954,6 +1005,13 @@ export function TicketDetailPage() {
           </div>
         </section>
 
+        {!!ticket.linkedShopOrders?.length && <div className="rounded-lg border bg-white p-4">
+          <h2 className="font-semibold">Shop work from this inspection</h2>
+          {ticket.linkedShopOrders.map(order => <button key={order.id} onClick={() => navigate(`/shop/${order.id}`)} className="mt-2 block text-sm text-blue-700 underline">{order.workOrderNumber} · {order.status.replace(/_/g, ' ')}</button>)}
+        </div>}
+        {ticket.rejectionReason && <section className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm">
+          <h2 className="font-semibold">Returned for correction</h2><p className="mt-1 whitespace-pre-wrap">{ticket.rejectionReason}</p>
+        </section>}
         {/* ---- Techs & People ---- */}
         <section className="bg-white rounded-lg border border-slate-200 p-4">
           <h3 className="font-semibold text-slate-900 text-sm mb-3 flex items-center gap-2">
@@ -961,6 +1019,7 @@ export function TicketDetailPage() {
             People
           </h3>
           <div className="space-y-1.5 text-sm">
+            {!ticket.assignedTech && !ticket.createdBy && <p className="text-slate-500">Responsible person not available on this device. Refresh after syncing.</p>}
             {ticket.assignedTech && (
               <p><span className="text-slate-500">Tech:</span> <span className="font-medium">{ticket.assignedTech.name}</span></p>
             )}
@@ -1000,6 +1059,31 @@ export function TicketDetailPage() {
                 </div>
               )}
             </div>
+          </section>
+        )}
+
+        {!!ticket.customData?.inspection?.results?.length && <section className="rounded-lg border bg-white p-4 text-sm space-y-3">
+          <h3 className="font-semibold">Return inspections by equipment</h3>
+          {ticket.customData.inspection.results.map((result: { itemId: string; data: any }) => {
+            const change = ticket.customData.equipmentChanges?.find((row: any) => row.itemId === result.itemId)
+            return <div key={result.itemId} className="border-t pt-2">
+              <p className="font-medium">{change?.before?.type || 'Equipment'} · {change?.before?.serial || result.itemId}</p>
+              <p>Condition: {String(result.data?.overallCondition || 'Not recorded').replaceAll('_', ' ')}</p>
+              {['physicalDamageNotes', 'accessoriesNotes', 'notes'].map(key => result.data?.[key] && <p key={key}>{result.data[key]}</p>)}
+              {result.data?.damagePhotos?.map((photo: { id: string; dataUrl: string }) => <img key={photo.id} src={photo.dataUrl} alt="Return damage" className="max-h-48 rounded" />)}
+            </div>
+          })}
+        </section>}
+        {ticket.customData?.workType === 'rental_return' && ticket.customData?.inspection?.data && (
+          <section className="bg-white rounded-lg border border-slate-200 p-4 space-y-2 text-sm">
+            <h3 className="font-semibold">Batch return inspection — {ticket.customData.inspection.itemIds.length} equipment row(s)</h3>
+            <p>Condition: {String(ticket.customData.inspection.data.overallCondition).replaceAll('_', ' ')}</p>
+            {([['physicalDamage', 'Physical damage'], ['cleanlinessOk', 'Cleanliness OK'], ['calibrationCurrent', 'Calibration current'], ['accessoriesReturned', 'Accessories returned']] as const).map(([key, label]) =>
+              <p key={key}>{label}: {ticket.customData.inspection.data[key] ? 'Yes' : 'No'}</p>)}
+            {['physicalDamageNotes', 'accessoriesNotes', 'notes'].map(key => ticket.customData.inspection.data[key] && <p key={key} className="whitespace-pre-wrap">{ticket.customData.inspection.data[key]}</p>)}
+            {!!ticket.customData.inspection.data.damagePhotos?.length && <div className="flex flex-wrap gap-2">
+              {ticket.customData.inspection.data.damagePhotos.map((photo: { id: string; dataUrl: string }) => <img key={photo.id} src={photo.dataUrl} alt="Return inspection damage" className="max-h-48 rounded border" />)}
+            </div>}
           </section>
         )}
 
@@ -1432,14 +1516,7 @@ export function TicketDetailPage() {
             <div className="grid grid-cols-3 gap-2">
               {ticket.attachments.map(att => (
                 <div key={att.id} className="aspect-square bg-slate-100 rounded-lg overflow-hidden flex items-center justify-center text-xs text-slate-400">
-                  {att.filePath ? (
-                    <img src={att.filePath} alt={att.fileName} className="w-full h-full object-cover" />
-                  ) : (
-                    <div className="text-center p-2">
-                      <Camera className="w-6 h-6 mx-auto mb-1" />
-                      <p className="truncate">{att.fileName}</p>
-                    </div>
-                  )}
+                  <TicketAttachment attachment={att} />
                 </div>
               ))}
             </div>
