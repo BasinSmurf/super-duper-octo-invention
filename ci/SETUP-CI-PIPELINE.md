@@ -1,5 +1,9 @@
 <!-- Source audit 2026-09-17, baseline 45b3d44; live runner status not inspected. -->
 
+> Historical Claudius deployment guide. SPaaS uses GitHub-hosted validation
+> runners; see [SPaaS CI](README.md). Do not register source-customer runners or
+> run the deployment operations below as part of SPaaS setup.
+
 # Standing up the ServicePRO CI/CD pipeline — ELI5
 
 Goal: push to `master` on GitHub → it auto-builds the images on a beefy box, stores them, and auto-deploys to prod with a health check + rollback. No more SSHing in to `down && up --build`.

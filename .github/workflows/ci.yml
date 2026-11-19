@@ -1,129 +1,68 @@
 name: ci
 
-# ServicePRO CI — self-hosted runners only (on-prem). See mk2/CI-IMPLEMENTATION.md.
-#
-# Runner labels expected:
-#   [self-hosted, build] — on the Hyper-V host (32c/60GB). Does verify + image build.
-#                          NEVER the 2-core prod VM.
-#   [self-hosted, prod]  — on/with-access-to the prod VM. Does the lightweight
-#                          pull + health-gated swap only. No compiling.
-#
-# Bad-divorce: the deploy job is health-gated with auto-rollback, and the manual
-# deploy/prod-deploy.sh path stays intact — if GitHub/CI is down a human still
-# deploys by hand. CI is the convenient path, not the only path.
-
+# SPaaS validation only. Customer deployment infrastructure is configured separately.
 on:
   pull_request:
   push:
-    branches: [master]
+    branches: [codex/customer-buildouts]
+  workflow_dispatch:
 
-env:
-  REGISTRY: ${{ vars.REGISTRY_HOST }}     # e.g. registry.<tailnet>.ts.net:5000
-  IMAGE_API: servicepro-api
-  IMAGE_CLIENT: servicepro-client
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  # ── 1. Verify: typecheck both packages, lint client, prove migrations apply ──
-  verify:
-    runs-on: [self-hosted, build]
+  server:
+    name: Backend build and tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      # Schema generation and mocked tests only; never a customer database.
+      DATABASE_URL: postgresql://validation:validation@127.0.0.1:1/spaas_validation
+      DOTENV_CONFIG_PATH: /dev/null
+      REDIS_URL: ''
+      NODE_OPTIONS: --max-old-space-size=4096
+    defaults:
+      run:
+        working-directory: server
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .node-version
           cache: npm
-          cache-dependency-path: '**/package-lock.json'
-
-      # Ephemeral Postgres for the migrate-drift check (docker run is more robust
-      # on self-hosted runners than `services:`).
-      - name: start ephemeral postgres
-        run: |
-          docker rm -f ci-pg >/dev/null 2>&1 || true
-          docker run -d --name ci-pg \
-            -e POSTGRES_USER=sundog -e POSTGRES_PASSWORD=ci -e POSTGRES_DB=sundog_ci \
-            -p 5432:5432 postgres:16-alpine
-          for i in $(seq 1 30); do
-            docker exec ci-pg pg_isready -U sundog && break; sleep 1; done
-
-      # ── server ──
-      - name: server deps
-        working-directory: server
-        run: npm ci
-      - name: prisma generate
-        working-directory: server
-        # prisma.config.ts eagerly resolves env('DATABASE_URL') even for generate,
-        # so feed a throwaway URL (same trick the Dockerfile uses).
-        run: DATABASE_URL="postgresql://build:build@localhost:5432/build" npx prisma generate
-      - name: server typecheck
-        working-directory: server
-        # 4GB heap: the 220k-line generated Prisma client OOMs the default heap.
-        run: NODE_OPTIONS=--max-old-space-size=4096 npx tsc --noEmit
-      - name: migrations apply cleanly (drift gate)
-        working-directory: server
+          cache-dependency-path: server/package-lock.json
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Generate Prisma client without connecting to a database
+        run: npx --no-install prisma generate
+      - name: Build backend and copy runtime assets
+        run: npm run build
+      - name: Run backend regression tests
         env:
-          DATABASE_URL: postgresql://sundog:ci@localhost:5432/sundog_ci?schema=public
-        run: npx prisma migrate deploy
-      - name: server tests (qbXML golden + invariants)
-        working-directory: server
-        run: npm test
+          NODE_ENV: test
+        run: npm test -- --maxWorkers=2
 
-      # ── client ──
-      - name: client deps
+  client:
+    name: Frontend build and tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
         working-directory: client
-        run: npm ci --legacy-peer-deps
-      - name: client typecheck
-        working-directory: client
-        run: npx tsc -b
-      - name: client lint (report-only)
-        working-directory: client
-        # NON-BLOCKING on purpose. There's a 548-error backlog (393 no-explicit-any,
-        # 83 set-state-in-effect, …) — a hard eslint gate would make the pipeline
-        # permanently red and block every merge. Lint stays visible (report-only)
-        # while the real gates are tsc + tests + migrate-drift. Burn the backlog
-        # down separately, then flip continue-on-error off.
-        continue-on-error: true
-        run: npx eslint .
-
-      - name: stop ephemeral postgres
-        if: always()
-        run: docker rm -f ci-pg >/dev/null 2>&1 || true
-
-  # ── 2. Build + push images (master only) — on the BIG host, not prod ──
-  build-and-push:
-    if: github.ref == 'refs/heads/master'
-    needs: verify
-    runs-on: [self-hosted, build]
-    outputs:
-      tag: ${{ steps.meta.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
-      - id: meta
-        run: echo "tag=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
-      - name: build images
-        run: |
-          docker build -t "$REGISTRY/$IMAGE_API:${{ steps.meta.outputs.tag }}"    -t "$REGISTRY/$IMAGE_API:latest"    ./server
-          docker build -t "$REGISTRY/$IMAGE_CLIENT:${{ steps.meta.outputs.tag }}" -t "$REGISTRY/$IMAGE_CLIENT:latest" ./client
-      - name: push images
-        run: |
-          docker push "$REGISTRY/$IMAGE_API:${{ steps.meta.outputs.tag }}"
-          docker push "$REGISTRY/$IMAGE_API:latest"
-          docker push "$REGISTRY/$IMAGE_CLIENT:${{ steps.meta.outputs.tag }}"
-          docker push "$REGISTRY/$IMAGE_CLIENT:latest"
-
-  # ── 3. Deploy to prod (master only) — pull + health-gated swap + rollback ──
-  deploy:
-    if: github.ref == 'refs/heads/master'
-    needs: build-and-push
-    runs-on: [self-hosted, prod]
-    steps:
-      # No actions/checkout here on purpose: the deploy must run in ~/sundog,
-      # which holds the restored .env.production secrets AND ./server/certs that
-      # the prod compose mounts (a fresh _work checkout has neither). Pull the
-      # current compose + ci/ into ~/sundog, then run the just-pulled script.
-      - name: pull + swap (health-gated, auto-rollback)
-        env:
-          REGISTRY: ${{ vars.REGISTRY_HOST }}
-          TAG: ${{ needs.build-and-push.outputs.tag }}
-        run: |
-          git -C "$HOME/sundog" pull --ff-only origin master
-          "$HOME/sundog/ci/ci-deploy.sh" "$TAG"
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts --legacy-peer-deps --no-audit --no-fund
+      - name: Run frontend regression tests
+        run: node --test
+      - name: Build frontend and PWA
+        run: npm run build
